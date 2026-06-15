@@ -53,8 +53,9 @@ escalates - audibly - only the parts that actually need your judgement.
 session's screen, and for the sessions you **arm**, it auto-clears safe
 permission prompts by sending `Enter`. It pings you (notification + sound) on
 dangerous commands, real questions, and anything it can't classify. No daemon,
-no auto-launch, no shared state files - tool on === TUI open; quit === everything
-stops.
+no auto-launch, no shared session-state dir - tool on === TUI open; quit ===
+everything stops. (It does keep one durable [audit log](#audit-trail); that's
+the only file it writes.)
 
 - **Notify is global.** Any prompt on any tab (armed or not) plays a sound and
   posts a macOS notification - the safe, high-value walk-away half, zero blast
@@ -177,6 +178,10 @@ kept sessions while still being able to see and un-hide (`x` again) the rest. Th
 right-hand **preview** pulls the selected session's current screen the moment you
 land on it (and updates as that session prints), so you see the live prompt
 before you answer it.
+
+The **UNIT** column is each session's name: the iTerm2 tab/session name you've
+set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's
+auto, job-derived name.
 
 **Manual send vs arming are different things.** *Arming* (`Space`) lets Relay
 auto-clear *safe* prompts for you. *Manual send* (`Enter` / `1` / `2` / `3`) is
