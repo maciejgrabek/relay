@@ -1,0 +1,102 @@
+"""TUI tests: markup-escaping, cursor-by-identity, divider safety, single Enter.
+
+Run: python3 iterm/test_app.py
+Uses Textual's headless run_test() with a stub watcher (no iTerm2 needed).
+"""
+import asyncio
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+import app as appmod  # noqa: E402
+from watcher import SessionInfo  # noqa: E402
+
+
+class StubWatcher:
+    def __init__(self, sessions):
+        self.sessions = sessions
+        self.log = []
+        self.log_total = 0
+        self.sent = []
+
+    _CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
+
+    def toggle(self, s):
+        self.sessions[s].mode = self._CYCLE.get(self.sessions[s].mode, "safe")
+
+    def set_all(self, a):
+        for i in self.sessions.values():
+            i.mode = "safe" if a else "off"
+
+    def toggle_hidden(self, s):
+        self.sessions[s].hidden = not self.sessions[s].hidden
+
+    def unhide_all(self):
+        for i in self.sessions.values():
+            i.hidden = False
+
+    async def refresh_screen(self, s):
+        pass
+
+    async def send_keys(self, sid, t):
+        self.sent.append((sid, t))
+        return True
+
+
+class _TestApp(appmod.RelayApp):
+    def __init__(self, sessions, **k):
+        super().__init__(**k)
+        self._stub = sessions
+
+    async def _connect(self):
+        self.watcher = StubWatcher(self._stub)
+
+
+async def go():
+    ok = True
+
+    def chk(n, c):
+        nonlocal ok
+        print(("PASS" if c else "FAIL"), n)
+        ok = ok and c
+
+    # Titles and commands contain '[' - must be escaped, not crash render.
+    sessions = {
+        f"s{i}": SessionInfo(f"s{i}", title=f"t[{i}]", window_idx=0, tab_idx=i,
+                             last_command="sed 's/[a-z]/x/' file",
+                             last_screen=["x"])
+        for i in range(3)
+    }
+    a = _TestApp(sessions, dry_run=True)
+    async with a.run_test() as pilot:
+        await pilot.pause()
+        a._refresh()
+        await pilot.pause()
+        t = a.query_one(appmod.DataTable)
+        chk("renders with '[' in command/title (no MarkupError)", t.row_count == 3)
+
+        # Cursor tracks the SESSION, not the row index, across a reorder.
+        t.move_cursor(row=a._row_sids.index("s1"))
+        await pilot.pause()
+        a.watcher.toggle_hidden("s0")   # reorders rows (s0 -> hidden section)
+        a._refresh()
+        await pilot.pause()
+        chk("cursor stays on same session after reorder", a._selected_sid() == "s1")
+
+        # The divider is never left under the cursor.
+        chk("cursor not on divider", a._selected_sid() is not None)
+
+        # Enter sends exactly once (no binding+RowSelected double-fire).
+        a.watcher.sent.clear()
+        t.move_cursor(row=a._row_sids.index("s1"))
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("single Enter -> exactly one send", a.watcher.sent == [("s1", "\r")])
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
+if __name__ == "__main__":
+    sys.exit(0 if asyncio.run(go()) else 1)

@@ -1,0 +1,150 @@
+#!/bin/bash
+# relay - interactive control panel for Claude Code sessions.
+#
+#   ↑/↓ or j/k : move      ENTER/SPACE : connect/disconnect (arm/disarm)
+#   a : connect all        d : disconnect all       q : quit
+#
+#   relay --prune : remove dead session state (orphan arm-flags + long-stale
+#                   sessions) and exit. Honours RELAY_PRUNE_AGE (default 86400s).
+#
+# CONNECTED (★) = Relay auto-approves safe commands in that session and only
+# stops (with a sound) on dangerous ones - so you can walk away.
+# DISCONNECTED  = stock Claude Code; it prompts you for everything.
+#
+# State is read from $RELAY_HOME/sessions/<sid>.json (written by Relay's hooks).
+# Connecting creates <sid>.armed, which the gate hook checks.
+set -o pipefail
+RELAY_HOME="${RELAY_HOME:-$HOME/.relay}"
+DIR="$RELAY_HOME/sessions"
+STALE="${RELAY_STALE:-180}"
+mkdir -p "$DIR"
+SEL=0
+
+C_RESET=$'\e[0m'; C_DIM=$'\e[2m'; C_BOLD=$'\e[1m'; C_INV=$'\e[7m'
+C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_CYA=$'\e[36m'; C_MAG=$'\e[35m'
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+[ "$1" = "-h" ] || [ "$1" = "--help" ] && usage
+
+# --prune: garbage-collect dead session state, then exit. Two kinds of cruft:
+#   1. orphan arm-flags - <sid>.armed with no matching <sid>.json (the session's
+#      state file is gone, so the flag can never be seen in the TUI again).
+#   2. long-stale sessions - <sid>.json (and its .armed, if any) untouched for
+#      longer than RELAY_PRUNE_AGE. These are finished/closed tabs.
+# Conservative by design: the default age is 1 day, well past RELAY_STALE's grey
+# threshold, so a session you're merely away from is never pruned.
+prune() {
+  local age="${RELAY_PRUNE_AGE:-86400}" now n_orphan=0 n_stale=0 f sid ts
+  now=$(date +%s)
+  shopt -s nullglob
+  # Orphan arm-flags first (no state file at all).
+  for f in "$DIR"/*.armed; do
+    sid="$(basename "$f" .armed)"
+    [ -f "$DIR/$sid.json" ] || { rm -f "$f"; n_orphan=$((n_orphan+1)); }
+  done
+  # Long-stale state files (and any arm-flag riding along).
+  for f in "$DIR"/*.json; do
+    sid="$(basename "$f" .json)"
+    ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"; [ -z "$ts" ] && ts=0
+    if [ $((now - ts)) -gt "$age" ]; then
+      rm -f "$f" "$DIR/$sid.armed"; n_stale=$((n_stale+1))
+    fi
+  done
+  printf 'relay --prune: removed %d orphan arm-flag(s), %d stale session(s).\n' \
+    "$n_orphan" "$n_stale"
+  exit 0
+}
+[ "$1" = "--prune" ] && prune
+
+# Keep the Mac (and displays) awake while Relay is open, so armed sessions keep
+# running unattended. `caffeinate -w $$` exits when this relay process exits.
+# Opt out with RELAY_NO_CAFFEINATE=1.
+CAFFEINATE_PID=""
+if [ -z "$RELAY_NO_CAFFEINATE" ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -dimsu -w "$$" >/dev/null 2>&1 &
+  CAFFEINATE_PID=$!
+fi
+
+load() {
+  SIDS=(); LINES=()
+  local now; now=$(date +%s)
+  shopt -s nullglob
+  local rows=""
+  for f in "$DIR"/*.json; do
+    rows+="$(jq -r --argjson now "$now" \
+      '[ (if .state=="blocked" then 0 elif .state=="working" then 1 else 2 end),
+         (-.ts), .session_id, .state, .name, ($now-.ts), (.tool//"-"), .cwd ] | @tsv' \
+      "$f" 2>/dev/null)"$'\n'
+  done
+  rows="$(printf '%s' "$rows" | sort -t$'\t' -k1,1n -k2,2n | grep -v '^[[:space:]]*$')"
+  [ -z "$rows" ] && return
+  while IFS=$'\t' read -r _ _ sid state name age tool cwd; do
+    [ -z "$sid" ] && continue
+    SIDS+=("$sid")
+    local armed=" "; [ -f "$DIR/$sid.armed" ] && armed="★"
+    LINES+=("$armed"$'\t'"$state"$'\t'"$name"$'\t'"$age"$'\t'"$tool"$'\t'"$cwd")
+  done <<< "$rows"
+}
+
+draw() {
+  printf '\e[H\e[2J'
+  printf '%s%s  ⟿  RELAY%s  %s· Claude Code session control · %s · q to quit%s\n\n' \
+    "$C_BOLD" "$C_CYA" "$C_RESET" "$C_DIM" "$(date +%H:%M:%S)" "$C_RESET"
+  if [ ${#SIDS[@]} -eq 0 ]; then
+    printf '   %sNo active sessions.%s\n\n   Start a Claude Code session in a Relay-installed project and\n   submit a prompt - it will appear here within ~2s.\n' "$C_DIM" "$C_RESET"
+    printf '\n   %s↑↓ move · ENTER connect/disconnect · a all · d none · q quit%s\n' "$C_DIM" "$C_RESET"
+    return
+  fi
+  printf '   %s%-3s %-12s %-20s %-7s %-8s %s%s\n' "$C_DIM" "ARM" "STATE" "SESSION" "AGE" "TOOL" "PATH" "$C_RESET"
+  [ "$SEL" -ge "${#SIDS[@]}" ] && SEL=$((${#SIDS[@]}-1)); [ "$SEL" -lt 0 ] && SEL=0
+  local i=0 line armedn=0
+  for line in "${LINES[@]}"; do
+    IFS=$'\t' read -r armed state name age tool cwd <<< "$line"
+    [ "$armed" = "★" ] && armedn=$((armedn+1))
+    local color="$C_DIM" label="$state"
+    case "$state" in
+      blocked) color="$C_RED"; label="● BLOCKED" ;;
+      working) color="$C_GRN"; label="• working" ;;
+      idle)    color="$C_YEL"; label="○ idle" ;;
+    esac
+    [ "$age" -gt "$STALE" ] && { color="$C_DIM"; label="(stale)"; }
+    local cur="  " inv=""
+    [ "$i" -eq "$SEL" ] && { cur="▶ "; inv="$C_INV"; }
+    local armcol="$C_DIM"; [ "$armed" = "★" ] && armcol="$C_MAG$C_BOLD"
+    printf '%s%s%s%-3s%s%s %s%-12s%s%s %-20s %-7s %-8s %s%s%s\n' \
+      "$inv" "$cur" "$armcol" "$armed" "$C_RESET" "$inv" \
+      "$color" "$label" "$C_RESET" "$inv" \
+      "${name:0:20}" "${age}s" "${tool:0:8}" \
+      "$C_DIM" "${cwd/#$HOME/~}" "$C_RESET"
+    i=$((i+1))
+  done
+  local caf=""; [ -n "$CAFFEINATE_PID" ] && caf=" · ☕ awake"
+  printf '\n   %s%d session(s) · %d connected · ★ = auto-approve armed%s%s\n' "$C_DIM" "${#SIDS[@]}" "$armedn" "$caf" "$C_RESET"
+  printf '   %s↑↓ move · ENTER connect/disconnect · a all · d none · q quit%s\n' "$C_DIM" "$C_RESET"
+}
+
+toggle()     { [ ${#SIDS[@]} -eq 0 ] && return; local s="${SIDS[$SEL]}"; [ -f "$DIR/$s.armed" ] && rm -f "$DIR/$s.armed" || touch "$DIR/$s.armed"; }
+arm_all()    { local s; for s in "${SIDS[@]}"; do touch "$DIR/$s.armed"; done; }
+disarm_all() { rm -f "$DIR"/*.armed 2>/dev/null; }
+
+cleanup() { tput cnorm 2>/dev/null; stty echo 2>/dev/null; [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null; printf '\n'; exit 0; }
+trap cleanup INT TERM
+tput civis 2>/dev/null; stty -echo 2>/dev/null
+
+while true; do
+  load; draw
+  IFS= read -rsn1 -t 2 key || continue
+  if [ "$key" = $'\e' ]; then
+    read -rsn2 -t 0.01 rest
+    case "$rest" in '[A') SEL=$((SEL-1));; '[B') SEL=$((SEL+1));; esac
+    continue
+  fi
+  case "$key" in
+    k) SEL=$((SEL-1)) ;;
+    j) SEL=$((SEL+1)) ;;
+    ''|' ') toggle ;;
+    a) arm_all ;;
+    d) disarm_all ;;
+    q) cleanup ;;
+  esac
+done

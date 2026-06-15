@@ -1,0 +1,15 @@
+# Relay runtime state (per-machine, never committed)
+.relay/
+*.relay-backup.*
+settings.local.json.bak*
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / editor noise
+.DS_Store
+*.swp
+
+# Internal design/planning docs - kept locally, not published
+docs/superpowers/

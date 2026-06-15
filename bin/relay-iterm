@@ -1,0 +1,19 @@
+#!/bin/bash
+# relay-iterm - launch the iTerm2-native Relay control panel.
+#
+#   relay-iterm            run the TUI (watches iTerm2, auto-clears safe prompts
+#                          in ARMED sessions, pings you on dangerous ones)
+#   relay-iterm --dry-run  watch + notify but NEVER inject (safe first run)
+#   relay-iterm -h         this help
+#
+# One process: tool on === TUI open; quit (q) === everything stops. No daemon,
+# no auto-launch, no Claude Code hooks. Safety classifier is lib/danger.sh.
+#
+# Requires: macOS, iTerm2 with Python API enabled, python3 with `iterm2` and
+# `textual` installed (pip install iterm2 textual).
+set -e
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "${1:-}" in
+  -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+exec python3 "$HERE/../iterm/app.py" "$@"

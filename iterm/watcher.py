@@ -1,0 +1,377 @@
+"""Relay-iTerm watcher - owns the iTerm2 connection and drives the gates.
+
+One asyncio task per session streams screen updates (ScreenStreamer.async_get
+blocks until the screen changes). On each update for an *active* session we run
+the gate pipeline and act: INJECT sends Enter, NOTIFY pings the human, NONE is
+ignored. NOTIFY fires for ANY session (active or not) so you always hear when a
+tab needs you; INJECT only happens for sessions you've toggled active.
+
+This module is UI-agnostic: it maintains an in-memory `sessions` dict and calls
+optional callbacks. The Textual TUI subscribes to it; a headless mode can too.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import time
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional
+
+import iterm2
+
+import audit
+from gates import classify, Action, Decision, reconstruct_lines, detect_state
+
+
+@dataclass
+class SessionInfo:
+    session_id: str
+    title: str = ""
+    window_idx: int = 0
+    tab_idx: int = 0
+    # Arm level (per-tab). Real multi-choice QUESTIONS always hand off to you -
+    # NO mode auto-answers them.
+    #   "off"    - manual; Relay watches but never acts.
+    #   "safe"   - classify the command (lib/danger.sh); approve unless it's on
+    #              the catastrophic denylist; escalate dangerous / unreadable.
+    #   "wild"   - ignore the command; approve any proceed-prompt with the cursor
+    #              on Yes (heredocs / unparseable just work).
+    #   "insane" - approve ANY tool-permission prompt, even fail-safe cases
+    #              (cursor not on option 1, unparseable). Permission prompts only.
+    mode: str = "off"
+    hidden: bool = False             # user hid it from the list (UI-only filter)
+    state: str = "idle"              # idle | working | prompting | blocked | cleared
+    last_command: str = ""
+    last_seen: float = 0.0
+    last_decision: str = ""
+    last_screen: List[str] = field(default_factory=list)  # sanitized recent lines
+    n_approved: int = 0              # auto-approvals in this tab (running tally)
+    n_escalated: int = 0             # dangerous/question escalations in this tab
+    _iterm_session: object = field(default=None, repr=False)
+    _last_prompt_id: Optional[str] = field(default=None, repr=False)
+    _last_notify_ts: float = field(default=0.0, repr=False)  # notify cooldown
+
+    @property
+    def active(self) -> bool:
+        """True when armed in any acting mode - i.e. Relay may auto-approve."""
+        return self.mode in ("safe", "wild", "insane")
+
+
+def _extract_lines(contents) -> tuple[List[str], List[str]]:
+    """Pull (raw line strings, hard_eol flags) from a ScreenContents."""
+    n = contents.number_of_lines
+    raw, hard = [], []
+    for i in range(n):
+        lc = contents.line(i)
+        raw.append(lc.string)
+        hard.append(lc.hard_eol)
+    return raw, hard
+
+
+def notify_mac(title: str, message: str, sound: Optional[str]) -> None:
+    """Fire a macOS notification + optional sound. Best-effort, never raises."""
+    try:
+        # osascript notification (no extra deps). Escape backslash FIRST (else a
+        # trailing '\' would escape the closing quote of the AppleScript string),
+        # then swap double quotes for apostrophes so they can't end the string.
+        t = title.replace("\\", "\\\\").replace('"', "'")[:120]
+        m = message.replace("\\", "\\\\").replace('"', "'")[:200]
+        subprocess.Popen(
+            ["osascript", "-e",
+             f'display notification "{m}" with title "{t}"'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if sound:
+            subprocess.Popen(["afplay", sound],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+class Watcher:
+    def __init__(self, connection,
+                 alert_sound="/System/Library/Sounds/Sosumi.aiff",
+                 done_sound="/System/Library/Sounds/Glass.aiff",
+                 on_change: Optional[Callable[[], None]] = None,
+                 dry_run: bool = False):
+        self.connection = connection
+        self.alert_sound = alert_sound
+        self.done_sound = done_sound
+        self.on_change = on_change or (lambda: None)
+        self.dry_run = dry_run            # if True, never actually inject
+        self.sessions: Dict[str, SessionInfo] = {}
+        self.log: List[str] = []
+        self.log_total = 0                # monotonic count (log[] is capped at 200)
+        self._stop_event = asyncio.Event()
+        self.read_timeout = 1.5           # per-session screen-read timeout (s)
+        # Hard backstops against prompt-text churn (text changing every poll
+        # defeats the prompt_id debounce). At most one alert / one auto-inject
+        # per session per cooldown window, regardless of churn.
+        self.notify_cooldown = float(os.environ.get("RELAY_NOTIFY_COOLDOWN", "30"))
+
+    def _note(self, msg: str) -> None:
+        self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
+        self.log = self.log[-200:]
+        self.log_total += 1   # never resets, so the TUI can mirror new lines
+
+    async def start(self, interval: float = 2.0) -> None:
+        """Single poll loop. Every `interval`s: re-sync the roster, then read the
+        screen of every session that is VISIBLE or ARMED (skip hidden+disarmed -
+        nothing to do there), update its state, and run the gates. Polling all
+        relevant sessions is cheap at terminal-tab scale (a few KB per local-
+        socket read), so we favour this simple, always-fresh model over the old
+        per-session streamers."""
+        self._stop_event.clear()
+        try:
+            while not self._stop_event.is_set():
+                # One iteration must NEVER kill the loop: a transient iTerm2
+                # error or one dead session should be logged and skipped, not
+                # leave the monitor permanently bricked (its whole job).
+                try:
+                    app = await iterm2.async_get_app(self.connection)
+                    await self._sync_sessions(app)
+                except Exception as e:
+                    self._note(f"roster sync error: {e}")
+                for info in list(self.sessions.values()):
+                    if self._stop_event.is_set():
+                        break
+                    if info.hidden and not info.active:
+                        continue  # hidden & disarmed: skip, per the refresh rule
+                    try:
+                        res = await self._snapshot(info)
+                        if res:
+                            await self._handle(info, *res)
+                    except Exception as e:
+                        self._note(f"session error {info.title}: {e}")
+                self.on_change()
+                # Interruptible sleep: stop() wakes us immediately instead of
+                # waiting out the full interval.
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            await self._close_connection()
+
+    async def stop(self) -> None:
+        """Signal the poll loop to exit promptly (wakes the interval sleep)."""
+        self._stop_event.set()
+
+    async def _close_connection(self) -> None:
+        try:
+            close = getattr(self.connection, "async_close", None)
+            if close:
+                await close()
+        except Exception:
+            pass
+
+    async def _sync_sessions(self, app) -> None:
+        seen = set()
+        for wi, w in enumerate(app.windows):
+            for ti, tab in enumerate(w.tabs):
+                for s in tab.sessions:
+                    sid = s.session_id
+                    seen.add(sid)
+                    info = self.sessions.get(sid)
+                    title = await s.async_get_variable("autoName") or sid[:8]
+                    if info is None:
+                        info = SessionInfo(session_id=sid, title=title,
+                                           window_idx=wi, tab_idx=ti,
+                                           _iterm_session=s)
+                        # Grab the current screen once so the list/preview has
+                        # content immediately, without holding a streamer open.
+                        await self._snapshot(info)
+                        self.sessions[sid] = info
+                    else:
+                        info.title = title
+                        info.window_idx, info.tab_idx = wi, ti
+                        info._iterm_session = s
+        # Drop sessions whose tabs closed.
+        for sid in list(self.sessions):
+            if sid not in seen:
+                self.sessions.pop(sid, None)
+
+    async def _snapshot(self, info: SessionInfo):
+        """One-shot read of a session's current screen. Updates last_screen and
+        returns (raw, hard) for gate evaluation, or None on failure/no-session."""
+        s = info._iterm_session
+        if s is None:
+            return None
+        try:
+            # Per-read timeout so one hung/busy session can't stall the whole
+            # poll pass (and freeze the UI, which repaints from this loop).
+            contents = await asyncio.wait_for(
+                s.async_get_screen_contents(), timeout=self.read_timeout)
+            raw, hard = _extract_lines(contents)
+            info.last_screen = [l for l in reconstruct_lines(raw, hard) if l.strip()][-40:]
+            info.last_seen = time.time()
+            return raw, hard
+        except asyncio.TimeoutError:
+            self._note(f"read timeout {info.title}")
+            return None
+        except Exception:
+            return None
+
+    async def _handle(self, info: SessionInfo, raw, hard) -> None:
+        decision: Decision = classify(raw, hard)
+        info.last_decision = decision.reason
+
+        if decision.action == Action.NONE:
+            # No actionable prompt: read the screen for a real working/idle
+            # signal instead of blindly claiming "working".
+            info.state = detect_state(reconstruct_lines(raw, hard))
+            return
+
+        if decision.command:
+            info.last_command = decision.command
+
+        # There IS an actionable prompt on screen. Update displayed state for
+        # ALL sessions (so the list shows blocked/prompting), but only ARMED
+        # sessions alert, audit, or get auto-injected. An unarmed session is one
+        # you're driving by hand - Relay must stay silent on it.
+        if decision.action == Action.NOTIFY:
+            info.state = "blocked"
+        elif decision.action == Action.INJECT:
+            info.state = "prompting" if not info.active else info.state
+
+        if not info.active:
+            return  # unarmed: display only, no alert / no audit / no inject
+
+        # Armed. Debounce: act at most once per distinct prompt instance.
+        if decision.prompt_id is not None and decision.prompt_id == info._last_prompt_id:
+            return
+        info._last_prompt_id = decision.prompt_id
+
+        # Decide whether to APPROVE, by mode (decreasing caution):
+        #   safe   - only INJECT (command classified non-catastrophic)
+        #   wild   - any proceed-prompt (cursor on Yes), command ignored
+        #   insane - any permission prompt at all, even fail-safe cases
+        # Real questions have is_permission=False, so NONE of these touch them.
+        if info.mode == "insane":
+            approve = decision.is_permission
+        elif info.mode == "wild":
+            approve = decision.is_proceed
+        else:  # safe
+            approve = decision.action == Action.INJECT
+
+        if not approve:
+            # Cooldown backstop: even if the prompt_id churns (e.g. you're typing
+            # an answer to a question and the menu lines keep changing), alert at
+            # most once per notify_cooldown seconds per session. State still
+            # updates every poll; only the sound/notification/audit row is gated.
+            now = time.time()
+            if now - info._last_notify_ts < self.notify_cooldown:
+                return
+            info._last_notify_ts = now
+            info.n_escalated += 1
+            audit.record("escalated", info.title, decision.command or "",
+                         decision.reason)
+            self._note(f"NOTIFY {info.title}: {decision.reason}")
+            notify_mac(f"Relay - {info.title}",
+                       decision.reason + (f": {decision.command[:80]}"
+                                          if decision.command else ""),
+                       self.alert_sound)
+            return
+
+        # --- approve path ---
+        # Churn vs distinct-prompts is handled by the prompt_id debounce above
+        # (line ~233): prompt_id is now STABLE across a single prompt's redraws
+        # (it normalizes the option text) and DIFFERENT for a genuinely new
+        # prompt - so the same prompt approves once, and a back-to-back distinct
+        # prompt still approves. No separate inject flag needed.
+        verdict_reason = (decision.reason if decision.action == Action.INJECT
+                          else f"{info.mode}-approve ({decision.reason})")
+        if self.dry_run:
+            info.state = "cleared"
+            audit.record("would-approve", info.title, decision.command or "",
+                         verdict_reason)
+            self._note(f"DRY-RUN would inject {info.title}: "
+                       f"{(decision.command or '<unparsed>')[:60]}")
+            return
+        # LOG BEFORE ACT: write the audit row first so an unattended approval can
+        # never happen un-recorded. If the durable write fails, do NOT send Enter
+        # - escalate instead, so a logging outage can't silently auto-approve.
+        if not audit.record("auto-approved", info.title,
+                             decision.command or "", verdict_reason):
+            info.state = "blocked"
+            info.n_escalated += 1
+            self._note(f"AUDIT-FAIL {info.title}: not injecting (log write failed)")
+            notify_mac(f"Relay - {info.title}",
+                       "audit log write failed - NOT auto-approving",
+                       self.alert_sound)
+            return
+        await info._iterm_session.async_send_text("\r")
+        info.state = "cleared"
+        info.n_approved += 1
+        self._note(f"INJECT {info.title}: {(decision.command or '<unparsed>')[:60]}")
+
+    async def focus_session(self, sid: str) -> bool:
+        """Bring the real iTerm2 tab for this session to the foreground."""
+        info = self.sessions.get(sid)
+        if not info or info._iterm_session is None:
+            return False
+        try:
+            await info._iterm_session.async_activate()
+            return True
+        except Exception as e:
+            self._note(f"focus failed {info.title}: {e}")
+            return False
+
+    _MODE_CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
+    MODES = ("off", "safe", "wild", "insane")
+
+    def toggle(self, sid: str) -> None:
+        """Cycle arm level: off -> safe -> wild -> insane -> off."""
+        if sid in self.sessions:
+            info = self.sessions[sid]
+            info.mode = self._MODE_CYCLE.get(info.mode, "safe")
+            info._last_prompt_id = None   # re-evaluate current prompt under new mode
+
+    def set_mode(self, sid: str, mode: str) -> None:
+        if sid in self.sessions and mode in self.MODES:
+            self.sessions[sid].mode = mode
+            self.sessions[sid]._last_prompt_id = None
+
+    def set_all(self, active: bool) -> None:
+        for info in self.sessions.values():
+            info.mode = "safe" if active else "off"
+
+    def toggle_hidden(self, sid: str) -> None:
+        if sid in self.sessions:
+            self.sessions[sid].hidden = not self.sessions[sid].hidden
+
+    def unhide_all(self) -> None:
+        for info in self.sessions.values():
+            info.hidden = False
+
+    async def send_keys(self, sid: str, text: str) -> bool:
+        """Manually send literal text/keys to a session. ALWAYS sends, even in
+        dry-run and even for un-armed sessions - this is a deliberate human
+        action, not automatic injection. Returns True on success.
+        """
+        info = self.sessions.get(sid)
+        if not info or info._iterm_session is None:
+            return False
+        try:
+            await info._iterm_session.async_send_text(text)
+            shown = {"\r": "Enter"}.get(text, text)
+            self._note(f"MANUAL send {shown!r} -> {info.title}")
+            return True
+        except Exception as e:
+            self._note(f"manual send failed {info.title}: {e}")
+            return False
+
+    async def refresh_screen(self, sid: str) -> None:
+        """Pull ONE session's current screen on demand (e.g. when selected), so
+        the preview is fresh right now rather than at its last change."""
+        info = self.sessions.get(sid)
+        if not info or info._iterm_session is None:
+            return
+        try:
+            contents = await info._iterm_session.async_get_screen_contents()
+            raw, hard = _extract_lines(contents)
+            lines = reconstruct_lines(raw, hard)
+            info.last_screen = [l for l in lines if l.strip()][-40:]
+        except Exception:
+            pass
