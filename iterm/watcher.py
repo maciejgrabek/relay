@@ -166,6 +166,28 @@ class Watcher:
         except Exception:
             pass
 
+    @staticmethod
+    async def _session_label(s, tab) -> str:
+        """Resolve the display name for a session.
+
+        Prefer a name the USER set, so a manually-titled tab/session shows that
+        name instead of the job-derived default. iTerm2 stores a manual title
+        (Edit Session > Name, or a tab title) in `titleOverride`; we check the
+        session first (most specific), then its tab. Fall back to `autoName`
+        (iTerm2's auto, job-derived name - the previous default) and finally a
+        short session id. Each read is defensive: a variable that's unset or
+        absent on some iTerm2 version simply falls through to the next.
+        """
+        for obj, var in ((s, "titleOverride"), (tab, "titleOverride"),
+                         (s, "autoName")):
+            try:
+                v = await obj.async_get_variable(var)
+            except Exception:
+                v = None
+            if v and v.strip():
+                return v.strip()
+        return s.session_id[:8]
+
     async def _sync_sessions(self, app) -> None:
         seen = set()
         for wi, w in enumerate(app.windows):
@@ -174,7 +196,7 @@ class Watcher:
                     sid = s.session_id
                     seen.add(sid)
                     info = self.sessions.get(sid)
-                    title = await s.async_get_variable("autoName") or sid[:8]
+                    title = await self._session_label(s, tab)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
