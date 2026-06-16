@@ -4,8 +4,8 @@ A single Textual app that BOTH holds the iTerm2 connection (via Watcher) and
 renders a dark, Total-Commander-style control panel. Tool on === this app open;
 quit === everything stops. No daemon, no auto-launch, no shared state files.
 
-  relay-iterm            run it
-  relay-iterm --dry-run  watch + notify but never inject (safe first run)
+  relay            run it
+  relay --dry-run  watch + notify but never inject (safe first run)
 """
 from __future__ import annotations
 
@@ -469,7 +469,7 @@ def main() -> None:
     unknown = [a for a in args if a not in ("--dry-run", "--dryrun", "-n")]
     if unknown:
         sys.stderr.write(
-            f"relay-iterm: unknown argument(s): {' '.join(unknown)}\n"
+            f"relay: unknown argument(s): {' '.join(unknown)}\n"
             f"Did you mean --dry-run? Refusing to start so a typo can't run live.\n")
         sys.exit(2)
     RelayApp(dry_run=dry).run()

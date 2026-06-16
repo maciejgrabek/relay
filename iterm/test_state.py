@@ -21,7 +21,7 @@ CASES = [
     (["Resume this session with:", "claude --resume abc", "~/Work took 1d8h", "❯"], "idle"),
     (["s&code_challenge=XQ", "Successfully logged in", "✅ Done", "❯"], "idle"),
     # idle: a finished shell command sitting at the prompt
-    (["set -a; source config/test.env; set +a", "❯ relay-iterm"], "idle"),
+    (["set -a; source config/test.env; set +a", "❯ relay"], "idle"),
     # idle: the accept-edits footer ALONE (no interrupt hint) must NOT be working
     (["some output", "❯", "  ⏵⏵ accept edits on (shift+tab to cycle)"], "idle"),
 ]

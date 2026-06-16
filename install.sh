@@ -1,5 +1,5 @@
 #!/bin/bash
-# Relay setup check. Verifies relay-iterm's prerequisites and, if bin/ isn't on
+# Relay setup check. Verifies relay's prerequisites and, if bin/ isn't on
 # your PATH, offers to add it to your shell rc. It never installs packages or
 # edits anything else - the only change it can make is appending one PATH line,
 # and only after you say yes.
@@ -11,7 +11,7 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$REPO/bin"
-MARKER="# relay-iterm"
+MARKER="# relay"
 
 CHECK_ONLY=0
 case "${1:-}" in
@@ -82,7 +82,7 @@ fi
 
 echo
 if [ "$bad" -eq 0 ]; then
-  echo "All set - run: relay-iterm --dry-run"
+  echo "All set - run: relay --dry-run"
 else
   echo "$bad item(s) need attention above."
 fi

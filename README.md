@@ -27,7 +27,7 @@ arm/disarm them with the arrow keys.
   ↑↓ move · SPACE arm · ENTER send Enter · 1/2/3 send digit · n go to tab · q quit
 ```
 
-> **`relay-iterm`** is iTerm2-native: one Python process, no Claude Code hooks,
+> **`relay`** is iTerm2-native: one Python process, no Claude Code hooks,
 > no session restart. It watches iTerm2 screens and auto-clears safe permission
 > prompts - including Claude Code's obfuscation-detector prompts that hooks
 > *cannot* suppress - by sending `Enter`; it pings you on dangerous ones. The
@@ -43,7 +43,7 @@ escalates - audibly - only the parts that actually need your judgement.
 
 ## How it works
 
-`relay-iterm` talks to **iTerm2's Python API**: one process watches every iTerm2
+`relay` talks to **iTerm2's Python API**: one process watches every iTerm2
 session's screen, and for the sessions you **arm**, it auto-clears safe
 permission prompts by sending `Enter`. It pings you (notification + sound) on
 dangerous commands, real questions, and anything it can't classify. No daemon,
@@ -61,7 +61,7 @@ the only file it writes.)
 
 **Why this exists:** Claude Code's built-in command-shape / obfuscation detector
 fires permission prompts that **hooks cannot suppress** (they trigger even on
-allowlisted commands). Because `relay-iterm` acts at the terminal layer, it
+allowlisted commands). Because `relay` acts at the terminal layer, it
 *can* clear those.
 
 ### Arm levels (per tab)
@@ -141,8 +141,8 @@ pip install iterm2 textual          # one-time deps
 ./install.sh                        # checks deps + offers to add bin to PATH
 source ~/.zshrc                     # only if it added the PATH line
 
-bin/relay-iterm --dry-run           # SAFE FIRST RUN: watch + log, never inject
-bin/relay-iterm                     # for real
+bin/relay --dry-run           # SAFE FIRST RUN: watch + log, never inject
+bin/relay                     # for real
 ```
 
 `install.sh` only verifies prerequisites and, with your `y`, appends one PATH
@@ -217,7 +217,7 @@ that's precisely what `--dry-run` is for. The `danger.sh` Track-2 leader gaps
 
 ## Configuration
 
-Environment variables (set before launching `relay-iterm`):
+Environment variables (set before launching `relay`):
 
 | Variable                     | Default                    | Purpose                                   |
 | ---------------------------- | -------------------------- | ----------------------------------------- |
@@ -234,7 +234,7 @@ Risk posture (which commands auto-approve vs escalate) is edited directly in
 
 ```
 relay/
-  bin/relay-iterm        # launcher
+  bin/relay        # launcher
   iterm/app.py           # Textual TUI (the control panel)
   iterm/watcher.py       # iTerm2 connection: stream screens, run gates, inject
   iterm/gates.py         # pure gate logic (type + safety), no iTerm2 imports

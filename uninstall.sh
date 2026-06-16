@@ -3,7 +3,7 @@
 # rc. It touches nothing else and writes a timestamped backup before editing.
 #   ./uninstall.sh
 set -uo pipefail
-MARKER="# relay-iterm"
+MARKER="# relay"
 
 removed=0
 for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
