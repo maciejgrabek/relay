@@ -27,17 +27,11 @@ arm/disarm them with the arrow keys.
   ↑↓ move · SPACE arm · ENTER send Enter · 1/2/3 send digit · n go to tab · q quit
 ```
 
-> **Two implementations live in this repo.** Start with **`relay-iterm`**
-> (recommended); the original Claude Code hooks version, **`relay`**, is kept as
-> a [legacy track](#legacy-hooks-based-relay). Both share the same safety
-> classifier, [`lib/danger.sh`](lib/danger.sh).
->
-> - **`relay-iterm`** - iTerm2-native. One Python process, no Claude Code hooks,
->   no session restart. It watches iTerm2 screens and auto-clears safe permission
->   prompts - including Claude Code's obfuscation-detector prompts that hooks
->   *cannot* suppress - by sending `Enter`; it pings you on dangerous ones.
-> - **`relay`** - the original Claude Code hooks approach. Requires a session
->   restart to load hooks and cannot touch the obfuscation-detector prompts.
+> **`relay-iterm`** is iTerm2-native: one Python process, no Claude Code hooks,
+> no session restart. It watches iTerm2 screens and auto-clears safe permission
+> prompts - including Claude Code's obfuscation-detector prompts that hooks
+> *cannot* suppress - by sending `Enter`; it pings you on dangerous ones. The
+> safety classifier lives in [`lib/danger.sh`](lib/danger.sh).
 
 ## Why
 
@@ -68,8 +62,7 @@ the only file it writes.)
 **Why this exists:** Claude Code's built-in command-shape / obfuscation detector
 fires permission prompts that **hooks cannot suppress** (they trigger even on
 allowlisted commands). Because `relay-iterm` acts at the terminal layer, it
-*can* clear those - it's the only one of the two implementations that handles
-that whole class.
+*can* clear those.
 
 ### Arm levels (per tab)
 
@@ -145,12 +138,16 @@ cd relay
 pip install iterm2 textual          # one-time deps
 # iTerm2: Settings -> General -> Magic -> Enable Python API (once)
 
-# Put the launcher on your PATH:
-echo 'export PATH="'"$PWD"'/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+./install.sh                        # checks deps + offers to add bin to PATH
+source ~/.zshrc                     # only if it added the PATH line
 
 bin/relay-iterm --dry-run           # SAFE FIRST RUN: watch + log, never inject
 bin/relay-iterm                     # for real
 ```
+
+`install.sh` only verifies prerequisites and, with your `y`, appends one PATH
+line to your shell rc - it installs nothing else. Use `./install.sh --check` to
+check without editing anything, and `./uninstall.sh` to remove the PATH line.
 
 **Start with `--dry-run`.** It classifies real prompts and logs what it *would*
 do without sending a single keystroke - the honest way to confirm the prompt
@@ -237,7 +234,7 @@ Risk posture (which commands auto-approve vs escalate) is edited directly in
 
 ```
 relay/
-  bin/relay-iterm        # launcher (the recommended tool)
+  bin/relay-iterm        # launcher
   iterm/app.py           # Textual TUI (the control panel)
   iterm/watcher.py       # iTerm2 connection: stream screens, run gates, inject
   iterm/gates.py         # pure gate logic (type + safety), no iTerm2 imports
@@ -246,11 +243,8 @@ relay/
   lib/danger.sh          # shared command-classification rules (tune me)
   test/danger_test.sh    # classifier regression suite (run before tuning danger.sh)
   test/run.sh            # run the whole suite (bash + Python), no pytest needed
-
-  bin/relay              # LEGACY: the hooks-based TUI (see below)
-  hooks/relay-gate.sh    # LEGACY: PreToolUse classify + arm-aware auto-approve
-  hooks/relay-status.sh  # LEGACY: writes session state for the legacy TUI
-  install.sh uninstall.sh# LEGACY: safe, idempotent settings merge
+  install.sh             # prerequisite check + optional PATH setup
+  uninstall.sh           # removes Relay's PATH line
 ```
 
 ## Tests
@@ -265,66 +259,6 @@ No pytest needed - each Python suite has a `__main__` runner.
 Run them after editing `lib/danger.sh`. The classifier suite also tracks the
 known Track-2 "command-shape" gaps as warnings, so you'll know when a future
 change closes one.
-
-## Legacy: hooks-based Relay
-
-The original implementation, kept for reference. It uses **Claude Code hooks + a
-TUI over a shared state dir** instead of the iTerm2 API. It cannot suppress
-Claude Code's obfuscation-detector prompts, and it requires restarting sessions
-to load the hooks - which is why `relay-iterm` superseded it. Prefer `relay-iterm`
-unless you specifically want a hooks-based approach.
-
-- A **`PreToolUse` hook** (`relay-gate.sh`) classifies each Bash command. If the
-  session is *armed* and the command is safe, it auto-approves; if dangerous (see
-  `lib/danger.sh`), it forces the normal prompt and rings the alert sound; if the
-  session is *disarmed*, the hook does nothing and you get stock Claude Code.
-- **`Stop` / `Notification` / `UserPromptSubmit` hooks** record each session's
-  state into `~/.relay/sessions/<id>.json` and play the done/alert sounds.
-- **`relay`** (the TUI) reads that dir and lets you arm/disarm sessions by
-  creating/removing `<id>.armed` flag files, which the gate hook checks. It runs
-  `caffeinate` while open.
-
-### Install / uninstall (legacy)
-
-Requires `jq`.
-
-```bash
-# Per-project (writes ./.claude/settings.local.json in the CURRENT project):
-cd /path/to/your/project && /path/to/relay/install.sh
-
-# Or globally for every project:
-/path/to/relay/install.sh --global
-```
-
-Then **restart any open Claude Code sessions** (hooks load at startup) and run
-`relay`. The installer is idempotent and writes a timestamped backup of your
-settings file before any change. To remove: `./uninstall.sh` (same `--global` /
-`--target` flags).
-
-### Usage (legacy)
-
-| Key            | Action                              |
-| -------------- | ----------------------------------- |
-| `↑` / `↓` `j`/`k` | Move the cursor                  |
-| `Enter` / `Space` | Connect / disconnect the session |
-| `a`            | Connect all                         |
-| `d`            | Disconnect all                      |
-| `q`            | Quit (releases `caffeinate`)        |
-
-Closed tabs leave state files behind in `~/.relay/sessions/`. The TUI greys them
-as `(stale)`; run `relay --prune` to delete orphan arm-flags and sessions
-untouched for longer than `RELAY_PRUNE_AGE` (default `86400`, one day).
-
-### Configuration (legacy)
-
-| Variable               | Default                                | Purpose                          |
-| ---------------------- | -------------------------------------- | -------------------------------- |
-| `RELAY_HOME`           | `~/.relay`                             | Where session state is stored    |
-| `RELAY_ALERT_SOUND`    | `/System/Library/Sounds/Sosumi.aiff`   | "Needs you" sound                |
-| `RELAY_DONE_SOUND`     | `/System/Library/Sounds/Glass.aiff`    | "Session done" sound             |
-| `RELAY_STALE`          | `180`                                  | Seconds before a session is grey |
-| `RELAY_PRUNE_AGE`      | `86400`                                | Age (s) for `--prune` to remove  |
-| `RELAY_NO_CAFFEINATE`  | unset                                  | Set to `1` to not keep Mac awake |
 
 ## License
 
