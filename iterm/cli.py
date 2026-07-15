@@ -219,6 +219,19 @@ def cmd_task_list(args) -> int:
     return 0
 
 
+def cmd_spawn(args) -> int:
+    import asyncio
+    import spawn as spawnmod
+    workdir = os.path.abspath(args.dir or os.getcwd())
+    if not os.path.isdir(workdir):
+        return _err(f"workdir not found: {workdir}")
+    sid = asyncio.run(spawnmod.spawn_worker(
+        args.name, args.project or "", args.prompt, workdir, args.role))
+    print(f"spawned '{args.name}' ({args.role}) in {workdir} "
+          f"[session {sid[:8]}]")
+    return 0
+
+
 # --- parser --------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -269,6 +282,15 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    sp = sub.add_parser("spawn", help="open an iTerm2 tab running claude, "
+                                      "pre-registered under --name")
+    sp.add_argument("prompt")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--project", default=None)
+    sp.add_argument("--dir", default=None)
+    sp.add_argument("--role", default="worker", choices=db.ROLES)
+    sp.set_defaults(fn=cmd_spawn)
 
     return p
 
