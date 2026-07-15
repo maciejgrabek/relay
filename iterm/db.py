@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   status_text TEXT NOT NULL DEFAULT '',
   registered_at REAL NOT NULL,
   last_seen REAL NOT NULL,
-  arm_request TEXT NOT NULL DEFAULT ''
+  arm_request TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,18 +73,35 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(_SCHEMA)
     # Schema versioning: 0 = fresh (CREATEs above built the current schema),
-    # otherwise migrate step by step. Version 2 added sessions.arm_request.
+    # otherwise migrate step by step. v2 added sessions.arm_request, v3 added
+    # sessions.mode (persisted arm level, so a relay restart doesn't disarm a
+    # live swarm).
+    _migrate(conn)
+    return conn
+
+
+_CURRENT_VERSION = 3
+_MIGRATIONS = {
+    # from_version: (SQL to run, ...)
+    1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
+    2: ("ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT ''",),
+}
+
+
+def _migrate(conn) -> None:
     v = conn.execute("PRAGMA user_version").fetchone()[0]
     if v == 0:
-        conn.execute("PRAGMA user_version = 2")
-    elif v == 1:
-        try:
-            conn.execute("ALTER TABLE sessions "
-                         "ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already there (interrupted earlier migration)
-        conn.execute("PRAGMA user_version = 2")
-    return conn
+        # Fresh DB: _SCHEMA already built the current shape.
+        conn.execute(f"PRAGMA user_version = {_CURRENT_VERSION}")
+        return
+    while v < _CURRENT_VERSION:
+        for stmt in _MIGRATIONS.get(v, ()):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already present (interrupted earlier migration)
+        v += 1
+        conn.execute(f"PRAGMA user_version = {v}")
 
 
 def _now(now: Optional[float]) -> float:
@@ -151,6 +169,18 @@ def set_arm_request(conn, name: str, mode: str) -> bool:
 def clear_arm_request(conn, name: str) -> None:
     conn.execute("UPDATE sessions SET arm_request='' WHERE name=?", (name,))
     conn.commit()
+
+
+def set_session_mode(conn, name: str, mode: str) -> bool:
+    """Persist a registered session's current arm level so a relay restart can
+    restore it (the running arm state otherwise lives only in the TUI process).
+    Written by the watcher when the human changes a mode; read only at first
+    sight after a restart. Not an escalation channel: it takes effect only on
+    the next restart, and direct DB writes are blocked in safe mode by
+    lib/danger.sh (see [[arm-self-escalation-guard]] in the README)."""
+    cur = conn.execute("UPDATE sessions SET mode=? WHERE name=?", (mode, name))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:

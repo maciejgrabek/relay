@@ -148,7 +148,24 @@ def _clip(s: str, w: int) -> str:
 
 def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str:
     """One plain-text screen: roster, kanban board, epic progress, message
-    feed. Grouped by project when more than one is present."""
+    feed. Grouped by project when more than one is present. With no swarm at
+    all, teaches how to start one instead of rendering an empty skeleton."""
+    if not sessions and not tasks:
+        return (
+            "NO SWARM YET\n"
+            "\n"
+            "This view shows named Claude sessions coordinating through relay:\n"
+            "who is registered, a task board, and the message feed between them.\n"
+            "\n"
+            "Start one by spawning an armed worker:\n"
+            "\n"
+            "    relay spawn --name w1 --arm wild \"your task\"\n"
+            "\n"
+            "or, from a session you want in the swarm, register it:\n"
+            "\n"
+            "    relay register --name w1 --role worker --project myproj\n"
+            "\n"
+            "TAB returns to the session control view.")
     out: List[str] = []
     projects = sorted({s["project"] for s in sessions}
                       | {t["project"] for t in tasks}) or [""]

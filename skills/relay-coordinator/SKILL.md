@@ -18,8 +18,11 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
 
 1. Decompose the goal into per-worker epics. Write ONE spec md file per epic
    (e.g. `specs/<area>.md`) with enough context for a fresh session.
-2. Create workers that don't exist yet:
-   `relay spawn --name <worker> --project <project> --dir <repo-path> "<short mission>"`
+2. Create workers that don't exist yet, ARMED so they can act unattended:
+   `relay spawn --name <worker> --project <project> --dir <repo-path> --arm wild "<short mission>"`
+   An unarmed worker stalls at its first permission prompt with nobody to
+   clear it. Use `--arm wild` (or `insane` for throwaway work); or set
+   `[swarm] spawn_arm` in ~/.relay/config so every spawn arms by default.
 3. Create one epic per worker:
    `relay task add "<epic title>" --owner <worker> --spec <abs-spec-path> --project <project>`
    The owner is woken automatically with the task id and spec path.
@@ -35,6 +38,19 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
 - On "blocked": resolve the blocker (answer, re-scope, reassign) and reply
   with `relay send <worker> "..."`.
 - `relay task list --project <project>` is your board when you need a sweep.
+
+## Watch for silent stalls
+
+A healthy worker reports; a dead one says nothing, and silence looks exactly
+like progress. Do not assume no news is good news.
+
+- Before you go idle waiting, note which tasks are `doing` and who owns them.
+- If a worker you expected to report has been silent for a while, sweep
+  `relay task list --project <project>` - a task stuck in `doing` with no
+  status movement is a stalled worker.
+- relay flags such a session STALE (sound + notification). Treat a STALE
+  alert as a prompt to check that worker's tab and, if it died, re-assign or
+  re-spawn its task rather than waiting on a message that will never come.
 
 ## Discipline
 

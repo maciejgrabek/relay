@@ -29,10 +29,11 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 2",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 2)
+    ok &= check("fresh connect stamps user_version = 3",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 3)
 
-    # v1 -> v2 migration: old sessions table gains arm_request.
+    # v1 -> v3 migration: old sessions table gains arm_request AND mode, one
+    # step at a time, ending at the current version.
     import sqlite3 as _sq
     mpath = _tmpdb()
     mconn = _sq.connect(mpath)
@@ -46,10 +47,25 @@ def run():
     mconn.close()
     mig = db.connect(mpath)
     db.register(mig, "migrated", "M-1", "worker", "p")
-    ok &= check("v1 db migrates to v2 with arm_request column",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 2
-                and mig.execute("SELECT arm_request FROM sessions "
-                                "WHERE name='migrated'").fetchone()[0] == "")
+    row = mig.execute("SELECT arm_request, mode FROM sessions "
+                      "WHERE name='migrated'").fetchone()
+    ok &= check("v1 db migrates to v3 with arm_request + mode columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 3
+                and row["arm_request"] == "" and row["mode"] == "")
+
+    # --- persisted mode (restart survival): its own DB so the session-count
+    # assertions later in run() aren't perturbed by an extra registration.
+    ppath = _tmpdb()
+    pconn = db.connect(ppath)
+    db.register(pconn, "persistw", "PW-1", "worker", "proj", now=50.0)
+    ok &= check("mode default empty on fresh register",
+                db.get_session(pconn, "persistw")["mode"] == "")
+    ok &= check("set_session_mode on registered -> True + stored",
+                db.set_session_mode(pconn, "persistw", "insane")
+                and db.get_session(pconn, "persistw")["mode"] == "insane")
+    ok &= check("set_session_mode unknown name -> False",
+                not db.set_session_mode(pconn, "ghostw", "wild"))
+    pconn.close()
     mig.close()
 
     # --- sessions -----------------------------------------------------------

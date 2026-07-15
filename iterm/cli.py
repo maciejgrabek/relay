@@ -219,6 +219,126 @@ def cmd_task_list(args) -> int:
     return 0
 
 
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _git(*a, timeout=8):
+    """Run a git command in the relay repo; return (rc, stdout) or (None, '')
+    if git/repo is unavailable. Never raises."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", _repo_root(), *a],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "").strip()
+    except Exception:
+        return None, ""
+
+
+def local_version() -> str:
+    rc, out = _git("log", "-1", "--format=%h %cd", "--date=format:%Y-%m-%d")
+    return out if rc == 0 and out else "unknown (not a git checkout)"
+
+
+def cmd_version(args) -> int:
+    print(f"relay {local_version()}")
+    return 0
+
+
+def cmd_update(args) -> int:
+    """Fetch and fast-forward the relay checkout to the latest version. Safe:
+    ff-only never rewrites local history, and a dirty tree or missing remote
+    stops with a clear message instead of clobbering anything."""
+    rc, _ = _git("rev-parse", "--is-inside-work-tree")
+    if rc != 0:
+        return _err("not a git checkout - update by re-pulling however you "
+                    "installed relay")
+    rc, dirty = _git("status", "--porcelain")
+    if dirty:
+        return _err("working tree has local changes - commit or stash them "
+                    "first, then rerun 'relay update'")
+    rc, remote = _git("remote")
+    if rc != 0 or not remote:
+        return _err("no git remote configured - nothing to update from")
+    print(f"current: {local_version()}")
+    print("fetching...")
+    rc, _ = _git("fetch", "--quiet", timeout=30)
+    if rc != 0:
+        return _err("git fetch failed (offline?) - try again when connected")
+    rc, counts = _git("rev-list", "--count", "--left-right", "HEAD...@{u}")
+    behind = counts.split("\t")[-1] if counts and "\t" in counts else "0"
+    if behind == "0":
+        print("already up to date.")
+        return 0
+    print(f"{behind} new commit(s) available, fast-forwarding...")
+    rc, out = _git("merge", "--ff-only", "@{u}", timeout=30)
+    if rc != 0:
+        return _err("fast-forward failed (branch diverged) - resolve manually "
+                    "with git in the relay repo")
+    print(f"updated: {local_version()}")
+    print("restart relay (q, then run it again) to load the new version.")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """Print swarm health from OUTSIDE the TUI - a lifeline for 'I launched it
+    and I'm stuck'. Reads the DB only; never mutates. Flags the two things that
+    silently trap a user: undelivered messages piling up (relay TUI not running,
+    or the target never idle) and tasks stuck in 'doing' with no movement."""
+    import config as relay_config
+    conn = db.connect()
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    cfg = relay_config.load()[0]
+    print(f"relay doctor")
+    print(f"  version: {local_version()}")
+    print(f"  DB: {db.default_path()} (schema v{v})")
+    print(f"  config: title_style={cfg.title_style} spawn_arm={cfg.spawn_arm} "
+          f"stale_minutes={cfg.stale_minutes:g}")
+
+    sessions = db.list_sessions(conn)
+    if not sessions:
+        print("  sessions: none registered")
+        print("    -> nothing is in a swarm yet. Register a session, or spawn "
+              "one:\n       relay spawn --name w1 --arm wild \"your task\"")
+    else:
+        print(f"  sessions: {len(sessions)} registered")
+        for s in sessions:
+            cur = db.current_task_for(conn, s["name"])
+            task = f"  {cur['state']} #{cur['id']}" if cur else ""
+            mode = s["mode"] or "off"
+            arm = f"  arm_request={s['arm_request']}" if s["arm_request"] else ""
+            print(f"    {s['name']:<14} {s['role']:<12} "
+                  f"{(s['project'] or '-'):<12} mode={mode}{task}{arm}")
+
+    queued = db.undelivered(conn)
+    now = time.time()
+    if queued:
+        oldest_min = int((now - min(m["created_at"] for m in queued)) / 60)
+        print(f"  messages: {len(queued)} queued (undelivered)")
+        if oldest_min >= 2:
+            print(f"    !! oldest has waited {oldest_min}m - is the relay TUI "
+                  f"running? It delivers messages; if it's closed they just "
+                  f"sit here.")
+    else:
+        print("  messages: none queued")
+
+    tasks = db.list_tasks(conn)
+    if tasks:
+        from collections import Counter
+        by = Counter(t["state"] for t in tasks)
+        print("  tasks: " + ", ".join(f"{by[s]} {s}"
+              for s in ("todo", "doing", "blocked", "done") if by[s]))
+        stale_cut = cfg.stale_minutes * 60
+        for t in tasks:
+            if t["state"] == "doing" and now - t["updated_at"] > stale_cut:
+                mins = int((now - t["updated_at"]) / 60)
+                print(f"    !! possible stall: #{t['id']} '{t['title'][:40]}' "
+                      f"doing, owner {t['owner'] or '?'}, no update in {mins}m")
+    else:
+        print("  tasks: none")
+    return 0
+
+
 def cmd_spawn(args) -> int:
     import asyncio
     import config as relay_config
@@ -300,6 +420,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="arm level the watcher applies to the new worker "
                          "(default: config [swarm] spawn_arm)")
     sp.set_defaults(fn=cmd_spawn)
+
+    dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
+    dr.set_defaults(fn=cmd_doctor)
+
+    vr = sub.add_parser("version", help="print the installed relay version")
+    vr.set_defaults(fn=cmd_version)
+
+    up = sub.add_parser("update", help="fetch + fast-forward to the latest relay")
+    up.set_defaults(fn=cmd_update)
 
     return p
 

@@ -132,6 +132,7 @@ class Watcher:
         self._gone_notified: set = set()   # names alerted as gone-with-queue
         self._arm_seen: dict = {}          # sid -> time first seen registered
         self.arm_grace = 20.0              # spawn pre-arm window (s), > boot delay
+        self._mode_restored: set = set()   # sids whose persisted mode was restored
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
@@ -434,7 +435,17 @@ class Watcher:
                     within = time.time() - self._arm_seen.get(sid, 0) <= self.arm_grace
                     swarmdb.clear_arm_request(conn, d["name"])
                     if within:
-                        self.set_mode(sid, req)
+                        self.sessions[sid].mode = req
+                        self.sessions[sid]._last_prompt_id = None
+                        # persist directly (self.registry isn't updated with this
+                        # new sid until the tick ends, so set_mode's persist would
+                        # no-op); mark restored so we don't overwrite it below.
+                        # A persist hiccup must not abort the arming or its alert.
+                        try:
+                            swarmdb.set_session_mode(conn, d["name"], req)
+                        except Exception:
+                            pass
+                        self._mode_restored.add(sid)
                         self._note(f"ARMED {d['name']} -> {req} (spawn request)")
                         notify_mac(f"Relay - {d['name']}",
                                    f"armed {req} on spawn", self.alert_sound)
@@ -444,6 +455,21 @@ class Watcher:
                                    f"refused arm escalation to {req} "
                                    f"(request outside spawn window)",
                                    self.alert_sound)
+                # Restore a persisted arm level after a restart: only at first
+                # sight, only if no fresh spawn arm_request took precedence, and
+                # only once (later ticks must not re-apply a stale stored value
+                # over a human's live change). The stored mode was written by a
+                # prior watcher run; direct DB writes are danger.sh-blocked in
+                # safe mode, and restoration only happens across a restart.
+                elif (sid in self.sessions and sid not in self._mode_restored):
+                    stored = d.get("mode") or ""
+                    self._mode_restored.add(sid)
+                    if stored in ("safe", "wild", "insane") and \
+                            self.sessions[sid].mode == "off":
+                        self.sessions[sid].mode = stored
+                        self.sessions[sid]._last_prompt_id = None
+                        self._note(f"RESTORED {d['name']} -> {stored} "
+                                   f"(persisted arm level)")
                 reg[d["iterm_session_id"]] = d
             self.registry = reg
         except Exception as e:
@@ -669,15 +695,32 @@ class Watcher:
             info = self.sessions[sid]
             info.mode = self._MODE_CYCLE.get(info.mode, "safe")
             info._last_prompt_id = None   # re-evaluate current prompt under new mode
+            self._persist_mode(sid, info.mode)
 
     def set_mode(self, sid: str, mode: str) -> None:
         if sid in self.sessions and mode in self.MODES:
             self.sessions[sid].mode = mode
             self.sessions[sid]._last_prompt_id = None
+            self._persist_mode(sid, mode)
 
     def set_all(self, active: bool) -> None:
-        for info in self.sessions.values():
+        for sid, info in self.sessions.items():
             info.mode = "safe" if active else "off"
+            self._persist_mode(sid, info.mode)
+
+    def _persist_mode(self, sid: str, mode: str) -> None:
+        """Mirror a registered session's arm level to the DB so a relay restart
+        can restore it. Best-effort; unregistered (ad-hoc) tabs aren't persisted
+        - they're ephemeral. Mark it restored so the next tick doesn't overwrite
+        this human action with a stale stored value."""
+        reg = self.registry.get(sid)
+        if not reg:
+            return
+        try:
+            swarmdb.set_session_mode(self._swarm_conn(), reg["name"], mode)
+            self._mode_restored.add(sid)
+        except Exception as e:
+            self._note(f"swarm db error: {e}")
 
     def toggle_hidden(self, sid: str) -> None:
         if sid in self.sessions:
