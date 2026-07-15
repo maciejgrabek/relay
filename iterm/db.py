@@ -346,7 +346,6 @@ def reset_owner_tasks(conn, owner: str, now=None) -> int:
 
 def delete_session(conn, name: str) -> None:
     conn.execute("DELETE FROM sessions WHERE name=?", (name,))
-    conn.execute("DELETE FROM messages WHERE from_name=? OR to_name=?", (name, name))
     conn.commit()
 
 
