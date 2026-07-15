@@ -120,6 +120,7 @@ class Watcher:
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
         self.stale_after = float(
             os.environ.get("RELAY_STALE_MINUTES", "10")) * 60.0
+        self._gone_notified: set = set()   # names alerted as gone-with-queue
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -145,6 +146,7 @@ class Watcher:
                 except Exception as e:
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
+                self._check_gone()
                 for info in list(self.sessions.values()):
                     if self._stop_event.is_set():
                         break
@@ -158,6 +160,9 @@ class Watcher:
                             # a failed snapshot leaves state/last_screen stale,
                             # which must not be used to decide a delivery.
                             await self._deliver(info)
+                        # Staleness must be evaluated even on a failed screen
+                        # read - a hung session is exactly the stale case.
+                        self._check_stale(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -424,6 +429,63 @@ class Watcher:
         # and retries next tick (a rare duplicate beats a lost wake-up).
         swarmdb.mark_delivered(self._swarm_conn(), m["id"])
         self._note(f"DELIVER -> {reg['name']}: {m['body'][:60]}")
+
+    def _check_stale(self, info: SessionInfo) -> None:
+        """Flag a registered session STALE (and notify ONCE per onset) when a
+        queued message can't be delivered for stale_after seconds, or it owns
+        a 'doing' task with a quiet screen for stale_after seconds."""
+        reg = self.registry.get(info.session_id)
+        if not reg:
+            info.stale = False
+            info._stale_notified = False
+            return
+        try:
+            conn = self._swarm_conn()
+            msgs = swarmdb.undelivered(conn, reg["name"])
+            cur = swarmdb.current_task_for(conn, reg["name"])
+        except Exception:
+            return
+        oldest = min((m["created_at"] for m in msgs), default=None)
+        doing_since = (cur["updated_at"]
+                       if cur is not None and cur["state"] == "doing" else None)
+        reason = swarm.stale_reason(
+            time.time(), self.stale_after,
+            oldest_undelivered_ts=oldest, doing_since=doing_since,
+            screen_changed_ts=info._screen_changed_ts or None)
+        if reason:
+            info.stale = True
+            if not info._stale_notified:
+                info._stale_notified = True
+                self._note(f"STALE {reg['name']}: {reason}")
+                notify_mac(f"Relay - {reg['name']} STALE", reason,
+                           self.alert_sound)
+        else:
+            info.stale = False
+            info._stale_notified = False
+
+    def _check_gone(self) -> None:
+        """A registered name whose iTerm2 session no longer exists but which
+        has messages queued past the threshold - its tab was closed. Notify
+        once per name; reset when it re-registers (reappears) or drains."""
+        live = set(self.sessions.keys())
+        now = time.time()
+        for sid, reg in list(self.registry.items()):
+            name = reg["name"]
+            if sid in live:
+                self._gone_notified.discard(name)
+                continue
+            try:
+                msgs = swarmdb.undelivered(self._swarm_conn(), name)
+            except Exception:
+                continue
+            oldest = min((m["created_at"] for m in msgs), default=None)
+            if (oldest is not None and now - oldest > self.stale_after
+                    and name not in self._gone_notified):
+                self._gone_notified.add(name)
+                self._note(f"STALE {name}: session gone, messages queued")
+                notify_mac(f"Relay - {name} STALE",
+                           "session gone with queued messages",
+                           self.alert_sound)
 
     async def focus_session(self, sid: str) -> bool:
         """Bring the real iTerm2 tab for this session to the foreground."""
