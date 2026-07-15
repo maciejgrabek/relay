@@ -417,6 +417,8 @@ def cmd_clean(args) -> int:
 def cmd_wipe(args) -> int:
     import swarm
     conn = db.connect()
+    if args.all and args.names:
+        return _err("--all takes no session names (it wipes the whole project)")
     if args.all:
         if not args.project:
             return _err("--all requires --project (refusing to wipe every "
@@ -434,8 +436,9 @@ def cmd_wipe(args) -> int:
                 f"({nt} tasks + {ns} sessions + {nm} messages)?"):
             print("aborted.")
             return 0
-        db.wipe_project(conn, args.project)
-        print(f"wiped project '{args.project}'.")
+        nt2, ns2, nm2 = db.wipe_project(conn, args.project)
+        print(f"wiped project '{args.project}': {nt2} tasks, {ns2} sessions, "
+              f"{nm2} messages.")
         return 0
 
     sessions = [dict(r) for r in db.closed_sessions(conn, args.project)]
@@ -453,11 +456,17 @@ def cmd_wipe(args) -> int:
             f"session(s)?"):
         print("aborted.")
         return 0
+    still_closed = {r["name"] for r in db.closed_sessions(conn, args.project)}
+    acted = 0
     for c in cands:
-        db.delete_tasks_for_owner(conn, c["name"])
+        if c["name"] not in still_closed:
+            print(f"  skipped {c['name']} - revived since the plan")
+            continue
+        db.delete_tasks_by_ids(conn, c["task_ids"])
         db.delete_undelivered_to(conn, c["name"])
         db.delete_session(conn, c["name"])
-    print(f"wiped {len(cands)} session(s).")
+        acted += 1
+    print(f"wiped {acted} session(s).")
     return 0
 
 
