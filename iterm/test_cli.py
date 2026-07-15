@@ -144,6 +144,26 @@ def run():
     fp2 = spawnmod.first_prompt("boss", "", "", role="coordinator")
     ok &= check("spawn coordinator prompt", "relay-coordinator" in fp2)
 
+    # doctor: runs read-only against the temp DB, exits 0, reports state.
+    code, out, _ = run_cli("doctor")
+    ok &= check("doctor exits 0 and reports sessions/tasks",
+                code == 0 and "relay doctor" in out
+                and ("sessions:" in out or "registered" in out))
+    # doctor on an empty DB still works and guides the user.
+    import tempfile as _tf
+    empty = os.path.join(_tf.mkdtemp(), "empty.db")
+    old_db = os.environ["RELAY_DB"]
+    os.environ["RELAY_DB"] = empty
+    try:
+        code, out, _ = run_cli("doctor")
+        ok &= check("doctor on empty DB guides to spawn",
+                    code == 0 and "none registered" in out and "relay spawn" in out)
+    finally:
+        os.environ["RELAY_DB"] = old_db
+    # version: prints something, exits 0 (git or 'unknown').
+    code, out, _ = run_cli("version")
+    ok &= check("version exits 0", code == 0 and "relay" in out)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

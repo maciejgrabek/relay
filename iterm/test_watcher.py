@@ -465,6 +465,29 @@ def arm_request_tests():
     w._swarm_refresh_registry()
     chk("row without arm_request tolerated", info.mode == "safe")
 
+    # RESTART SURVIVAL: a persisted mode is restored at first sight when there
+    # is no fresh arm_request and the session is currently off. Simulate a
+    # freshly-started watcher (empty _mode_restored, mode off) seeing a stored
+    # 'insane'.
+    W.swarmdb.set_session_mode = lambda conn, name, mode: None
+    w2 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    w2._db = object()
+    ri = SessionInfo("sidP", title="persistw", _iterm_session=FakeSession())
+    ri.mode = "off"
+    w2.sessions["sidP"] = ri
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "persistw", "iterm_session_id": "sidP", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "", "mode": "insane"}]
+    w2._swarm_refresh_registry()
+    chk("persisted mode restored on restart", ri.mode == "insane")
+    # ...but only once: a later stored change does NOT override a live human tweak
+    ri.mode = "safe"
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "persistw", "iterm_session_id": "sidP", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "", "mode": "insane"}]
+    w2._swarm_refresh_registry()
+    chk("restore is first-sight only (human change kept)", ri.mode == "safe")
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

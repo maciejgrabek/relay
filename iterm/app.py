@@ -92,6 +92,32 @@ def reactor_band(temp: float):
     return ("STABLE", "#2a7d4f", False)
 
 
+def getting_started_panel(width: int) -> str:
+    """Shown in the preview pane when relay has nothing to control (only its own
+    tab is open). Relay acts on OTHER sessions, so an empty roster is the moment
+    to teach that, not blank space. Pure text (the pane renders markup=False)."""
+    w = max(40, width)
+    bar = "═" * w
+    return (
+        f"╔{bar}╗\n"
+        f" ▓ NOTHING TO CONTROL YET\n"
+        f"╚{bar}╝\n"
+        "\n"
+        " Relay is a control panel for OTHER terminal sessions - it has\n"
+        " nothing to do with only itself running.\n"
+        "\n"
+        "   1. Open a tab and start a long job or a Claude Code session\n"
+        "   2. Come back here - it shows up in the list on the left\n"
+        "   3. Press SPACE to arm it. Relay auto-clears its safe prompts\n"
+        "      and pings you on the dangerous ones. Then walk away.\n"
+        "\n"
+        " Running a swarm of Claude sessions? Spawn armed workers with:\n"
+        "\n"
+        "     relay spawn --name w1 --arm wild \"your task here\"\n"
+        "\n"
+        " Keys:  ↑↓ move · SPACE arm · TAB swarm view · q quit\n")
+
+
 class RelayApp(App):
     CSS = """
     /* phosphor-green CRT terminal */
@@ -157,6 +183,17 @@ class RelayApp(App):
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
         self._swarm_visible = False
         self._swarm_db = None
+        # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
+        # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
+        # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
+        self._own_sid = os.environ.get("ITERM_SESSION_ID", "").split(":")[-1] or None
+
+    def _controllable(self):
+        """Sessions relay could actually act on: everything except its own tab."""
+        if not self.watcher:
+            return []
+        return [i for i in self.watcher.sessions.values()
+                if i.session_id != self._own_sid]
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -243,6 +280,8 @@ class RelayApp(App):
             raw_cmd = info.last_command[:46] + "…" if len(info.last_command) > 47 else info.last_command
             cmd = escape(raw_cmd) if raw_cmd else ""
             title = escape(info.title[:26])
+            if info.session_id == self._own_sid:
+                title = f"{title} [#1d5c38](this panel)[/]"
             reg = (self.watcher.registry or {}).get(info.session_id)
             role = {"coordinator": "coord", "worker": "work"}.get(
                 reg["role"], "") if reg else ""
@@ -298,11 +337,20 @@ class RelayApp(App):
         appr = sum(i.n_approved for i in sess)
         esc = sum(i.n_escalated for i in sess)
         dry = " [bold #ffb000]◆ SIMULATION (dry-run)[/]" if self.dry_run else ""
+        # Onboarding hints, in priority order: nothing to control -> point at
+        # the preview panel; sessions present but none armed -> tell them Space.
+        n_ctrl = len(self._controllable())
+        if n_ctrl == 0:
+            hint = "  [#2a7d4f]· open another session to control (see panel ->)[/]"
+        elif armed == 0:
+            hint = "  [#ffb000]· nothing armed - SPACE to arm a session, then walk away[/]"
+        else:
+            hint = ""
         self.query_one("#subtitle", Static).update(
             f"[#2a7d4f]RELAY · SESSION CONTROL ·[/] "
             f"[#3aff7a]{len(sess)} units[/] [#2a7d4f]·[/] "
             f"[#ffb000]{armed} armed[/] [#2a7d4f]·[/] "
-            f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{dry}")
+            f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{dry}{hint}")
         self._update_preview()
         if self._swarm_visible:
             self._render_swarm_view()
@@ -338,6 +386,11 @@ class RelayApp(App):
         if not self.watcher:
             return
         preview = self.query_one("#preview", Static)
+        # Onboarding: nothing to control (only relay's own tab) -> teach instead
+        # of showing a blank/[no signal] pane.
+        if not self._controllable():
+            preview.update(getting_started_panel(preview.size.width - 2))
+            return
         sid = self._selected_sid()
         info = self.watcher.sessions.get(sid) if sid else None
         if not info:

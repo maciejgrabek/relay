@@ -145,6 +145,14 @@ bin/relay --dry-run           # SAFE FIRST RUN: watch + log, never inject
 bin/relay                     # for real
 ```
 
+> **Relay controls OTHER sessions.** It is a panel for the terminal sessions
+> running *around* it - long jobs, Claude Code sessions - not for itself.
+> Launching it with only its own tab open shows an empty roster and a
+> getting-started panel: that is expected. Open a tab, start a Claude Code
+> session or a long command, and it appears in relay's list; arm it with
+> `Space` and walk away. (For a coordinated fleet, see [Swarm](#swarm) and
+> `relay spawn`.)
+
 `install.sh` only verifies prerequisites and, with your `y`, appends one PATH
 line to your shell rc - it installs nothing else. Use `./install.sh --check` to
 check without editing anything, and `./uninstall.sh` to remove the PATH line.
