@@ -302,6 +302,57 @@ def run():
     ok &= check("wipe --all leaves other project",
                 len(db.list_tasks(wc, project="PB")) == 1
                 and db.get_session(wc, "b1") is not None)
+
+    # (a) wipe --project scopes the delete to that project's tasks only (fix 1):
+    # a dead session owning a task in MP AND one in MQ loses only MP's task.
+    _wdb.register(wc, "multi", "MU", "worker", "MP", now=20.0)
+    mp_t = _wdb.add_task(wc, "in-mp", project="MP", owner="multi", now=21.0)
+    mq_t = _wdb.add_task(wc, "in-mq", project="MQ", owner="multi", now=22.0)
+    _wdb.mark_closed(wc, "multi", 400.0)
+    code, out, _ = run_cli("wipe", "--project", "MP", "--yes",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe --project deletes only that project's task (fix 1)",
+                code == 0 and db.get_task(wc, mp_t) is None
+                and db.get_task(wc, mq_t) is not None)
+
+    # (b) a LIVE session in the wipe project is never touched by the orphaned form
+    _wdb.register(wc, "livew", "LW", "worker", "LP", now=30.0)
+    lp_t = _wdb.add_task(wc, "live-task", project="LP", owner="livew", now=31.0)
+    code, out, _ = run_cli("wipe", "--project", "LP", "--yes",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe leaves a LIVE session + its task untouched",
+                code == 0 and db.get_session(wc, "livew") is not None
+                and db.get_task(wc, lp_t) is not None)
+
+    # (c) --all --dry-run makes zero deletes
+    _wdb.register(wc, "drw", "DRW", "worker", "DRP", now=40.0)
+    dr_t = _wdb.add_task(wc, "dr-task", project="DRP", owner="drw", now=41.0)
+    code, out, _ = run_cli("wipe", "--all", "--dry-run", "--project", "DRP",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe --all --dry-run deletes nothing",
+                code == 0 and db.get_task(wc, dr_t) is not None
+                and db.get_session(wc, "drw") is not None)
+
+    # (d) confirm-abort (no --yes, _confirm returns False): nothing deleted
+    _wdb.register(wc, "abw", "ABW", "worker", "ABP", now=50.0)
+    ab_t = _wdb.add_task(wc, "ab-task", project="ABP", owner="abw", now=51.0)
+    _wdb.mark_closed(wc, "abw", 400.0)
+    orig = cli._confirm
+    cli._confirm = lambda q: False
+    try:
+        code, out, _ = run_cli("wipe", "--project", "ABP",
+                               iterm_id="w0t0p0:CO-ID")
+    finally:
+        cli._confirm = orig
+    ok &= check("wipe confirm-abort deletes nothing + prints aborted",
+                code == 0 and "aborted." in out
+                and db.get_task(wc, ab_t) is not None
+                and db.get_session(wc, "abw") is not None)
+
+    # (e) names + --all is refused outright (looks like a single-session wipe)
+    code, _, err = run_cli("wipe", "deadw", "--all", iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe with names + --all -> exit 1",
+                code == 1 and ("names" in err or "takes no" in err))
     wc.close()
 
     conn.close()

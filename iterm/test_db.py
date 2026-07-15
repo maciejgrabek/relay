@@ -310,6 +310,18 @@ def run():
     ok &= check("delete_tasks_for_owner leaves other owners",
                 db.get_task(wdb, keep) is not None)
 
+    # delete_tasks_by_ids: only the given ids, empty -> 0
+    i1 = db.add_task(wdb, "i1", project="proj", owner="dead", now=6.0)
+    i2 = db.add_task(wdb, "i2", project="proj", owner="dead", now=7.0)
+    i3 = db.add_task(wdb, "i3", project="proj", owner="dead", now=8.0)
+    n = db.delete_tasks_by_ids(wdb, [i1, i3])
+    ok &= check("delete_tasks_by_ids deletes only the given ids",
+                n == 2 and db.get_task(wdb, i1) is None
+                and db.get_task(wdb, i3) is None
+                and db.get_task(wdb, i2) is not None)
+    ok &= check("delete_tasks_by_ids empty -> 0",
+                db.delete_tasks_by_ids(wdb, []) == 0)
+
     # wipe_project: everything for a project, other projects intact
     db.register(wdb, "s1", "S1", "worker", "P1", now=10.0)
     db.register(wdb, "s2", "S2", "worker", "P2", now=11.0)

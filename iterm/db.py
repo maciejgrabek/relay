@@ -357,6 +357,18 @@ def delete_tasks_for_owner(conn, owner: str) -> int:
     return cur.rowcount
 
 
+def delete_tasks_by_ids(conn, ids) -> int:
+    """Delete the given task ids (used by wipe so the delete matches the plan
+    exactly). Empty ids -> no-op."""
+    ids = list(ids)
+    if not ids:
+        return 0
+    q = ",".join("?" for _ in ids)
+    cur = conn.execute(f"DELETE FROM tasks WHERE id IN ({q})", ids)
+    conn.commit()
+    return cur.rowcount
+
+
 def wipe_project(conn, project: str) -> tuple:
     """Delete ALL tasks, sessions, and messages for one project - a blank slate.
     Returns (n_tasks, n_sessions, n_messages)."""

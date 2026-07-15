@@ -439,9 +439,10 @@ relay wipe [names...] [--project <p>] [--all] [--dry-run] [--yes]
     The delete-counterpart to clean: instead of resetting a closed
     session's non-done tasks to todo, it DELETES those tasks outright
     (any state, including done), then deletes the session row and its
-    undelivered messages. Same targeting as restore/clean - no names =
-    every closed session that owns work, named = those specific closed
-    sessions. Live sessions are never touched by the orphaned form.
+    undelivered messages. Same candidate set as clean - no names =
+    every closed session (including ones that own no tasks), named =
+    those specific closed sessions. Live sessions are never touched by
+    the orphaned form.
 
     `--all` requires `--project <p>` and nukes that whole project in one
     shot: every task, session (live or closed), and message it has, no
