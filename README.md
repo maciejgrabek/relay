@@ -207,6 +207,140 @@ Tunable via `RELAY_AUDIT_LOG` and `RELAY_AUDIT_RETENTION_DAYS`.
 tail -50 ~/.relay/audit.jsonl | jq -r 'select(.verdict=="auto-approved") | "\(.session): \(.command)"'
 ```
 
+## Swarm
+
+Relay is also a session control plane: named Claude Code sessions register
+as **coordinators** or **workers**, send each other messages, and track
+tasks (epics with subtasks, states, blockers) - all through one SQLite
+database at `~/.relay/relay.db`. No daemon, no event bus. **The DB is the
+bus**: swarm CLI verbs write rows and exit; the already-running `relay` TUI
+reads the DB on the same tick it uses for screen watching, and delivers.
+With the TUI closed, CLI writes still land (messages queue, tasks update) -
+delivery just resumes once the TUI is open again, same "tool on === TUI
+open" contract as everything else in this repo.
+
+A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
+automatically), so every verb below resolves "me" without you passing an id:
+
+```
+relay register --name <name> --role worker|coordinator [--project <p>]
+    Bind this session to a swarm name. Re-running rebinds (safe).
+
+relay status "<one line>"
+    Update your status line (shown in the relay TUI). Keep it fresh.
+
+relay send <name> "<body>"
+    Queue a message for a named session. It is TYPED INTO their Claude
+    prompt when they are idle and the relay TUI is running. Single line;
+    newlines are flattened.
+
+relay inbox
+    Print your undelivered messages and mark them delivered. Check it when
+    you start and between tasks (messages may have queued while you worked).
+
+relay msgs [--with <name>] [--project <p>]
+    Full message history (delivered + queued).
+
+relay task add "<title>" [--parent <id>] [--owner <name>] [--spec <path>]
+               [--blocked-by <id,id>] [--project <p>]
+    No --parent = an epic. Assigning --owner to someone ELSE queues them
+    an automatic wake-up. --spec points at a spec md file.
+
+relay task update <id> --state todo|doing|blocked|done
+    Marking done automatically wakes the owners of tasks that are now
+    fully unblocked (all their blockers done).
+
+relay task list [--project <p>] [--mine]
+    Epics with nested subtasks, states, owners, blockers.
+
+relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
+            [--role worker|coordinator]
+    Open a new iTerm2 tab running claude, pre-registered under <name>.
+```
+
+Registration and the CLI work outside iTerm2 too (`relay task list` doesn't
+need an identity) - only delivery requires the TUI running against a real
+iTerm2 session.
+
+### Delivery
+
+A queued message is only delivered when the target session is **idle at
+Claude's input prompt** - the watcher is the one thing that can see this,
+same machinery as the permission-prompt gates. Delivery types the message
+into the session as its next user turn and hits Enter, prefixed for
+provenance:
+
+```
+[relay msg from coord] spec ready at specs/be.md
+```
+
+A busy target just leaves the message queued for the next idle tick. Two
+things auto-generate a message: assigning a task to someone else's
+`--owner` (a wake-up naming the task id, title, and spec path), and a task
+completing (every task that listed it in `--blocked-by`, once ALL its
+blockers are done, wakes its owner). Every delivery is written to the audit
+log **before** injection, same contract as auto-approvals - verdicts
+`delivered` (live) and `would-deliver` (`--dry-run`, logged but never
+typed).
+
+### Staleness
+
+Walking away means a worker can go quiet and you won't notice. Relay flags
+a registered session `STALE` (and fires the same notification + sound path
+as a dangerous prompt) when either its queued messages have sat undelivered
+longer than `RELAY_STALE_MINUTES`, or it owns a `doing` task whose
+status/screen hasn't moved in that long. Relay does not auto-reassign the
+task or re-prompt the worker - deciding what to do with a stuck worker is
+your call; Relay's job is just telling you in time.
+
+### TAB: the swarm view
+
+`TAB` toggles a second, full-width view: a kanban board of tasks by state
+(TODO / DOING / BLOCKED / DONE), epic progress, and a recent-messages feed,
+filterable by project when more than one is active. The control view
+(arm/approve, unchanged) gains **ROLE** and **TASK NOW** columns so you can
+see swarm state without leaving it; `STALE` shows right in the STATUS
+column.
+
+### relay spawn
+
+`relay spawn --name be-worker --project webshop "..."` opens a new iTerm2
+tab, launches `claude` in it with a given first prompt, and pre-registers
+the name so you (or a coordinator session) can address it immediately. The
+generated first prompt is minimal - it invokes the relay-worker skill and
+states name, project, and task; the actual protocol lives in the skill, not
+in the spawned prompt. Boot delay before the tab is considered ready is
+`RELAY_SPAWN_BOOT_DELAY` seconds.
+
+### Skills
+
+`skills/relay-worker` and `skills/relay-coordinator` are the protocol layer:
+what a worker does on start (register, check `relay inbox`, split an
+assigned epic into subtasks, keep `relay status` fresh, message the
+coordinator when done or blocked) and what a coordinator does (write specs,
+create epics with `--owner` and `--spec`, spawn or address named workers,
+monitor via `relay task list`). Both skills share one CLI verb reference,
+[`skills/relay-cli-reference.md`](skills/relay-cli-reference.md), copied
+above. `./install.sh` offers to symlink them into `~/.claude/skills/` so
+they version with the repo instead of drifting.
+
+### Security posture (read this)
+
+Two accepted risks that come with the swarm layer:
+
+1. **Prompt-injection surface.** Any local process can `relay send` text
+   that becomes another session's next user turn - and an armed session
+   will then auto-approve that turn's safe commands. Arm levels remain the
+   guardrail; the audit log covers forensics. This is not new in kind (the
+   same is true of anything that types at an armed terminal) but the swarm
+   layer makes it a first-class, scriptable path, so treat `relay send`
+   with the same care as shell access to a machine running an armed
+   session.
+2. **Input clobbering.** An injected message interrupts anything half-typed
+   in the target session's input box. Rare, and accepted rather than
+   solved - there's no way to know a human is mid-keystroke from the
+   screen alone.
+
 ### What's verified, and the one gap
 
 Tested: the gate logic against real captured prompts (incl. the API's NUL/nbsp
@@ -226,6 +360,9 @@ Environment variables (set before launching `relay`):
 | `RELAY_NOTIFY_COOLDOWN`      | `30`                       | Min seconds between alerts per session    |
 | `RELAY_NO_CAFFEINATE`        | unset                      | Set to `1` to not keep the Mac awake      |
 | `RELAY_NO_REACTOR`           | unset                      | Set to `1` to hide the reactor meter      |
+| `RELAY_DB`                   | `~/.relay/relay.db`        | Swarm SQLite file (sessions/messages/tasks) |
+| `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
+| `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
 
 Risk posture (which commands auto-approve vs escalate) is edited directly in
 [`lib/danger.sh`](lib/danger.sh).
@@ -235,16 +372,24 @@ Risk posture (which commands auto-approve vs escalate) is edited directly in
 ```
 relay/
   bin/relay        # launcher
-  iterm/app.py           # Textual TUI (the control panel)
-  iterm/watcher.py       # iTerm2 connection: stream screens, run gates, inject
+  iterm/app.py           # Textual TUI (the control panel + swarm view)
+  iterm/watcher.py       # iTerm2 connection: stream screens, run gates, inject, deliver
   iterm/gates.py         # pure gate logic (type + safety), no iTerm2 imports
   iterm/audit.py         # durable audit log of unattended decisions
-  iterm/test_*.py        # gate/TUI suites, built from real captured prompts
+  iterm/db.py            # swarm SQLite schema + connection (~/.relay/relay.db)
+  iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
+  iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
+  iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
+  iterm/test_*.py        # gate/TUI/swarm suites, built from real captured prompts
+  iterm/test_db.py       # swarm schema + query tests (temp DB file)
+  iterm/test_swarm.py    # delivery/staleness/rendering logic tests
+  iterm/test_cli.py      # CLI verb tests against a temp DB file
   lib/danger.sh          # shared command-classification rules (tune me)
   test/danger_test.sh    # classifier regression suite (run before tuning danger.sh)
   test/run.sh            # run the whole suite (bash + Python), no pytest needed
-  install.sh             # prerequisite check + optional PATH setup
+  install.sh             # prerequisite check + optional PATH/skills setup
   uninstall.sh           # removes Relay's PATH line
+  skills/                # relay-worker, relay-coordinator (symlinked by install.sh)
 ```
 
 ## Tests

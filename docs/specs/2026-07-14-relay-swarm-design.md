@@ -1,7 +1,7 @@
 # Relay Swarm - Design Spec
 
 **Date:** 2026-07-14
-**Status:** Approved for planning
+**Status:** Implemented (see docs/plans/2026-07-15-relay-swarm.md)
 
 ## Summary
 
