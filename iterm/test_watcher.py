@@ -504,9 +504,67 @@ def arm_request_tests():
     return ok
 
 
+def closed_tests():
+    """closed_at marking is debounced and only runs after a good roster sync."""
+    from watcher import Watcher
+    import config as C
+    ok = True
+    def chk(n, c):
+        nonlocal ok
+        print(("PASS" if c else "FAIL"), n); ok = ok and c
+
+    marked, cleared = [], []
+    W.swarmdb.mark_closed = lambda conn, name, ts: marked.append(name)
+    W.swarmdb.clear_closed = lambda conn, name: cleared.append(name)
+    W.swarmdb.list_tasks = lambda conn, project=None, owner=None: []
+
+    w = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    w._db = object()
+    # DB says 'w1' registered (not closed); live tabs = {} (its tab is gone).
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w1", "iterm_session_id": "S1", "role": "worker",
+         "project": "p", "closed_at": 0}]
+    w.sessions = {}   # no live tabs
+
+    w._mark_closed_sessions()
+    chk("miss 1: not yet marked", marked == [])
+    w._mark_closed_sessions()
+    chk("miss 2: marked closed", marked == ["w1"])
+    # once the DB row reflects closed_at != 0, the `not closed` guard stops a
+    # re-mark. Simulate that by having list_sessions now report it closed.
+    marked.clear()
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w1", "iterm_session_id": "S1", "role": "worker",
+         "project": "p", "closed_at": 123.0}]
+    w._mark_closed_sessions()
+    chk("already-closed row is not re-marked", marked == [])
+
+    # tab reappears -> miss counter resets, closed cleared
+    w.sessions = {"S1": object()}
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w1", "iterm_session_id": "S1", "role": "worker",
+         "project": "p", "closed_at": 999.0}]
+    w._mark_closed_sessions()
+    chk("reappeared -> clear_closed", cleared == ["w1"])
+
+    # orphan_count: 1 closed session owning a non-done task
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "d", "iterm_session_id": "SD", "role": "worker",
+         "project": "p", "closed_at": 500.0}]
+    W.swarmdb.list_tasks = lambda conn, project=None, owner=None: [
+        {"id": 1, "state": "doing", "owner": "d"}]
+    w.sessions = {}
+    w._recount_orphans()
+    chk("orphan_count counts closed owners of non-done work", w.orphan_count == 1)
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
     r3 = asyncio.run(title_tests())
     r4 = arm_request_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r4) else 1)
+    r5 = closed_tests()
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5) else 1)
