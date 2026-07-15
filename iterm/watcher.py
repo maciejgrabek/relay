@@ -517,6 +517,9 @@ class Watcher:
             if self._miss[name] >= self.close_misses and not closed:
                 try:
                     swarmdb.mark_closed(conn, name, time.time())
+                    # Reset the miss count so a later respawn under the same
+                    # name starts fresh instead of re-closing on its first tick.
+                    self._miss.pop(name, None)
                     self._note(f"CLOSED {name} (tab gone)")
                 except Exception:
                     pass

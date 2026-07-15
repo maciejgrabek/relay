@@ -220,10 +220,10 @@ class RelayApp(App):
         except Exception:
             pass
         try:
-            import db as _swarmdb
-            _swarmdb.prune_messages(
-                _swarmdb.connect(),
-                float(os.environ.get("RELAY_MSG_RETENTION_DAYS", "7")))
+            _mc = swarmdb.connect()
+            swarmdb.prune_messages(
+                _mc, float(os.environ.get("RELAY_MSG_RETENTION_DAYS", "7")))
+            _mc.close()
         except Exception:
             pass
         table = self.query_one(DataTable)
