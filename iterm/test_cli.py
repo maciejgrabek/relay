@@ -135,6 +135,15 @@ def run():
     ok &= check("task list --mine filters", f"#{dep_id}" in out
                 and f"#{sub_id}" not in out)
 
+    # spawn: first_prompt content (the iTerm2 side is smoke-tested live)
+    import spawn as spawnmod
+    fp = spawnmod.first_prompt("be-worker", "webshop", "implement API")
+    ok &= check("spawn prompt invokes skill + identity",
+                "relay-worker" in fp and "be-worker" in fp
+                and "webshop" in fp and "implement API" in fp)
+    fp2 = spawnmod.first_prompt("boss", "", "", role="coordinator")
+    ok &= check("spawn coordinator prompt", "relay-coordinator" in fp2)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
