@@ -60,13 +60,18 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     """Read the config file and apply env overrides. Never raises."""
     p = path or default_path()
     warns: List[str] = []
-    cp = configparser.ConfigParser()
+    # inline_comment_prefixes lets a value line carry a trailing `; ...` or
+    # `# ...` comment (as the README's sample config shows); without it the
+    # whole rest of the line is read as part of the value and silently invalid.
+    cp = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     try:
         cp.read(p)
-    except configparser.Error as e:
+    except (configparser.Error, UnicodeDecodeError, OSError) as e:
+        # Malformed INI, non-UTF-8 bytes, or an unreadable file must never
+        # propagate - that would kill the TUI at startup. Degrade to defaults.
         warns.append(f"config: {p} is malformed ({e.__class__.__name__}) - "
                      f"using defaults")
-        cp = configparser.ConfigParser()
+        cp = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
 
     d = Config()  # defaults
     style = cp.get("titles", "style", fallback=d.title_style).strip().lower()
