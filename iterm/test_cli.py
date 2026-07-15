@@ -86,6 +86,55 @@ def run():
     code, out, _ = run_cli("msgs", "--with", "coord", iterm_id="w0t1p0:BFF-ID")
     ok &= check("msgs history", code == 0 and "spec ready" in out)
 
+    # --- task verbs ---------------------------------------------------------
+    # coordinator creates an epic for the worker -> assignment wake-up queued
+    code, out, _ = run_cli("task", "add", "--owner", "bff-worker",
+                           "--spec", "/w/specs/bff.md", "--project", "webshop",
+                           "BFF checkout changes", iterm_id="w0t0p0:CO-ID")
+    ok &= check("task add prints id", code == 0 and "#" in out)
+    epic_id = int(out.split("#")[1].split()[0])
+    wake = db.undelivered(conn, "bff-worker")
+    ok &= check("assignment wake-up queued from relay",
+                len(wake) == 1 and wake[0]["from_name"] == "relay"
+                and f"#{epic_id}" in wake[0]["body"]
+                and "/w/specs/bff.md" in wake[0]["body"])
+
+    # self-owned subtask -> NO wake-up spam
+    code, out, _ = run_cli("task", "add", "--parent", str(epic_id),
+                           "--owner", "bff-worker", "--project", "webshop",
+                           "wire endpoint", iterm_id="w0t1p0:BFF-ID")
+    sub_id = int(out.split("#")[1].split()[0])
+    ok &= check("self-assigned task queues no wake-up",
+                len(db.undelivered(conn, "bff-worker")) == 1)
+
+    # a dependent task, blocked by the subtask
+    code, out, _ = run_cli("task", "add", "--owner", "coord",
+                           "--blocked-by", str(sub_id), "--project", "webshop",
+                           "review BFF work", iterm_id="w0t0p0:CO-ID")
+    dep_id = int(out.split("#")[1].split()[0])
+
+    # task update to done -> unblock wake-up for the dependent's owner
+    code, out, _ = run_cli("task", "update", str(sub_id), "--state", "done",
+                           iterm_id="w0t1p0:BFF-ID")
+    ok &= check("task update ok", code == 0)
+    coord_wake = db.undelivered(conn, "coord")
+    ok &= check("unblock wake-up queued",
+                len(coord_wake) == 1 and f"#{dep_id}" in coord_wake[0]["body"]
+                and "unblocked" in coord_wake[0]["body"])
+
+    code, _, err = run_cli("task", "update", "9999", "--state", "done",
+                           iterm_id="w0t1p0:BFF-ID")
+    ok &= check("task update unknown id -> error", code == 1)
+
+    # task list
+    code, out, _ = run_cli("task", "list", "--project", "webshop",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("task list shows epic and states", f"#{epic_id}" in out
+                and "[done]" in out and "[todo]" in out)
+    code, out, _ = run_cli("task", "list", "--mine", iterm_id="w0t0p0:CO-ID")
+    ok &= check("task list --mine filters", f"#{dep_id}" in out
+                and f"#{sub_id}" not in out)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
