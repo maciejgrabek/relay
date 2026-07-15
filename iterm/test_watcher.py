@@ -12,6 +12,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
+# Hermetic: never read the developer's real ~/.relay/config in tests.
+os.environ["RELAY_CONFIG"] = "/nonexistent/relay-test-config"
 import watcher as W  # noqa: E402
 
 
