@@ -99,3 +99,67 @@ def stale_reason(now: float, threshold_s: float,
         if quiet > threshold_s:
             return f"no activity for {int(quiet / 60)}m while a task is 'doing'"
     return None
+
+
+# --- swarm view rendering (plain text; the TUI Static uses markup=False) ------
+
+_STATE_COLS = ("todo", "doing", "blocked", "done")
+
+
+def _clip(s: str, w: int) -> str:
+    s = str(s)
+    return s if len(s) <= w else s[: max(0, w - 1)] + "…"
+
+
+def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str:
+    """One plain-text screen: roster, kanban board, epic progress, message
+    feed. Grouped by project when more than one is present."""
+    out: List[str] = []
+    projects = sorted({s["project"] for s in sessions}
+                      | {t["project"] for t in tasks}) or [""]
+    for proj in projects:
+        p_sessions = [s for s in sessions if s["project"] == proj]
+        p_tasks = [t for t in tasks if t["project"] == proj]
+        coord = next((s["name"] for s in p_sessions
+                      if s["role"] == "coordinator"), "-")
+        workers = sum(1 for s in p_sessions if s["role"] == "worker")
+        out.append(f"PROJECT {proj or '(none)'} · coordinator: {coord} · "
+                   f"{workers} workers")
+        for s in p_sessions:
+            out.append(f"  {s['name']:<16} {s['role']:<12} "
+                       f"{_clip(s['status_text'] or '-', width - 32)}")
+        out.append("")
+
+        # kanban: 4 columns of "#id title"
+        colw = max(12, (width - 3 * 3) // 4)
+        cols = {st: [f"#{t['id']} {_clip(t['title'], colw - len(str(t['id'])) - 2)}"
+                     for t in p_tasks if t["state"] == st]
+                for st in _STATE_COLS}
+        height = max([len(v) for v in cols.values()] + [1])
+        out.append("   ".join(h.upper().ljust(colw)
+                              for h in _STATE_COLS))
+        out.append("   ".join("─" * colw for _ in _STATE_COLS))
+        for i in range(height):
+            out.append("   ".join(
+                (cols[st][i] if i < len(cols[st]) else "").ljust(colw)
+                for st in _STATE_COLS))
+        out.append("")
+
+        # epic progress: children done/total
+        epics = [t for t in p_tasks if t["parent_id"] is None]
+        for e in epics:
+            kids = [t for t in p_tasks if t["parent_id"] == e["id"]]
+            if kids:
+                done = sum(1 for k in kids if k["state"] == "done")
+                out.append(f"  EPIC #{e['id']} {_clip(e['title'], width - 30)}"
+                           f"  {done}/{len(kids)}")
+        out.append("")
+
+    out.append("MESSAGES")
+    for m in messages[-8:]:
+        q = "" if m["delivered_at"] else "  [queued]"
+        out.append(f"  {m['from_name']} -> {m['to_name']}: "
+                   f"{_clip(m['body'], width - 30)}{q}")
+    if not messages:
+        out.append("  (none)")
+    return "\n".join(out)
