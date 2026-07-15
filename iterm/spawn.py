@@ -74,7 +74,7 @@ async def spawn_worker(name: str, project: str, prompt: str,
 
     await asyncio.sleep(0.5)           # shell warm-up
     await session.async_send_text(
-        f'export PATH="$PATH:{shlex.quote(_relay_bin_dir())}" && '
+        f'export PATH="$PATH":{shlex.quote(_relay_bin_dir())} && '
         f'cd {shlex.quote(workdir)} && {claude_cmd}\n')
     await asyncio.sleep(BOOT_DELAY)    # claude boot
     body = first_prompt(name, project, prompt, role)
