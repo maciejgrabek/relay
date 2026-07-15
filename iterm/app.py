@@ -168,7 +168,8 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "LOC", "UNIT", "✓/⊘", "LAST DIRECTIVE")
+        table.add_columns("MODE", "STATUS", "LOC", "UNIT", "ROLE", "TASK NOW",
+                          "✓/⊘", "LAST DIRECTIVE")
         # Keep the Mac awake while open.
         if not os.environ.get("RELAY_NO_CAFFEINATE"):
             try:
@@ -221,6 +222,8 @@ class RelayApp(App):
 
         def add(info, dim=False):
             label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", "#3aff7a"))
+            if getattr(info, "stale", False):
+                label, color = "▲ STALE", "#ffb000"
             glyph, mlabel, mcolor = MODE_STYLE.get(info.mode, (" ", "MANUAL", DIM))
             arm = f"{glyph} {mlabel}" if glyph.strip() else f"  {mlabel}"
             wt = f"{info.window_idx}.{info.tab_idx}"
@@ -230,6 +233,10 @@ class RelayApp(App):
             raw_cmd = info.last_command[:46] + "…" if len(info.last_command) > 47 else info.last_command
             cmd = escape(raw_cmd) if raw_cmd else ""
             title = escape(info.title[:26])
+            reg = (self.watcher.registry or {}).get(info.session_id)
+            role = {"coordinator": "coord", "worker": "work"}.get(
+                reg["role"], "") if reg else ""
+            task_now = escape((reg["task_now"] or "")[:28]) if reg else ""
             a, e = info.n_approved, info.n_escalated
             if dim:
                 arm = f"[{DIM}]{arm}[/]"
@@ -237,20 +244,25 @@ class RelayApp(App):
                 title = f"[{DIM}]{title}[/]"
                 cmd = f"[{DIM}]{cmd or '-'}[/]"
                 counts = f"[{DIM}]{a}/{e}[/]" if (a or e) else f"[{DIM}]-[/]"
+                role = f"[{DIM}]{role or '-'}[/]"
+                task_now = f"[{DIM}]{task_now or '-'}[/]"
             else:
                 arm = f"[{mcolor}]{arm}[/]"
                 label = f"[{color}]{label}[/]"
                 counts = (f"[#41ffd0]{a}[/][{DIM}]/[/][#ff5555]{e}[/]"
                           if (a or e) else f"[{DIM}]-[/]")
                 cmd = cmd or f"[{DIM}]-[/]"
-            table.add_row(arm, label, wt, title, counts, cmd)
+                role = f"[#41ffd0]{role}[/]" if role else f"[{DIM}]-[/]"
+                task_now = task_now or f"[{DIM}]-[/]"
+            table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
         for info in shown:
             add(info)
         if hidden:
             table.add_row("", f"[#1d5c38]▼▼▼[/]", "",
-                          f"[#1d5c38]── QUARANTINED ({len(hidden)}) ──[/]", "", "")
+                          f"[#1d5c38]── QUARANTINED ({len(hidden)}) ──[/]",
+                          "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
             for info in hidden:
                 add(info, dim=True)

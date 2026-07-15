@@ -18,6 +18,7 @@ class StubWatcher:
         self.log = []
         self.log_total = 0
         self.sent = []
+        self.registry = {}
 
     _CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
 
