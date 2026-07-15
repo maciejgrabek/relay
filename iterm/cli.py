@@ -405,6 +405,35 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def cmd_restore(args) -> int:
+    import config as relay_config
+    import swarm
+    conn = db.connect()
+    sessions = [dict(r) for r in db.list_sessions(conn, args.project)]
+    tasks = [dict(r) for r in db.list_tasks(conn, project=args.project)]
+    names = args.names or None
+    cands = swarm.restore_candidates(sessions, tasks, names=names)
+    spawn_arm = relay_config.load()[0].spawn_arm
+    print(swarm.restore_plan_text(cands, spawn_arm))
+    # only candidates we can actually revive (have a workdir)
+    doable = [c for c in cands if c["workdir"]]
+    if not doable or args.dry_run:
+        return 0
+    if not args.yes and not _confirm(f"restore {len(doable)} session(s)?"):
+        print("aborted.")
+        return 0
+    import asyncio
+    import spawn as spawnmod
+    for c in doable:
+        prompt = swarm.resume_prompt(c["name"], c["project"], c["role"],
+                                     c["spawn_prompt"])
+        asyncio.run(spawnmod.spawn_worker(
+            c["name"], c["project"], prompt, c["workdir"], c["role"],
+            arm=spawn_arm))
+        print(f"restored {c['name']} in {c['workdir']}")
+    return 0
+
+
 # --- parser --------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -486,6 +515,15 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--yes", action="store_true")
     cl.add_argument("--dry-run", dest="dry_run", action="store_true")
     cl.set_defaults(fn=cmd_clean)
+
+    rs = sub.add_parser("restore", help="respawn dead workers in their workdir "
+                                        "to finish their tasks")
+    rs.add_argument("names", nargs="*", help="specific sessions to restore "
+                    "(default: all closed sessions owning work)")
+    rs.add_argument("--project", default=None)
+    rs.add_argument("--yes", action="store_true")
+    rs.add_argument("--dry-run", dest="dry_run", action="store_true")
+    rs.set_defaults(fn=cmd_restore)
 
     return p
 

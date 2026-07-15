@@ -5,7 +5,7 @@
 #                    ARMED sessions, pings you on dangerous ones, delivers
 #                    swarm messages into idle sessions)
 #   relay --dry-run  watch + notify but NEVER inject (safe first run)
-#   relay register|send|status|task|inbox|msgs|spawn|doctor ...
+#   relay register|send|status|task|inbox|msgs|spawn|doctor|clean|restore ...
 #                    swarm CLI verbs (see: relay register -h etc.)
 #   relay doctor     print swarm health from outside the TUI (debugging)
 #   relay update     fetch + fast-forward to the latest relay version
@@ -20,7 +20,7 @@ set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
   -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  register|send|status|task|inbox|msgs|spawn|doctor|version|update|clean)
+  register|send|status|task|inbox|msgs|spawn|doctor|version|update|clean|restore)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 exec python3 "$HERE/../iterm/app.py" "$@"
