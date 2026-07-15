@@ -86,4 +86,33 @@ if [ "$bad" -eq 0 ]; then
 else
   echo "$bad item(s) need attention above."
 fi
+
+# --- Claude Code skills (worker/coordinator protocol) -----------------------
+SKILLS_SRC="$REPO/skills"
+SKILLS_DST="$HOME/.claude/skills"
+echo
+echo "Relay ships Claude Code skills (relay-worker, relay-coordinator)."
+if [ "$CHECK_ONLY" = 1 ]; then
+  echo "To symlink them, run ./install.sh (without --check) and answer yes."
+else
+  read -r -p "Symlink them into $SKILLS_DST? [y/N] " skills_ans
+  case "$skills_ans" in
+    y|Y|yes|YES)
+      mkdir -p "$SKILLS_DST"
+      for s in relay-worker relay-coordinator; do
+        ln -sfn "$SKILLS_SRC/$s" "$SKILLS_DST/$s"
+        echo "  linked $SKILLS_DST/$s"
+      done
+      # the shared reference sits next to the skill dirs, resolved via the
+      # symlink's real path; link it too so ../relay-cli-reference.md
+      # resolves either way
+      ln -sfn "$SKILLS_SRC/relay-cli-reference.md" "$SKILLS_DST/relay-cli-reference.md"
+      echo "  linked $SKILLS_DST/relay-cli-reference.md"
+      ;;
+    *)
+      echo "Skipped."
+      ;;
+  esac
+fi
+
 exit 0

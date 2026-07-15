@@ -1,9 +1,11 @@
 #!/bin/bash
 # Relay uninstaller. Removes the PATH line that install.sh added to your shell
-# rc. It touches nothing else and writes a timestamped backup before editing.
+# rc, and the Claude Code skill symlinks install.sh may have created. Writes a
+# timestamped backup of any shell rc before editing.
 #   ./uninstall.sh
 set -uo pipefail
 MARKER="# relay"
+SKILLS_DST="$HOME/.claude/skills"
 
 removed=0
 for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
@@ -22,4 +24,15 @@ if [ "$removed" = 0 ]; then
 else
   echo "Open a new shell (or re-source your rc) to apply."
 fi
+
+skills_removed=0
+for s in relay-worker relay-coordinator relay-cli-reference.md; do
+  if [ -L "$SKILLS_DST/$s" ]; then
+    rm "$SKILLS_DST/$s"
+    echo "✓ removed $SKILLS_DST/$s"
+    skills_removed=1
+  fi
+done
+[ "$skills_removed" = 0 ] && echo "No Relay skill symlinks found in $SKILLS_DST - nothing to do."
+
 exit 0
