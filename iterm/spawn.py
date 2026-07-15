@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import sys
 
@@ -73,8 +74,8 @@ async def spawn_worker(name: str, project: str, prompt: str,
 
     await asyncio.sleep(0.5)           # shell warm-up
     await session.async_send_text(
-        f'export PATH="$PATH:{_relay_bin_dir()}" && '
-        f'cd "{workdir}" && {claude_cmd}\n')
+        f'export PATH="$PATH:{shlex.quote(_relay_bin_dir())}" && '
+        f'cd {shlex.quote(workdir)} && {claude_cmd}\n')
     await asyncio.sleep(BOOT_DELAY)    # claude boot
     body = first_prompt(name, project, prompt, role)
     await session.async_send_text(body)
