@@ -20,9 +20,13 @@ import watcher as W  # noqa: E402
 class FakeSession:
     def __init__(self):
         self.sent = []
+        self.names = []
 
     async def async_send_text(self, t):
         self.sent.append(t)
+
+    async def async_set_name(self, n):
+        self.names.append(n)
 
 
 def _danger():
@@ -277,7 +281,101 @@ async def deliver_tests():
     return ok
 
 
+async def title_tests():
+    """Drive Watcher._apply_title/_restore_titles against fake sessions."""
+    from watcher import Watcher, SessionInfo
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    W.notify_mac = lambda *a, **k: None
+    cfg = C.Config(title_style="hybrid")
+
+    def _mk(w, sid, bare, mode="off", state="idle"):
+        fs = FakeSession()
+        info = SessionInfo(sid, title=bare, _iterm_session=fs,
+                           mode=mode, state=state)
+        info._raw_title = bare
+        w.sessions[sid] = info
+        return info, fs
+
+    # Armed session gets a prefix written once; unchanged next tick.
+    w = Watcher(connection=None, dry_run=False, cfg=cfg)
+    info, fs = _mk(w, "s1", "api", mode="safe", state="working")
+    await w._apply_title(info)
+    chk("write: armed session prefixed once", fs.names == ["◉ api"])
+    info._raw_title = "◉ api"            # what iTerm now shows
+    await w._apply_title(info)
+    chk("write: no rewrite when unchanged", fs.names == ["◉ api"])
+    chk("write: session tracked as titled", "s1" in w._titled)
+
+    # State change rewrites; disarm+calm restores the bare name once.
+    info.state = "blocked"
+    await w._apply_title(info)
+    chk("write: state change rewrites", fs.names[-1] == "◉[BLOCKED] api")
+    info._raw_title = fs.names[-1]
+    info.mode, info.state = "off", "idle"
+    await w._apply_title(info)
+    chk("restore: disarmed+calm restored bare", fs.names[-1] == "api")
+    chk("restore: untracked after restore", "s1" not in w._titled)
+    info._raw_title = "api"
+    await w._apply_title(info)
+    chk("restore: only once", fs.names[-1] == "api" and len(fs.names) == 3)
+
+    # Manual+idle session never touched.
+    info2, fs2 = _mk(w, "s2", "notes")
+    await w._apply_title(info2)
+    chk("manual+idle: never written", fs2.names == [])
+
+    # style=off: fully inert even for armed sessions.
+    w_off = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    info3, fs3 = _mk(w_off, "s3", "api", mode="insane", state="blocked")
+    await w_off._apply_title(info3)
+    chk("style off: inert", fs3.names == [])
+
+    # dry-run: no title writes.
+    w_dry = Watcher(connection=None, dry_run=True, cfg=cfg)
+    info4, fs4 = _mk(w_dry, "s4", "api", mode="safe", state="blocked")
+    await w_dry._apply_title(info4)
+    chk("dry-run: no writes", fs4.names == [])
+
+    # restore-on-quit restores every titled session.
+    w2 = Watcher(connection=None, dry_run=False, cfg=cfg)
+    infoa, fsa = _mk(w2, "sa", "alpha", mode="safe", state="working")
+    infob, fsb = _mk(w2, "sb", "beta", mode="wild", state="blocked")
+    await w2._apply_title(infoa)
+    await w2._apply_title(infob)
+    await w2._restore_titles()
+    chk("quit: all titled sessions restored",
+        fsa.names[-1] == "alpha" and fsb.names[-1] == "beta"
+        and not w2._titled)
+
+    # a failing async_set_name is logged once and never raises.
+    class BoomSession(FakeSession):
+        async def async_set_name(self, n):
+            raise RuntimeError("boom")
+    w3 = Watcher(connection=None, dry_run=False, cfg=cfg)
+    fsx = BoomSession()
+    infox = SessionInfo("sx", title="x", _iterm_session=fsx,
+                        mode="safe", state="working")
+    infox._raw_title = "x"
+    w3.sessions["sx"] = infox
+    await w3._apply_title(infox)
+    await w3._apply_title(infox)
+    chk("write error: logged once, never raises",
+        sum("title write failed" in l for l in w3.log) == 1)
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
-    sys.exit(0 if (r1 and r2) else 1)
+    r3 = asyncio.run(title_tests())
+    sys.exit(0 if (r1 and r2 and r3) else 1)

@@ -179,6 +179,7 @@ class Watcher:
                         # Staleness must be evaluated even on a failed screen
                         # read - a hung session is exactly the stale case.
                         self._check_stale(info)
+                        await self._apply_title(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -189,6 +190,7 @@ class Watcher:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            await self._restore_titles()
             await self._close_connection()
 
     async def stop(self) -> None:
@@ -543,6 +545,55 @@ class Watcher:
                 notify_mac(f"Relay - {name} STALE",
                            "session gone or unreachable, messages queued",
                            self.alert_sound)
+
+    # --- tab-title prefixes -------------------------------------------------
+
+    async def _apply_title(self, info: SessionInfo) -> None:
+        """Keep the session's on-screen title in sync with mode + attention
+        state. Writes only when the desired title differs from what's on
+        screen; restores the bare name once when a previously-prefixed
+        session goes manual+calm. Fully inert when style is off or dry-run
+        (dry-run mutates nothing, titles included). Best-effort: an iTerm2
+        error is logged once per session and never breaks the poll loop."""
+        if self.cfg.title_style == "off" or self.dry_run:
+            return
+        s = info._iterm_session
+        if s is None:
+            return
+        desired = titles.render(self.cfg.title_style, info.mode, info.state,
+                                info.stale, info.title)
+        if desired == info.title and info.session_id not in self._titled:
+            return                       # nothing to add, nothing to restore
+        if desired == info._raw_title:
+            # Screen already correct; just keep bookkeeping accurate.
+            if desired == info.title:
+                self._titled.discard(info.session_id)
+            else:
+                self._titled.add(info.session_id)
+            return
+        try:
+            await s.async_set_name(desired)
+            info._raw_title = desired
+            if desired == info.title:
+                self._titled.discard(info.session_id)   # bare name restored
+            else:
+                self._titled.add(info.session_id)
+        except Exception as e:
+            if info.session_id not in self._title_err_noted:
+                self._title_err_noted.add(info.session_id)
+                self._note(f"title write failed {info.title}: {e}")
+
+    async def _restore_titles(self) -> None:
+        """On quit: write the bare name back to every session we prefixed.
+        Best-effort - sessions may already be gone."""
+        for sid in list(self._titled):
+            info = self.sessions.get(sid)
+            if info is not None and info._iterm_session is not None:
+                try:
+                    await info._iterm_session.async_set_name(info.title)
+                except Exception:
+                    pass
+            self._titled.discard(sid)
 
     async def focus_session(self, sid: str) -> bool:
         """Bring the real iTerm2 tab for this session to the foreground."""
