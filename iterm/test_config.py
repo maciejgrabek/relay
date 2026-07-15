@@ -99,6 +99,17 @@ def run():
         os.environ.pop("RELAY_STALE_MINUTES", None)
         os.environ.pop("RELAY_NOTIFY_COOLDOWN", None)
 
+    # spawn_arm: read, validated, defaults off.
+    p = _write("[swarm]\nspawn_arm = wild\n")
+    cfg, warns = config.load(p)
+    ok &= check("spawn_arm read", cfg.spawn_arm == "wild" and warns == [])
+    p = _write("[swarm]\nspawn_arm = ludicrous\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad spawn_arm -> off + warning", cfg.spawn_arm == "off"
+                and any("ludicrous" in w for w in warns))
+    cfg, _ = config.load("/nonexistent/relay-config")
+    ok &= check("spawn_arm default off", cfg.spawn_arm == "off")
+
     # RELAY_CONFIG env selects the path when load() gets None.
     p = _write("[titles]\nstyle = words\n")
     os.environ["RELAY_CONFIG"] = p

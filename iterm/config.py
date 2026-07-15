@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 TITLE_STYLES = ("off", "glyphs", "words", "hybrid")
+SPAWN_ARM_MODES = ("off", "safe", "wild", "insane")
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class Config:
     done_sound: str = "/System/Library/Sounds/Glass.aiff"
     stale_minutes: float = 10.0
     notify_cooldown: float = 30.0
+    spawn_arm: str = "off"
 
 
 def default_path() -> str:
@@ -80,6 +82,12 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(TITLE_STYLES)} - using 'off'")
         style = "off"
 
+    arm = cp.get("swarm", "spawn_arm", fallback=d.spawn_arm).strip().lower()
+    if arm not in SPAWN_ARM_MODES:
+        warns.append(f"config: [swarm] spawn_arm = {arm!r} is not one of "
+                     f"{'/'.join(SPAWN_ARM_MODES)} - using 'off'")
+        arm = "off"
+
     stale = _get_float(cp, "swarm", "stale_minutes", d.stale_minutes, warns)
     cooldown = _get_float(cp, "swarm", "notify_cooldown", d.notify_cooldown,
                           warns)
@@ -106,4 +114,5 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         done_sound=cp.get("sounds", "done", fallback=d.done_sound).strip(),
         stale_minutes=stale,
         notify_cooldown=cooldown,
+        spawn_arm=arm,
     ), warns
