@@ -402,7 +402,9 @@ known workdir; the TUI shows the same count as a red hint in the subtitle
 (`N task-owner(s) dead - press R to restore, or run 'relay clean'`) whenever
 one exists.
 
-Two opposite ways to deal with an orphan:
+Three ways to deal with an orphan - pick by disposition: `restore` =
+continue the work, `clean` = reset it back to unowned todo, `wipe` = DELETE
+it and there is no undo.
 
 ```
 relay restore [names...] [--project <p>] [--dry-run] [--yes]
@@ -432,13 +434,41 @@ relay clean [--project <p>] [--dry-run] [--yes]
     context that restore needs, so if you're not sure which one you
     want, run `relay restore` first - `relay clean` is for orphans you've
     decided are not worth reviving.
+
+relay wipe [names...] [--project <p>] [--all] [--dry-run] [--yes]
+    The delete-counterpart to clean: instead of resetting a closed
+    session's non-done tasks to todo, it DELETES those tasks outright
+    (any state, including done), then deletes the session row and its
+    undelivered messages. Same targeting as restore/clean - no names =
+    every closed session that owns work, named = those specific closed
+    sessions. Live sessions are never touched by the orphaned form.
+
+    `--all` requires `--project <p>` and nukes that whole project in one
+    shot: every task, session (live or closed), and message it has, no
+    owner filter at all. It's the "start this project over from nothing"
+    button. `--all` without `--project` is refused outright, so you can't
+    wipe every project on the machine by accident.
+
+    Like restore and clean, it always prints a WIPE PLAN first (task and
+    session counts, or the project totals for --all), then asks to
+    confirm unless --yes; --dry-run prints the plan and stops there.
+    Before deleting, it also checks whether any task being wiped is a
+    blocker for a task that ISN'T being wiped, and prints a WARNING per
+    case - that dependent may never unblock once its blocker is gone, so
+    you'll want to clear its `blocked_by` by hand afterward.
+
+    There is no undo. If you're not sure whether an orphan's work is
+    worth keeping, use `relay clean` instead - it leaves the task rows in
+    place as todo so you can still see and reassign them.
 ```
 
 In the TUI, press `R` to restore every closed orphan in one shot: the first
 press arms a 3-second confirm window (a log line says so), a second `R`
 inside that window shells out to `relay restore --yes` in the background.
-`relay clean` has no TUI binding; run it from a terminal when you've
-decided the work is not worth reviving.
+Press `W` the same way to wipe every closed orphan's work (orphaned scope
+only - there's no TUI binding for `--project --all`, that's deliberately a
+terminal-only, type-it-out command). `relay clean` has no TUI binding;
+run it from a terminal when you've decided the work is not worth reviving.
 
 ### Skills
 

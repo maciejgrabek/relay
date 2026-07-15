@@ -1,7 +1,7 @@
 # Swarm Wipe - Design Spec
 
 **Date:** 2026-07-16
-**Status:** Approved for planning
+**Status:** Implemented (see docs/plans/2026-07-16-swarm-wipe.md)
 
 ## Problem
 
