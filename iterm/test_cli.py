@@ -121,6 +121,16 @@ def run():
                            "review BFF work", iterm_id="w0t0p0:CO-ID")
     dep_id = int(out.split("#")[1].split()[0])
 
+    # nonexistent blocker / parent are rejected at creation (never silently wait)
+    code, _, err = run_cli("task", "add", "--blocked-by", "9999",
+                           "review", iterm_id="w0t0p0:CO-ID")
+    ok &= check("blocked-by nonexistent id -> exit 1",
+                code == 1 and "#9999" in err)
+    code, _, err = run_cli("task", "add", "--parent", "9999", "sub",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("parent nonexistent id -> exit 1",
+                code == 1 and "#9999" in err)
+
     # task update to done -> unblock wake-up for the dependent's owner
     code, out, _ = run_cli("task", "update", str(sub_id), "--state", "done",
                            iterm_id="w0t1p0:BFF-ID")

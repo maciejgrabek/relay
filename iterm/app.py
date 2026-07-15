@@ -574,7 +574,46 @@ class RelayApp(App):
         self.exit()
 
 
+def acquire_singleton_lock(path=None):
+    """Take an exclusive advisory lock so only ONE relay TUI runs at a time.
+    Two panels would each poll and deliver every queued swarm message, typing
+    every wake-up into its target twice. Returns a held handle on success
+    (keep it alive for the process lifetime), or None if another relay already
+    holds the lock. Best-effort: if fcntl is unavailable, returns a truthy
+    sentinel (cannot enforce, but must not block startup)."""
+    p = path or os.path.expanduser(
+        os.environ.get("RELAY_LOCK", "~/.relay/relay.lock"))
+    try:
+        import fcntl
+    except Exception:  # pragma: no cover - non-POSIX
+        return "no-fcntl"
+    try:
+        d = os.path.dirname(p)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        fh = open(p, "w")
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+    except Exception:
+        return "lock-error"   # can't lock for some other reason: don't block
+    try:
+        fh.write(str(os.getpid()))
+        fh.flush()
+    except Exception:
+        pass
+    return fh
+
+
 def main() -> None:
+    lock = acquire_singleton_lock()
+    if lock is None:
+        sys.stderr.write(
+            "relay: another relay panel is already running.\n"
+            "Two panels would double-deliver swarm messages (every wake-up "
+            "typed twice).\nQuit the other one first (q), or set RELAY_LOCK to "
+            "a different path if you\nreally mean to run two.\n")
+        sys.exit(3)
     args = sys.argv[1:]
     dry = any(a in ("--dry-run", "--dryrun", "-n") for a in args)
     # Reject unknown flags - a typo'd '--dry-run' must NOT silently run LIVE
