@@ -15,7 +15,7 @@
 - `config.py` and `titles.py` import neither `iterm2` nor `sqlite3`.
 - Config precedence exactly: defaults < config file < environment variable. Env keys mirrored: `RELAY_STALE_MINUTES`, `RELAY_NOTIFY_COOLDOWN`. `title_style` and sounds have NO env mirror.
 - `title_style` values exactly: `off | glyphs | words | hybrid`, default `off`. Invalid value -> warning + `off`.
-- Title vocabulary (fixed): mode glyphs `◉` safe / `▲` wild / `✦` insane; state glyphs `‼` prompting / `⊘` blocked / `?` stale; words SAFE/WILD/INSANE and AWAITING/BLOCKED/STALE. State priority: blocked > prompting > stale (one state indicator max).
+- Title vocabulary (fixed): mode glyphs `◉` safe / `▲` wild / `✦` insane; state glyphs `‼` prompting / `⊘` blocked / `⧗` stale; words SAFE/WILD/INSANE and AWAITING/BLOCKED/STALE. State priority: blocked > prompting > stale (one state indicator max).
 - Titles are never written in `--dry-run`.
 - Commit after every task; short imperative subjects; no Co-Authored-By trailer.
 
@@ -339,7 +339,7 @@ def run():
     ok &= check("words: safe prompting", render("words", "safe", "prompting", False, N) == f"[SAFE][AWAITING] {N}")
     ok &= check("hybrid: safe prompting", render("hybrid", "safe", "prompting", False, N) == f"◉[AWAITING] {N}")
 
-    ok &= check("glyphs: safe stale", render("glyphs", "safe", "idle", True, N) == f"◉? {N}")
+    ok &= check("glyphs: safe stale", render("glyphs", "safe", "idle", True, N) == f"◉⧗ {N}")
     ok &= check("words: safe stale", render("words", "safe", "idle", True, N) == f"[SAFE][STALE] {N}")
     ok &= check("hybrid: safe stale", render("hybrid", "safe", "idle", True, N) == f"◉[STALE] {N}")
 
@@ -370,6 +370,9 @@ def run():
     ok &= check("empty title", strip_prefix("") == "")
     ok &= check("prefix-like glyph inside name kept",
                 strip_prefix("api ◉ server") == "api ◉ server")
+    ok &= check("user '? help' title preserved", strip_prefix("? help") == "? help")
+    ok &= check("stale glyph round-trip",
+                strip_prefix(render("glyphs", "off", "idle", True, "api")) == "api")
 
     # --- round-trip property over the full input space ------------------------
     rt = True
@@ -420,14 +423,16 @@ import re
 MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦"}
 MODE_WORD = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE"}
 # Attention priority: blocked > prompting > stale. One state indicator max.
-STATE_GLYPH = {"blocked": "⊘", "prompting": "‼", "stale": "?"}
+# stale uses "⧗" - a glyph nobody types in a real tab title, so strip_prefix
+# can never eat a user's name.
+STATE_GLYPH = {"blocked": "⊘", "prompting": "‼", "stale": "⧗"}
 STATE_WORD = {"blocked": "BLOCKED", "prompting": "AWAITING", "stale": "STALE"}
 
 # Strip exactly one leading relay prefix: an optional mode glyph, an optional
 # state glyph, then up to two known bracket words, then the separating space.
 # Unknown bracket words ([WIP]) don't match, so user titles survive.
 _PREFIX_RE = re.compile(
-    r"^[◉▲✦]?[‼⊘?]?"
+    r"^[◉▲✦]?[‼⊘⧗]?"
     r"(?:\[(?:SAFE|WILD|INSANE|AWAITING|BLOCKED|STALE)\]){0,2}"
     r" ")
 

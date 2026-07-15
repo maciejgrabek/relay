@@ -69,13 +69,14 @@ render as the bare name (no prefix at all).
 | safe, working      | `◉ api`  | `[SAFE] api`             | `◉ api`           |
 | insane, blocked    | `✦⊘ api` | `[INSANE][BLOCKED] api`  | `✦[BLOCKED] api`  |
 | safe, prompting    | `◉‼ api` | `[SAFE][AWAITING] api`   | `◉[AWAITING] api` |
-| armed, stale       | `◉? api` | `[SAFE][STALE] api`      | `◉[STALE] api`    |
+| armed, stale       | `◉⧗ api` | `[SAFE][STALE] api`      | `◉[STALE] api`    |
 | manual, blocked    | `⊘ api`  | `[BLOCKED] api`          | `[BLOCKED] api`   |
 | manual, idle       | `api`    | `api`                    | `api`             |
 
 Vocabulary (fixed): mode glyphs `◉` safe, `▲` wild, `✦` insane (same as the
-TUI's MODE_STYLE); state glyphs `‼` prompting, `⊘` blocked, `?` stale (`?`
-because `▲` already means wild). Words: SAFE/WILD/INSANE and
+TUI's MODE_STYLE); state glyphs `‼` prompting, `⊘` blocked, `⧗` stale (`⧗`
+chosen because it cannot collide with user-typed titles; `?` was rejected
+for exactly that collision). Words: SAFE/WILD/INSANE and
 AWAITING/BLOCKED/STALE. When both mode and state render as words they
 concatenate without a space (`[INSANE][BLOCKED]`); a glyph cluster is
 followed by one space before the name.
