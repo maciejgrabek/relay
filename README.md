@@ -391,6 +391,55 @@ states name, project, and task; the actual protocol lives in the skill, not
 in the spawned prompt. Boot delay before the tab is considered ready is
 `RELAY_SPAWN_BOOT_DELAY` seconds.
 
+### Recovering abandoned work
+
+A registered session is **closed** (dead) once its iTerm2 tab is gone for
+several consecutive watcher ticks in a row - the debounce stops a transient
+empty roster from false-marking a live swarm. A closed session that still
+owns non-`done` tasks is an **orphan**: work assigned to nobody who can do
+it. `relay doctor` prints an `orphans:` line listing each one and its last
+known workdir; the TUI shows the same count as a red hint in the subtitle
+(`N task-owner(s) dead - press R to restore, or run 'relay clean'`) whenever
+one exists.
+
+Two opposite ways to deal with an orphan:
+
+```
+relay restore [names...] [--project <p>] [--dry-run] [--yes]
+    Respawn dead workers in the workdir they were spawned in (recorded by
+    `relay spawn --dir`), with a resume prompt pointing back at
+    `relay task list --mine` and `relay inbox`. Always prints a PLAN first;
+    without --yes it asks to confirm before spawning anything, and
+    --dry-run stops after the plan.
+
+    No names = every CLOSED session that owns non-done work. Named =
+    those specific sessions even if their tab is still open (STALLED but
+    not closed) - useful when a worker is wedged, not gone. Restoring a
+    session whose tab is still open leaves the old tab running as a
+    zombie; kill it yourself once the new one is up.
+
+    A candidate with no recorded workdir (registered before this
+    feature, or never spawned via `relay spawn --dir`) is SKIPPED, not
+    guessed at - the plan tells you to `relay clean` it or re-run relay
+    from the right directory. If `[swarm] spawn_arm` is `off`, the plan
+    also warns that restored workers come back unarmed and won't act
+    unattended until you arm them.
+
+relay clean [--project <p>] [--dry-run] [--yes]
+    The OPPOSITE of restore: resets every non-done task owned by a closed
+    session back to unowned todo, then deletes the closed session row
+    (and its undelivered messages). It destroys exactly the workdir
+    context that restore needs, so if you're not sure which one you
+    want, run `relay restore` first - `relay clean` is for orphans you've
+    decided are not worth reviving.
+```
+
+In the TUI, press `R` to restore every closed orphan in one shot: the first
+press arms a 3-second confirm window (a log line says so), a second `R`
+inside that window shells out to `relay restore --yes` in the background.
+`relay clean` has no TUI binding; run it from a terminal when you've
+decided the work is not worth reviving.
+
 ### Skills
 
 `skills/relay-worker` and `skills/relay-coordinator` are the protocol layer:
@@ -443,6 +492,7 @@ Environment variables (set before launching `relay`):
 | `RELAY_LOCK`                 | `~/.relay/relay.lock`      | Single-instance lock (one panel at a time) |
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
 | `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
+| `RELAY_MSG_RETENTION_DAYS`   | `7`                        | Days a delivered message is kept before pruning |
 
 > **Keep `~/.relay/` on a local disk, not a synced folder** (iCloud Drive,
 > Dropbox, a network mount). Relay's SQLite DB uses WAL mode; a background
