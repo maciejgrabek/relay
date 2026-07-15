@@ -389,8 +389,56 @@ async def title_tests():
     return ok
 
 
+def arm_request_tests():
+    """_swarm_refresh_registry applies + clears spawn arm requests."""
+    from watcher import Watcher, SessionInfo
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    cleared = []
+    W.swarmdb.current_task_for = lambda conn, name: None
+    W.swarmdb.clear_arm_request = lambda conn, name: cleared.append(name)
+
+    # Session exists -> request applied and cleared.
+    w = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    w._db = object()
+    info = SessionInfo("sidA", title="w1", _iterm_session=FakeSession())
+    w.sessions["sidA"] = info
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w1", "iterm_session_id": "sidA", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "wild"}]
+    w._swarm_refresh_registry()
+    chk("arm request applied", info.mode == "wild")
+    chk("arm request cleared", cleared == ["w1"])
+
+    # Session not seen yet -> request kept for a later tick.
+    cleared.clear()
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w2", "iterm_session_id": "sidB", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "insane"}]
+    w._swarm_refresh_registry()
+    chk("no session yet -> request kept", cleared == [])
+
+    # Old-schema row without the key -> no crash, nothing applied.
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w3", "iterm_session_id": "sidA", "role": "worker",
+         "project": "demo", "status_text": ""}]
+    w._swarm_refresh_registry()
+    chk("row without arm_request tolerated", info.mode == "wild")
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
     r3 = asyncio.run(title_tests())
-    sys.exit(0 if (r1 and r2 and r3) else 1)
+    r4 = arm_request_tests()
+    sys.exit(0 if (r1 and r2 and r3 and r4) else 1)

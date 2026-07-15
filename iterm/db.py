@@ -17,6 +17,9 @@ from typing import List, Optional
 
 ROLES = ("worker", "coordinator")
 TASK_STATES = ("todo", "doing", "blocked", "done")
+# Arm levels a spawner may request for a new worker (applied by the watcher
+# when it first sees the session; "off" is expressed by no request at all).
+ARM_REQUEST_MODES = ("safe", "wild", "insane")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
@@ -26,7 +29,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   project TEXT NOT NULL DEFAULT '',
   status_text TEXT NOT NULL DEFAULT '',
   registered_at REAL NOT NULL,
-  last_seen REAL NOT NULL
+  last_seen REAL NOT NULL,
+  arm_request TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,10 +71,18 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(_SCHEMA)
-    # Stamp the schema version on a fresh DB (0 = never stamped) so future
-    # migrations have a baseline to branch on.
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-        conn.execute("PRAGMA user_version = 1")
+    # Schema versioning: 0 = fresh (CREATEs above built the current schema),
+    # otherwise migrate step by step. Version 2 added sessions.arm_request.
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    if v == 0:
+        conn.execute("PRAGMA user_version = 2")
+    elif v == 1:
+        try:
+            conn.execute("ALTER TABLE sessions "
+                         "ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already there (interrupted earlier migration)
+        conn.execute("PRAGMA user_version = 2")
     return conn
 
 
@@ -121,6 +133,24 @@ def set_status(conn, name: str, status_text: str,
         (status_text, _now(now), name))
     conn.commit()
     return cur.rowcount > 0
+
+
+def set_arm_request(conn, name: str, mode: str) -> bool:
+    """Ask the watcher to arm this session at `mode` when it next sees it.
+    Used by spawn so a new worker starts pre-armed. Local-trust caveat: any
+    process that can write this DB can request arming - same boundary as
+    queue_message, documented in the README's security posture."""
+    if mode not in ARM_REQUEST_MODES:
+        raise ValueError(f"mode must be one of {ARM_REQUEST_MODES}, got {mode!r}")
+    cur = conn.execute("UPDATE sessions SET arm_request=? WHERE name=?",
+                       (mode, name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def clear_arm_request(conn, name: str) -> None:
+    conn.execute("UPDATE sessions SET arm_request='' WHERE name=?", (name,))
+    conn.commit()
 
 
 def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:

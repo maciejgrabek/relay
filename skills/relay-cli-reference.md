@@ -35,5 +35,5 @@ inside your session. Errors print to stderr with a non-zero exit.
         Epics with nested subtasks, states, owners, blockers.
 
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
-                [--role worker|coordinator]
+                [--role worker|coordinator] [--arm off|safe|wild|insane]
         Open a new iTerm2 tab running claude, pre-registered under <name>.

@@ -221,13 +221,18 @@ def cmd_task_list(args) -> int:
 
 def cmd_spawn(args) -> int:
     import asyncio
+    import config as relay_config
     import spawn as spawnmod
     workdir = os.path.abspath(args.dir or os.getcwd())
     if not os.path.isdir(workdir):
         return _err(f"workdir not found: {workdir}")
+    # --arm beats config [swarm] spawn_arm beats "off".
+    arm = args.arm if args.arm is not None else relay_config.load()[0].spawn_arm
     sid = asyncio.run(spawnmod.spawn_worker(
-        args.name, args.project or "", args.prompt, workdir, args.role))
-    print(f"spawned '{args.name}' ({args.role}) in {workdir} "
+        args.name, args.project or "", args.prompt, workdir, args.role,
+        arm=arm))
+    armed = f", arm={arm}" if arm != "off" else ""
+    print(f"spawned '{args.name}' ({args.role}{armed}) in {workdir} "
           f"[session {sid[:8]}]")
     return 0
 
@@ -290,6 +295,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", default=None)
     sp.add_argument("--dir", default=None)
     sp.add_argument("--role", default="worker", choices=db.ROLES)
+    sp.add_argument("--arm", default=None,
+                    choices=("off",) + db.ARM_REQUEST_MODES,
+                    help="arm level the watcher applies to the new worker "
+                         "(default: config [swarm] spawn_arm)")
     sp.set_defaults(fn=cmd_spawn)
 
     return p

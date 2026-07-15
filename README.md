@@ -392,6 +392,7 @@ done  = /System/Library/Sounds/Glass.aiff
 [swarm]
 stale_minutes   = 10
 notify_cooldown = 30
+spawn_arm       = off  ; arm level for spawned workers: off | safe | wild | insane
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,

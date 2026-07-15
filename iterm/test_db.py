@@ -29,8 +29,28 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("connect stamps user_version = 1",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 1)
+    ok &= check("fresh connect stamps user_version = 2",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 2)
+
+    # v1 -> v2 migration: old sessions table gains arm_request.
+    import sqlite3 as _sq
+    mpath = _tmpdb()
+    mconn = _sq.connect(mpath)
+    mconn.execute("""CREATE TABLE sessions(
+        name TEXT PRIMARY KEY, iterm_session_id TEXT NOT NULL,
+        role TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+        status_text TEXT NOT NULL DEFAULT '',
+        registered_at REAL NOT NULL, last_seen REAL NOT NULL)""")
+    mconn.execute("PRAGMA user_version = 1")
+    mconn.commit()
+    mconn.close()
+    mig = db.connect(mpath)
+    db.register(mig, "migrated", "M-1", "worker", "p")
+    ok &= check("v1 db migrates to v2 with arm_request column",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 2
+                and mig.execute("SELECT arm_request FROM sessions "
+                                "WHERE name='migrated'").fetchone()[0] == "")
+    mig.close()
 
     # --- sessions -----------------------------------------------------------
     db.register(conn, "bff-worker", "UUID-1", "worker", "webshop", now=100.0)
@@ -60,6 +80,21 @@ def run():
     ok &= check("re-register with explicit project updates it",
                 db.get_session(conn, "bff-worker")["project"] == "otherproj")
     db.register(conn, "bff-worker", "UUID-2", "worker", "webshop", now=320.0)
+
+    # --- arm requests (spawn pre-arming) --------------------------------------
+    ok &= check("set_arm_request on registered -> True",
+                db.set_arm_request(conn, "bff-worker", "wild")
+                and db.get_session(conn, "bff-worker")["arm_request"] == "wild")
+    db.clear_arm_request(conn, "bff-worker")
+    ok &= check("clear_arm_request",
+                db.get_session(conn, "bff-worker")["arm_request"] == "")
+    ok &= check("set_arm_request unknown name -> False",
+                not db.set_arm_request(conn, "ghost", "wild"))
+    try:
+        db.set_arm_request(conn, "bff-worker", "ludicrous")
+        ok &= check("bad arm mode raises", False)
+    except ValueError:
+        ok &= check("bad arm mode raises", True)
 
     # bad role rejected
     try:

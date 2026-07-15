@@ -411,6 +411,14 @@ class Watcher:
                     d["task_now"] = f"#{cur['id']} ⊘" + (f" by {bb}" if bb else "")
                 else:
                     d["task_now"] = f"#{cur['id']} {cur['state']} {cur['title']}"
+                # Spawn pre-arming: a pending arm request is applied the
+                # first tick the session actually exists, then cleared. The
+                # arm state itself lives in this process (SessionInfo.mode).
+                req = d.get("arm_request") or ""
+                if req and d["iterm_session_id"] in self.sessions:
+                    self.set_mode(d["iterm_session_id"], req)
+                    swarmdb.clear_arm_request(conn, d["name"])
+                    self._note(f"ARMED {d['name']} -> {req} (spawn request)")
                 reg[d["iterm_session_id"]] = d
             self.registry = reg
         except Exception as e:

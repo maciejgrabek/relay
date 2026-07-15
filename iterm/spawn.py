@@ -39,7 +39,8 @@ def first_prompt(name: str, project: str, prompt: str,
 
 
 async def spawn_worker(name: str, project: str, prompt: str,
-                       workdir: str, role: str = "worker") -> str:
+                       workdir: str, role: str = "worker",
+                       arm: str = "off") -> str:
     import iterm2
 
     claude_cmd = shutil.which("claude") or "claude"
@@ -62,7 +63,12 @@ async def spawn_worker(name: str, project: str, prompt: str,
 
     # Register FIRST - addressable before claude even boots; queued messages
     # simply wait until the session is idle at Claude's input box.
-    db.register(db.connect(), name, sid, role, project)
+    conn = db.connect()
+    db.register(conn, name, sid, role, project)
+    if arm != "off":
+        # The watcher arms the session when it first sees it (the arm state
+        # lives in the running TUI, not in this process).
+        db.set_arm_request(conn, name, arm)
 
     await asyncio.sleep(0.5)           # shell warm-up
     await session.async_send_text(
