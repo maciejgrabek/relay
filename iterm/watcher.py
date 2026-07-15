@@ -130,7 +130,8 @@ class Watcher:
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
         self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
-        self._arm_seen: set = set()        # sids observed registered at least once
+        self._arm_seen: dict = {}          # sid -> time first seen registered
+        self.arm_grace = 20.0              # spawn pre-arm window (s), > boot delay
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
@@ -413,28 +414,36 @@ class Watcher:
                 else:
                     d["task_now"] = f"#{cur['id']} {cur['state']} {cur['title']}"
                 # Spawn pre-arming: a pending arm request is honored ONLY
-                # at first sight of the session (spawn sets it before claude
-                # boots). A request that appears LATER for a session we have
-                # already observed is a self-escalation attempt - any Bash-
-                # capable session can UPDATE this DB - so it is refused,
-                # cleared, and escalated to the human. The arm state itself
-                # lives in this process (SessionInfo.mode).
+                # within a short grace window after the watcher first sees the
+                # session (the spawn boot window). spawn.py creates the tab
+                # before it writes the request, so a tick can land in between
+                # and record the sid "seen, no request"; a strict first-tick
+                # rule would then wrongly reject the legitimate pre-arm. The
+                # window absorbs that race while still refusing a request that
+                # surfaces on a long-running session - a self-escalation
+                # attempt (any Bash-capable session can UPDATE this DB). A
+                # refusal, AND every honored arming, is escalated to the human
+                # with sound: an arm the operator did not perform by hand must
+                # always be audible. The arm state itself lives in this process
+                # (SessionInfo.mode).
                 req = d.get("arm_request") or ""
                 sid = d["iterm_session_id"]
+                if sid in self.sessions and sid not in self._arm_seen:
+                    self._arm_seen[sid] = time.time()
                 if req and sid in self.sessions:
-                    if sid not in self._arm_seen:
+                    within = time.time() - self._arm_seen.get(sid, 0) <= self.arm_grace
+                    swarmdb.clear_arm_request(conn, d["name"])
+                    if within:
                         self.set_mode(sid, req)
-                        swarmdb.clear_arm_request(conn, d["name"])
                         self._note(f"ARMED {d['name']} -> {req} (spawn request)")
+                        notify_mac(f"Relay - {d['name']}",
+                                   f"armed {req} on spawn", self.alert_sound)
                     else:
-                        swarmdb.clear_arm_request(conn, d["name"])
                         self._note(f"REFUSED arm escalation {d['name']} -> {req}")
                         notify_mac(f"Relay - {d['name']}",
                                    f"refused arm escalation to {req} "
-                                   f"(request appeared after first sight)",
+                                   f"(request outside spawn window)",
                                    self.alert_sound)
-                if sid in self.sessions:
-                    self._arm_seen.add(sid)
                 reg[d["iterm_session_id"]] = d
             self.registry = reg
         except Exception as e:
