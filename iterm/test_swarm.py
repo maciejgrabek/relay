@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from swarm import (  # noqa: E402
     parse_blockers, unblocked_by_completion, wakeup_assignment_body,
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
-    render_swarm,
+    render_swarm, restore_candidates, clean_candidates, restore_plan_text,
+    clean_plan_text, resume_prompt,
 )
 
 
@@ -18,7 +19,7 @@ def check(msg, cond):
     return bool(cond)
 
 
-def T(id, state="todo", blocked_by="", owner="w", title="t", spec_path=None):
+def _task_row(id, state="todo", blocked_by="", owner="w", title="t", spec_path=None):
     return {"id": id, "state": state, "blocked_by": blocked_by,
             "owner": owner, "title": title, "spec_path": spec_path,
             "project": "p", "parent_id": None}
@@ -64,10 +65,10 @@ def run():
     ok &= check("parse many + junk-tolerant", parse_blockers("3, 4,") == [3, 4])
 
     # unblocked_by_completion: fires only when ALL blockers done
-    tasks = [T(1, state="done"), T(2, state="done"),
-             T(3, state="blocked", blocked_by="1,2", owner="fe"),
-             T(4, state="blocked", blocked_by="1,9", owner="be"),
-             T(5, state="done", blocked_by="1")]
+    tasks = [_task_row(1, state="done"), _task_row(2, state="done"),
+             _task_row(3, state="blocked", blocked_by="1,2", owner="fe"),
+             _task_row(4, state="blocked", blocked_by="1,9", owner="be"),
+             _task_row(5, state="done", blocked_by="1")]
     got = unblocked_by_completion(tasks, 1)
     ok &= check("all-blockers-done fires", [t["id"] for t in got] == [3])
     ok &= check("partial blockers do not fire", all(t["id"] != 4 for t in got))
@@ -76,15 +77,15 @@ def run():
                 unblocked_by_completion(tasks, 99) == [])
 
     # wake-up bodies
-    epic = T(12, title="BFF checkout", spec_path="/w/specs/bff.md")
+    epic = _task_row(12, title="BFF checkout", spec_path="/w/specs/bff.md")
     b = wakeup_assignment_body(epic)
     ok &= check("assignment names task id", "#12" in b and "BFF checkout" in b)
     ok &= check("assignment includes spec instructions",
                 "/w/specs/bff.md" in b and "relay task add --parent 12" in b)
-    b2 = wakeup_assignment_body(T(13, title="small fix"))
+    b2 = wakeup_assignment_body(_task_row(13, title="small fix"))
     ok &= check("assignment without spec is plain",
                 "#13" in b2 and "spec" not in b2.lower())
-    ub = wakeup_unblocked_body(T(3, title="fe form"))
+    ub = wakeup_unblocked_body(_task_row(3, title="fe form"))
     ok &= check("unblocked body names task", "#3" in ub and "unblocked" in ub)
 
     # delivery text
@@ -152,6 +153,53 @@ def run():
                 "coord" in out and "bff-worker" in out)
     ok &= check("message feed present", "coord -> bff-worker: go" in out)
     ok &= check("empty inputs render", render_swarm([], [], [], 0.0) != "")
+
+    # --- restore/clean planning ---------------------------------------------
+    S = [
+        {"name": "bff", "role": "worker", "project": "shop", "workdir": "/w/bff",
+         "spawn_prompt": "bff work", "closed_at": 500.0},
+        {"name": "api", "role": "worker", "project": "shop", "workdir": "",
+         "spawn_prompt": "", "closed_at": 900.0},
+        {"name": "live", "role": "worker", "project": "shop", "workdir": "/w/l",
+         "spawn_prompt": "", "closed_at": 0.0},
+    ]
+    T = [
+        {"id": 1, "state": "doing", "owner": "bff"},
+        {"id": 2, "state": "done", "owner": "bff"},
+        {"id": 3, "state": "todo", "owner": "api"},
+        {"id": 4, "state": "doing", "owner": "live"},
+    ]
+    auto = restore_candidates(S, T)
+    ok &= check("auto restore = closed sessions owning non-done work",
+                [c["name"] for c in auto] == ["api", "bff"])
+    ok &= check("candidate carries task ids (non-done only)",
+                next(c for c in auto if c["name"] == "bff")["task_ids"] == [1])
+    named = restore_candidates(S, T, names=["live"])
+    ok &= check("named restore includes a live session",
+                len(named) == 1 and named[0]["name"] == "live"
+                and named[0]["live"] is True)
+    ok &= check("named restore of a session owning no non-done work -> empty",
+                restore_candidates(S, T, names=["nobody"]) == [])
+
+    txt = restore_plan_text(auto, spawn_arm="wild")
+    ok &= check("plan shows workdir + tasks", "/w/bff" in txt and "#1" in txt)
+    ok &= check("plan flags no-workdir candidate", "SKIP api" in txt)
+    ok &= check("plan no arm warning when armed", "will not act" not in txt)
+    ok &= check("plan warns when spawn_arm off",
+                "will not act" in restore_plan_text(auto, spawn_arm="off"))
+    ok &= check("named-live plan notes zombie tab",
+                "zombie" in restore_plan_text(named, spawn_arm="wild"))
+
+    cc = clean_candidates(S, T)
+    ok &= check("clean candidates = all closed sessions",
+                [c["name"] for c in cc] == ["api", "bff"])
+    ok &= check("clean plan resets + removes",
+                "reset" in clean_plan_text(cc) and "remove" in clean_plan_text(cc))
+
+    rp = resume_prompt("bff", "shop", "worker", "bff work")
+    ok &= check("resume prompt invokes skill + RESUMING + mission",
+                "relay-worker" in rp and "RESUMING" in rp and "bff work" in rp
+                and "relay task list --mine" in rp)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
