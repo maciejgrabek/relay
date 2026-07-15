@@ -69,6 +69,7 @@ async def spawn_worker(name: str, project: str, prompt: str,
         # The watcher arms the session when it first sees it (the arm state
         # lives in the running TUI, not in this process).
         db.set_arm_request(conn, name, arm)
+    db.set_session_context(conn, name, workdir, prompt)
 
     await asyncio.sleep(0.5)           # shell warm-up
     await session.async_send_text(
