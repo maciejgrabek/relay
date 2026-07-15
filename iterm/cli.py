@@ -423,9 +423,11 @@ def cmd_restore(args) -> int:
     names = args.names or None
     cands = swarm.restore_candidates(sessions, tasks, names=names)
     spawn_arm = relay_config.load()[0].spawn_arm
-    print(swarm.restore_plan_text(cands, spawn_arm))
-    # only candidates we can actually revive (have a workdir)
-    doable = [c for c in cands if c["workdir"]]
+    missing = {c["name"] for c in cands
+               if c["workdir"] and not os.path.isdir(c["workdir"])}
+    print(swarm.restore_plan_text(cands, spawn_arm, missing_workdirs=missing))
+    # only candidates we can actually revive (workdir set AND still exists)
+    doable = [c for c in cands if c["workdir"] and os.path.isdir(c["workdir"])]
     if not doable or args.dry_run:
         return 0
     if not args.yes and not _confirm(f"restore {len(doable)} session(s)?"):
@@ -434,6 +436,11 @@ def cmd_restore(args) -> int:
     import asyncio
     import spawn as spawnmod
     for c in doable:
+        # A restore is a fresh spawn: its arm level must follow spawn_arm, not
+        # the dead worker's stale persisted mode. Clear it first so an off
+        # spawn_arm comes back off (matching the plan's warning); wild/insane
+        # re-arm + re-persist via spawn_worker's arm_request.
+        db.set_session_mode(conn, c["name"], "")
         prompt = swarm.resume_prompt(c["name"], c["project"], c["role"],
                                      c["spawn_prompt"])
         asyncio.run(spawnmod.spawn_worker(

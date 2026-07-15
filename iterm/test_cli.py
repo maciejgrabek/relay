@@ -217,7 +217,11 @@ def run():
     rc = db.connect()
     import db as _db2
     _db2.register(rc, "rw", "RW", "worker", "webshop", now=1.0)
-    _db2.set_session_context(rc, "rw", "/work/rw", "do the thing")
+    # Use a real, existing dir: restore now SKIPs a candidate whose recorded
+    # workdir no longer exists on disk.
+    _rw_dir = os.path.join(_TMP, "rw")
+    os.makedirs(_rw_dir, exist_ok=True)
+    _db2.set_session_context(rc, "rw", _rw_dir, "do the thing")
     rt = _db2.add_task(rc, "unfinished", project="webshop", owner="rw", now=2.0)
     _db2.set_task_state(rc, rt, "doing", now=3.0)
     _db2.mark_closed(rc, "rw", 500.0)
@@ -225,9 +229,20 @@ def run():
     code, out, _ = run_cli("restore", "--project", "webshop", "--dry-run",
                            iterm_id="w0t0p0:CO-ID")
     ok &= check("restore --dry-run plans, spawns nothing",
-                code == 0 and "restore rw" in out and "/work/rw" in out
+                code == 0 and "restore rw" in out and _rw_dir in out
                 and "#" + str(rt) in out
                 and db.get_session(rc, "rw")["closed_at"] == 500.0)
+
+    # a recorded workdir that no longer exists on disk is SKIPped
+    _db2.register(rc, "gonedir", "GD", "worker", "webshop", now=7.0)
+    _db2.set_session_context(rc, "gonedir", "/nonexistent/relay-x", "m")
+    gt = _db2.add_task(rc, "y", project="webshop", owner="gonedir", now=8.0)
+    _db2.set_task_state(rc, gt, "doing", now=9.0)
+    _db2.mark_closed(rc, "gonedir", 500.0)
+    code, out, _ = run_cli("restore", "--project", "webshop", "--dry-run",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("restore skips a workdir that no longer exists",
+                "workdir no longer exists" in out and "SKIP gonedir" in out)
 
     # no-workdir closed session is SKIPped
     _db2.register(rc, "nowd", "NW", "worker", "webshop", now=4.0)

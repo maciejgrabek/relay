@@ -172,7 +172,7 @@ def clean_candidates(sessions, tasks):
             if s["closed_at"]]
 
 
-def restore_plan_text(cands, spawn_arm: str) -> str:
+def restore_plan_text(cands, spawn_arm: str, missing_workdirs=()) -> str:
     lines = ["RESTORE PLAN"]
     for c in cands:
         ids = " ".join(f"#{i}" for i in c["task_ids"])
@@ -180,9 +180,15 @@ def restore_plan_text(cands, spawn_arm: str) -> str:
             lines.append(f"  SKIP {c['name']} - no known workdir "
                          f"(use relay clean, or re-run relay in the dir)")
             continue
+        if c["name"] in missing_workdirs:
+            lines.append(f"  SKIP {c['name']} - workdir no longer exists: "
+                         f"{c['workdir']}")
+            continue
         zombie = "  [tab still open - old tab left as a zombie]" if c["live"] else ""
         lines.append(f"  restore {c['name']} ({c['role']}) in {c['workdir']} "
                      f"- {len(c['task_ids'])} task(s): {ids}{zombie}")
+    if not cands:
+        lines.append("  (nothing to restore)")
     if spawn_arm == "off":
         lines.append("  WARNING: spawn_arm is off - restored workers will not "
                      "act unattended (arm them, or set [swarm] spawn_arm)")
