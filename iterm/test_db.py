@@ -49,6 +49,18 @@ def run():
     ok &= check("re-register rebinds iterm id", row["iterm_session_id"] == "UUID-2")
     ok &= check("re-register keeps registered_at", row["registered_at"] == 100.0)
 
+    # re-register WITHOUT a project must not wipe the existing binding (a
+    # spawned worker re-registering per the skill omits --project; live bug
+    # found 2026-07-15: scribe's project became '' and its messages vanished
+    # from --project filters).
+    db.register(conn, "bff-worker", "UUID-2", "worker", "", now=300.0)
+    ok &= check("re-register with empty project preserves it",
+                db.get_session(conn, "bff-worker")["project"] == "webshop")
+    db.register(conn, "bff-worker", "UUID-2", "worker", "otherproj", now=310.0)
+    ok &= check("re-register with explicit project updates it",
+                db.get_session(conn, "bff-worker")["project"] == "otherproj")
+    db.register(conn, "bff-worker", "UUID-2", "worker", "webshop", now=320.0)
+
     # bad role rejected
     try:
         db.register(conn, "x", "U", "boss")

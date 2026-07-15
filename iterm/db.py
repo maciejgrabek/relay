@@ -84,7 +84,9 @@ def register(conn, name: str, iterm_session_id: str, role: str,
              project: str = "", now: Optional[float] = None) -> None:
     """Insert or rebind a named session. Re-registering an existing name
     updates the binding (a respawned worker reclaims its identity) but keeps
-    the original registered_at."""
+    the original registered_at - and keeps the existing project when the
+    re-register omits one (a spawned worker re-registering per the skill
+    without --project must not wipe its pre-registered project)."""
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     t = _now(now)
@@ -94,7 +96,10 @@ def register(conn, name: str, iterm_session_id: str, role: str,
            VALUES(?,?,?,?,'',?,?)
            ON CONFLICT(name) DO UPDATE SET
              iterm_session_id=excluded.iterm_session_id,
-             role=excluded.role, project=excluded.project,
+             role=excluded.role,
+             project=CASE WHEN excluded.project = ''
+                          THEN sessions.project
+                          ELSE excluded.project END,
              last_seen=excluded.last_seen""",
         (name, iterm_session_id, role, project, t, t))
     conn.commit()
