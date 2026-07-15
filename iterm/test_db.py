@@ -263,11 +263,11 @@ def run():
                 db.get_task(k, done)["state"] == "done"
                 and db.get_task(k, done)["owner"] == "dead")
 
-    db.queue_message(k, "coord", "dead", "you there?", "p", now=7.0)
-    db.queue_message(k, "coord", "dead", "delivered one", "p", now=8.0)
+    db.queue_message(k, "coord", "dead", "you there?", "p", now=999_000.0)
+    db.queue_message(k, "coord", "dead", "delivered one", "p", now=999_100.0)
     # mark one delivered so only the queued one is dropped
     mid = db.undelivered(k, "dead")[1]["id"]
-    db.mark_delivered(k, mid, now=9.0)
+    db.mark_delivered(k, mid, now=999_110.0)
     dn = db.delete_undelivered_to(k, "dead")
     ok &= check("delete_undelivered_to drops only queued", dn == 1)
 
@@ -286,6 +286,14 @@ def run():
     ok &= check("prune_messages drops old delivered only", pn == 1)
     ok &= check("prune keeps queued + recent",
                 any(m["id"] == qd for m in db.undelivered(k)))
+
+    # delete_session must NOT wipe message history (only the sessions row)
+    db.register(k, "hist", "SID-H", "worker", "p", now=1_000_200.0)
+    hm = db.queue_message(k, "hist", "coord", "shipped it", "p", now=1_000_210.0)
+    db.mark_delivered(k, hm, now=1_000_220.0)
+    db.delete_session(k, "hist")
+    ok &= check("delete_session keeps delivered message history",
+                any(m["id"] == hm for m in db.message_history(k)))
     k.close()
 
     conn.close()
