@@ -21,6 +21,8 @@ from typing import Callable, Dict, List, Optional
 import iterm2
 
 import audit
+import db as swarmdb
+import swarm
 from gates import classify, Action, Decision, reconstruct_lines, detect_state
 
 
@@ -48,6 +50,9 @@ class SessionInfo:
     last_screen: List[str] = field(default_factory=list)  # sanitized recent lines
     n_approved: int = 0              # auto-approvals in this tab (running tally)
     n_escalated: int = 0             # dangerous/question escalations in this tab
+    stale: bool = False              # swarm: flagged unresponsive (see Task 8)
+    _screen_changed_ts: float = field(default=0.0, repr=False)
+    _stale_notified: bool = field(default=False, repr=False)
     _iterm_session: object = field(default=None, repr=False)
     _last_prompt_id: Optional[str] = field(default=None, repr=False)
     _last_notify_ts: float = field(default=0.0, repr=False)  # notify cooldown
@@ -109,6 +114,12 @@ class Watcher:
         # defeats the prompt_id debounce). At most one alert / one auto-inject
         # per session per cooldown window, regardless of churn.
         self.notify_cooldown = float(os.environ.get("RELAY_NOTIFY_COOLDOWN", "30"))
+        # --- swarm: registry + delivery state ---
+        self.registry: Dict[str, dict] = {}   # bare iterm UUID -> sessions row
+        self._db = None                        # lazy sqlite conn (same loop)
+        self._dryrun_delivered: set = set()    # msg ids noted in dry-run
+        self.stale_after = float(
+            os.environ.get("RELAY_STALE_MINUTES", "10")) * 60.0
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -133,6 +144,7 @@ class Watcher:
                     await self._sync_sessions(app)
                 except Exception as e:
                     self._note(f"roster sync error: {e}")
+                self._swarm_refresh_registry()
                 for info in list(self.sessions.values()):
                     if self._stop_event.is_set():
                         break
@@ -142,6 +154,7 @@ class Watcher:
                         res = await self._snapshot(info)
                         if res:
                             await self._handle(info, *res)
+                        await self._deliver(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -163,6 +176,11 @@ class Watcher:
             close = getattr(self.connection, "async_close", None)
             if close:
                 await close()
+        except Exception:
+            pass
+        try:
+            if self._db is not None:
+                self._db.close()
         except Exception:
             pass
 
@@ -226,7 +244,10 @@ class Watcher:
             contents = await asyncio.wait_for(
                 s.async_get_screen_contents(), timeout=self.read_timeout)
             raw, hard = _extract_lines(contents)
-            info.last_screen = [l for l in reconstruct_lines(raw, hard) if l.strip()][-40:]
+            new_screen = [l for l in reconstruct_lines(raw, hard) if l.strip()][-40:]
+            if new_screen != info.last_screen:
+                info._screen_changed_ts = time.time()
+            info.last_screen = new_screen
             info.last_seen = time.time()
             return raw, hard
         except asyncio.TimeoutError:
@@ -327,6 +348,79 @@ class Watcher:
         info.state = "cleared"
         info.n_approved += 1
         self._note(f"INJECT {info.title}: {(decision.command or '<unparsed>')[:60]}")
+
+    # --- swarm ------------------------------------------------------------------
+
+    def _swarm_conn(self):
+        if self._db is None:
+            self._db = swarmdb.connect()
+        return self._db
+
+    def _swarm_refresh_registry(self) -> None:
+        """Rebuild the name<->session map + TASK NOW strings, once per tick.
+        Any DB trouble degrades to 'no swarm data' - never kills the loop."""
+        try:
+            conn = self._swarm_conn()
+            reg = {}
+            for r in swarmdb.list_sessions(conn):
+                d = dict(r)
+                cur = swarmdb.current_task_for(conn, d["name"])
+                if cur is None:
+                    d["task_now"] = ""
+                elif cur["state"] == "blocked":
+                    bb = ",".join(str(b) for b in
+                                  swarm.parse_blockers(cur["blocked_by"]))
+                    d["task_now"] = f"#{cur['id']} ⊘" + (f" by {bb}" if bb else "")
+                else:
+                    d["task_now"] = f"#{cur['id']} {cur['state']} {cur['title']}"
+                reg[d["iterm_session_id"]] = d
+            self.registry = reg
+        except Exception as e:
+            self._note(f"swarm db error: {e}")
+
+    async def _deliver(self, info: SessionInfo) -> None:
+        """Deliver AT MOST ONE queued message into a registered session, only
+        when it is idle at Claude's input box. Audit before act, like
+        approvals. One per tick keeps the injected turns observable."""
+        reg = self.registry.get(info.session_id)
+        if not reg:
+            return
+        try:
+            msgs = swarmdb.undelivered(self._swarm_conn(), reg["name"])
+        except Exception as e:
+            self._note(f"swarm db error: {e}")
+            return
+        if not msgs:
+            return
+        if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
+            return
+        m = msgs[0]
+        text = swarm.delivery_text(m["from_name"], m["body"])
+        if self.dry_run:
+            if m["id"] not in self._dryrun_delivered:
+                self._dryrun_delivered.add(m["id"])
+                audit.record("would-deliver", info.title, text[:500],
+                             f"msg {m['id']} to {reg['name']}")
+                self._note(f"DRY-RUN would deliver -> {reg['name']}: "
+                           f"{m['body'][:60]}")
+            return
+        # LOG BEFORE ACT (same contract as approvals).
+        if not audit.record("delivered", info.title, text[:500],
+                            f"msg {m['id']} from {m['from_name']} "
+                            f"to {reg['name']}"):
+            self._note(f"AUDIT-FAIL: not delivering msg {m['id']}")
+            notify_mac("Relay - swarm", "audit log write failed - "
+                       "NOT delivering message", self.alert_sound)
+            return
+        # Send body then a STANDALONE Enter (bracketed-paste lesson): the TUI
+        # treats the body as a paste and waits for a discrete \r.
+        await info._iterm_session.async_send_text(text)
+        await asyncio.sleep(0.3)
+        await info._iterm_session.async_send_text("\r")
+        # Mark AFTER the send: if the send raises, the message stays queued
+        # and retries next tick (a rare duplicate beats a lost wake-up).
+        swarmdb.mark_delivered(self._swarm_conn(), m["id"])
+        self._note(f"DELIVER -> {reg['name']}: {m['body'][:60]}")
 
     async def focus_session(self, sid: str) -> bool:
         """Bring the real iTerm2 tab for this session to the foreground."""
