@@ -141,6 +141,11 @@ class Watcher:
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
+        # --- swarm: closed-session marking ---
+        self._miss = {}            # session name -> consecutive missed ticks
+        self.close_misses = 2      # misses before marking closed (debounce)
+        self.orphan_count = 0      # closed sessions owning non-done work
+        self._roster_ok = False    # did THIS tick's sync succeed?
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -166,9 +171,13 @@ class Watcher:
                 try:
                     app = await iterm2.async_get_app(self.connection)
                     await self._sync_sessions(app)
+                    self._roster_ok = True
                 except Exception as e:
+                    self._roster_ok = False
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
+                if self._roster_ok:
+                    self._mark_closed_sessions()
                 self._check_gone()
                 for info in list(self.sessions.values()):
                     if self._stop_event.is_set():
@@ -481,6 +490,48 @@ class Watcher:
             self.registry = reg
         except Exception as e:
             self._note(f"swarm db error: {e}")
+
+    def _mark_closed_sessions(self) -> None:
+        """After a good roster sync: a registered session whose tab is missing
+        for close_misses consecutive ticks is stamped closed; a reappeared tab
+        resets the counter and clears closed_at. The debounce + sync gate stop
+        a transient empty roster from false-marking a live swarm."""
+        try:
+            conn = self._swarm_conn()
+            rows = swarmdb.list_sessions(conn)
+        except Exception as e:
+            self._note(f"swarm db error: {e}")
+            return
+        live = set(self.sessions.keys())
+        for r in rows:
+            name, sid, closed = r["name"], r["iterm_session_id"], r["closed_at"]
+            if sid in live:
+                self._miss.pop(name, None)
+                if closed:
+                    try:
+                        swarmdb.clear_closed(conn, name)
+                    except Exception:
+                        pass
+                continue
+            self._miss[name] = self._miss.get(name, 0) + 1
+            if self._miss[name] >= self.close_misses and not closed:
+                try:
+                    swarmdb.mark_closed(conn, name, time.time())
+                    self._note(f"CLOSED {name} (tab gone)")
+                except Exception:
+                    pass
+        self._recount_orphans()
+
+    def _recount_orphans(self) -> None:
+        try:
+            conn = self._swarm_conn()
+            closed = {r["name"] for r in swarmdb.list_sessions(conn)
+                      if r["closed_at"]}
+            owners = {t["owner"] for t in swarmdb.list_tasks(conn)
+                      if t["state"] != "done" and t["owner"]}
+            self.orphan_count = len(closed & owners)
+        except Exception:
+            pass
 
     async def _deliver(self, info: SessionInfo) -> None:
         """Deliver AT MOST ONE queued message into a registered session, only
