@@ -258,9 +258,10 @@ relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
     Open a new iTerm2 tab running claude, pre-registered under <name>.
 ```
 
-Registration and the CLI work outside iTerm2 too (`relay task list` doesn't
-need an identity) - only delivery requires the TUI running against a real
-iTerm2 session.
+Identity-free verbs (`relay task list`, `relay msgs`) work anywhere. The
+identity-bound verbs (`register`, `status`, `send`, `inbox`) resolve "me" from
+`$ITERM_SESSION_ID`, so they need an iTerm2 session to run. Delivery
+additionally requires the TUI running against a real iTerm2 session.
 
 ### Delivery
 
