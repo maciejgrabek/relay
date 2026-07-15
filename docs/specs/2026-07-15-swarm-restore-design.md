@@ -1,7 +1,7 @@
 # Swarm Restore + Clean - Design Spec
 
 **Date:** 2026-07-15
-**Status:** Approved for planning
+**Status:** Implemented (see docs/plans/2026-07-15-swarm-restore.md)
 
 ## Problem
 
