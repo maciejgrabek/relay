@@ -332,6 +332,21 @@ async def title_tests():
     await w._apply_title(info2)
     chk("manual+idle: never written", fs2.names == [])
 
+    # HIDDEN + disarmed with a stale prefix: the poll loop's
+    # `if info.hidden and not info.active: continue` skips _apply_title, so a
+    # session that was armed (prefix written, sid in _titled), then hidden,
+    # then disarmed would keep its stale prefix forever. The loop now calls
+    # _apply_title once for such a titled session BEFORE the continue (see
+    # start()); _apply_title itself must restore the bare name and drop the sid.
+    infoh, fsh = _mk(w, "sh", "hidden", mode="safe", state="working")
+    await w._apply_title(infoh)                # arm -> prefix written
+    chk("hidden-stale: prefixed while armed", fsh.names == ["◉ hidden"]
+        and "sh" in w._titled)
+    infoh.mode, infoh.state, infoh.hidden = "off", "idle", True
+    await w._apply_title(infoh)                # what the loop now does pre-skip
+    chk("hidden-stale: bare name restored", fsh.names[-1] == "hidden")
+    chk("hidden-stale: sid dropped from _titled", "sh" not in w._titled)
+
     # style=off: fully inert even for armed sessions.
     w_off = Watcher(connection=None, dry_run=False, cfg=C.Config())
     info3, fs3 = _mk(w_off, "s3", "api", mode="insane", state="blocked")

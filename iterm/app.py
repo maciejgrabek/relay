@@ -495,12 +495,21 @@ class RelayApp(App):
         return None
 
     async def action_quit(self) -> None:
-        # Signal the poll loop (interruptible - wakes immediately), give it a
-        # brief moment to fall out of the loop and close the iTerm2 connection.
+        # Signal the poll loop (interruptible - wakes immediately), then WAIT
+        # for the connection worker to actually finish its teardown (restore
+        # every title, close the iTerm2 connection) before we exit(). A blind
+        # sleep raced that teardown: exit() cancels the worker mid-restore, so
+        # tabs kept their prefixes. Bounded so a wedged connection can't hang
+        # quit; on timeout we exit anyway (best-effort residue, documented).
         if self.watcher:
             try:
                 await self.watcher.stop()
-                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        worker = getattr(self, "_conn_worker", None)
+        if worker is not None:
+            try:
+                await asyncio.wait_for(worker.wait(), timeout=3.0)
             except Exception:
                 pass
         if self._caffeinate:
