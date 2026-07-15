@@ -107,7 +107,7 @@ def getting_started_panel(width: int) -> str:
         " nothing to do with only itself running.\n"
         "\n"
         "   1. Open a tab and start a long job or a Claude Code session\n"
-        "   2. Come back here - it shows up in the list on the left\n"
+        "   2. Come back here - it shows up in the list above\n"
         "   3. Press SPACE to arm it. Relay auto-clears its safe prompts\n"
         "      and pings you on the dangerous ones. Then walk away.\n"
         "\n"
@@ -171,6 +171,7 @@ class RelayApp(App):
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
         Binding("tab", "swarm_view", "Swarm view", priority=True),
+        Binding("R", "restore", "Restore orphaned", show=True),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -186,6 +187,7 @@ class RelayApp(App):
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
         self._swarm_visible = False
         self._swarm_db = None
+        self._restore_armed = False
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
@@ -351,7 +353,11 @@ class RelayApp(App):
         # Onboarding hints, in priority order: nothing to control -> point at
         # the preview panel; sessions present but none armed -> tell them Space.
         n_ctrl = len(self._controllable())
-        if n_ctrl == 0:
+        orphans = getattr(self.watcher, "orphan_count", 0)
+        if orphans:
+            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - press R to "
+                    f"restore, or run 'relay clean'[/]")
+        elif n_ctrl == 0:
             hint = "  [#2a7d4f]· open another session to control (see panel ->)[/]"
         elif armed == 0:
             hint = "  [#ffb000]· nothing armed - SPACE to arm a session, then walk away[/]"
@@ -573,6 +579,26 @@ class RelayApp(App):
                 if 0 <= r < n and self._row_sids[r] is not None:
                     return r
         return None
+
+    # --- restore (respawn dead task-owner workers) -----------------------
+    def action_restore(self) -> None:
+        if not getattr(self.watcher, "orphan_count", 0):
+            return
+        if not self._restore_armed:
+            self._restore_armed = True
+            self.set_timer(3.0, lambda: setattr(self, "_restore_armed", False))
+            self.query_one(Log).write_line(
+                "restore: press R again within 3s to respawn dead workers")
+            return
+        self._restore_armed = False
+        here = os.path.dirname(os.path.abspath(__file__))
+        relay_bin = os.path.join(here, "..", "bin", "relay")
+        try:
+            subprocess.Popen([relay_bin, "restore", "--yes"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.query_one(Log).write_line("restore: launching dead workers...")
+        except Exception as e:
+            self.query_one(Log).write_line(f"restore failed: {e}")
 
     async def action_quit(self) -> None:
         # Signal the poll loop (interruptible - wakes immediately), then WAIT
