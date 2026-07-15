@@ -217,6 +217,13 @@ class RelayApp(App):
             audit.prune_old()
         except Exception:
             pass
+        try:
+            import db as _swarmdb
+            _swarmdb.prune_messages(
+                _swarmdb.connect(),
+                float(os.environ.get("RELAY_MSG_RETENTION_DAYS", "7")))
+        except Exception:
+            pass
         table = self.query_one(DataTable)
         table.add_columns("MODE", "STATUS", "LOC", "UNIT", "ROLE", "TASK NOW",
                           "✓/⊘", "LAST DIRECTIVE")

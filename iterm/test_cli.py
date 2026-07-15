@@ -239,6 +239,18 @@ def run():
     ok &= check("restore skips no-workdir session", "SKIP nowd" in out)
     rc.close()
 
+    # --- doctor reports orphans: closed session owning non-done work ---------
+    dc = db.connect()
+    import db as _db3
+    _db3.register(dc, "orph", "OR", "worker", "webshop", now=1.0)
+    ot = _db3.add_task(dc, "stuck", project="webshop", owner="orph", now=2.0)
+    _db3.set_task_state(dc, ot, "doing", now=3.0)
+    _db3.mark_closed(dc, "orph", 400.0)
+    code, out, _ = run_cli("doctor")
+    ok &= check("doctor reports orphaned work",
+                code == 0 and "orphan" in out.lower() and "orph" in out)
+    dc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
