@@ -140,8 +140,20 @@ def cmd_task_add(args) -> int:
     me, rc = _require_me(conn)
     if me is None:
         return rc
-    blockers = [int(x) for x in args.blocked_by.split(",") if x.strip()] \
-        if args.blocked_by else []
+    try:
+        blockers = [int(x) for x in args.blocked_by.split(",") if x.strip()] \
+            if args.blocked_by else []
+    except ValueError:
+        return _err(f"--blocked-by must be comma-separated task ids, got "
+                    f"{args.blocked_by!r}")
+    # Validate referenced ids exist: a typo'd blocker never completes, so the
+    # dependent would wait forever with no signal - fail loudly at creation.
+    if args.parent is not None and db.get_task(conn, args.parent) is None:
+        return _err(f"--parent #{args.parent} does not exist")
+    missing = [b for b in blockers if db.get_task(conn, b) is None]
+    if missing:
+        return _err("--blocked-by references nonexistent task(s): "
+                    + ", ".join(f"#{b}" for b in missing))
     project = args.project or me["project"]
     tid = db.add_task(conn, args.title, project=project, parent_id=args.parent,
                       owner=args.owner, spec_path=args.spec,

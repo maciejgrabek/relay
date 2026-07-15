@@ -440,8 +440,18 @@ Environment variables (set before launching `relay`):
 | `RELAY_NO_CAFFEINATE`        | unset                      | Set to `1` to not keep the Mac awake      |
 | `RELAY_NO_REACTOR`           | unset                      | Set to `1` to hide the reactor meter      |
 | `RELAY_DB`                   | `~/.relay/relay.db`        | Swarm SQLite file (sessions/messages/tasks) |
+| `RELAY_LOCK`                 | `~/.relay/relay.lock`      | Single-instance lock (one panel at a time) |
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
 | `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
+
+> **Keep `~/.relay/` on a local disk, not a synced folder** (iCloud Drive,
+> Dropbox, a network mount). Relay's SQLite DB uses WAL mode; a background
+> sync process copying the `.db`/`.db-wal` files mid-write can corrupt them.
+> If you must relocate it, point `RELAY_DB` at a local path.
+>
+> Only one relay panel runs at a time (an advisory lock at `RELAY_LOCK`) -
+> two would each deliver every queued message, typing each wake-up twice. A
+> second `relay` exits with a message telling you the first is still up.
 
 Two of these - `RELAY_STALE_MINUTES` and `RELAY_NOTIFY_COOLDOWN` - also have a
 home in the config file below. **Precedence: defaults < config file <

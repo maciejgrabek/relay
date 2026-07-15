@@ -99,5 +99,38 @@ async def go():
     return ok
 
 
+def lock_tests():
+    """acquire_singleton_lock: first holder wins, second is refused."""
+    import os
+    import tempfile
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    p = os.path.join(tempfile.mkdtemp(), "relay.lock")
+    first = appmod.acquire_singleton_lock(p)
+    chk("first relay acquires the lock", bool(first))
+    second = appmod.acquire_singleton_lock(p)
+    chk("second relay is refused (None)", second is None)
+    # releasing the first (closing its handle) lets a new one acquire.
+    try:
+        first.close()
+    except Exception:
+        pass
+    third = appmod.acquire_singleton_lock(p)
+    chk("lock frees after the holder exits", bool(third))
+    try:
+        third.close()
+    except Exception:
+        pass
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
-    sys.exit(0 if asyncio.run(go()) else 1)
+    r1 = asyncio.run(go())
+    r2 = lock_tests()
+    sys.exit(0 if (r1 and r2) else 1)
