@@ -76,6 +76,9 @@ def cmd_register(args) -> int:
                     "wake-ups; pick another name")
     conn = db.connect()
     db.register(conn, name, sid, args.role, args.project or "")
+    if args.dir:
+        db.set_session_context(conn, name, os.path.abspath(args.dir),
+                               db.get_session(conn, name)["spawn_prompt"])
     print(f"registered '{name}' as {args.role}"
           + (f" on project '{args.project}'" if args.project else ""))
     return 0
@@ -385,6 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--name", required=True)
     r.add_argument("--role", required=True, choices=db.ROLES)
     r.add_argument("--project", default="")
+    r.add_argument("--dir", default=None,
+                   help="record this session's working directory (for restore)")
     r.set_defaults(fn=cmd_register)
 
     s = sub.add_parser("status", help="update my one-line status")

@@ -182,6 +182,13 @@ def run():
     code, out, _ = run_cli("version")
     ok &= check("version exits 0", code == 0 and "relay" in out)
 
+    # register --dir records workdir
+    code, _, _ = run_cli("register", "--name", "ctxw", "--role", "worker",
+                         "--project", "p", "--dir", "/work/ctx",
+                         iterm_id="w0t9p0:CTX-ID")
+    ok &= check("register --dir stores workdir",
+                code == 0 and db.get_session(conn, "ctxw")["workdir"] == "/work/ctx")
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
