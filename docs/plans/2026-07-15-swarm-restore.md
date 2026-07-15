@@ -1077,7 +1077,7 @@ git commit -m "TUI: orphan hint + R to restore dead workers"
 
 ```bash
 ./test/run.sh                       # ALL SUITES PASSED
-grep -rn $'—' iterm/ README.md docs/specs/2026-07-15-swarm-restore-design.md || echo "no em-dashes"
+grep -rn $'\u2014' iterm/ README.md docs/specs/2026-07-15-swarm-restore-design.md || echo "no em-dashes"
 python3 - <<'EOF'
 import sys; sys.path.insert(0, "iterm")
 import swarm
