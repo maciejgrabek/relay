@@ -4,6 +4,8 @@ Logs the unattended decisions you'd want to review after walking away:
   - "auto-approved" : Relay sent Enter on a safe prompt in an armed session
   - "escalated"     : Relay refused to auto-act (dangerous / question / unsure)
   - "would-approve" : dry-run; what Relay WOULD have approved (no Enter sent)
+  - "delivered"     : Relay typed a queued swarm message into an idle session
+  - "would-deliver" : dry-run; what Relay WOULD have delivered
 Manual keypresses are NOT logged - those are your deliberate actions.
 
 One JSON object per line in ~/.relay/audit.jsonl. Durability matters here (the
@@ -34,7 +36,8 @@ AUDIT_PATH = os.path.expanduser(
     os.environ.get("RELAY_AUDIT_LOG", "~/.relay/audit.jsonl"))
 RETENTION_DAYS = float(os.environ.get("RELAY_AUDIT_RETENTION_DAYS", "7"))
 
-VALID_VERDICTS = ("auto-approved", "escalated", "would-approve")
+VALID_VERDICTS = ("auto-approved", "escalated", "would-approve",
+                  "delivered", "would-deliver")
 
 
 def _ensure_dir() -> None:
