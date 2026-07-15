@@ -451,7 +451,10 @@ Environment variables (set before launching `relay`):
 >
 > Only one relay panel runs at a time (an advisory lock at `RELAY_LOCK`) -
 > two would each deliver every queued message, typing each wake-up twice. A
-> second `relay` exits with a message telling you the first is still up.
+> second `relay` exits with a message telling you the first is still up. The
+> lock is a kernel `flock`, so it releases automatically if relay exits for
+> ANY reason - clean quit, crash, or `kill -9` - and a fresh `relay` starts
+> normally afterward. There is no stale-lock trap to clear by hand.
 
 Two of these - `RELAY_STALE_MINUTES` and `RELAY_NOTIFY_COOLDOWN` - also have a
 home in the config file below. **Precedence: defaults < config file <

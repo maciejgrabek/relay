@@ -20,7 +20,7 @@ import iterm2  # noqa: E402
 from rich.markup import escape  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
-from textual.containers import Horizontal, Vertical  # noqa: E402
+from textual.containers import Vertical  # noqa: E402
 from textual.widgets import DataTable, Footer, Static, Log  # noqa: E402
 
 import audit  # noqa: E402
@@ -125,10 +125,13 @@ class RelayApp(App):
     #banner { color: #3aff7a; text-style: bold; height: auto; padding: 1 2 0 2; }
     #subtitle { color: #2a7d4f; height: 1; padding: 0 2; }
     #reactor { height: 1; padding: 0 2; }
+    /* Stacked layout: the list on top, the live terminal feed below - both
+       full width so the 8-column list and 80-col terminal output each get the
+       room they need (side-by-side left the preview too narrow to read). */
     #middle { height: 1fr; }
     DataTable {
-        width: 2fr; height: 1fr; background: #020a04; color: #3aff7a;
-        border-right: solid #1d5c38;
+        width: 1fr; height: 2fr; background: #020a04; color: #3aff7a;
+        border-bottom: solid #1d5c38;
     }
     DataTable > .datatable--cursor { background: #0d3a22; color: #6effa0; text-style: bold; }
     DataTable > .datatable--header {
@@ -137,12 +140,12 @@ class RelayApp(App):
     DataTable > .datatable--odd-row { background: #04120a; }
     DataTable > .datatable--even-row { background: #020a04; }
     #preview {
-        width: 3fr; height: 1fr;
+        width: 1fr; height: 3fr;
         background: #010602; color: #2fc866;
         padding: 0 1;
     }
     #log {
-        height: 7; border-top: solid #1d5c38;
+        height: 5; border-top: solid #1d5c38;
         background: #010602; color: #2a7d4f;
     }
     #swarmview {
@@ -201,7 +204,7 @@ class RelayApp(App):
             yield Static("", id="subtitle")
             if not self.reactor_off:
                 yield Static("", id="reactor")
-            with Horizontal(id="middle"):
+            with Vertical(id="middle"):
                 yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
                 yield Static("", id="preview", markup=False)
             yield Static("", id="swarmview", markup=False)
