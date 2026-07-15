@@ -416,9 +416,16 @@ class Watcher:
         if not audit.record("delivered", info.title, text[:500],
                             f"msg {m['id']} from {m['from_name']} "
                             f"to {reg['name']}"):
-            self._note(f"AUDIT-FAIL: not delivering msg {m['id']}")
-            notify_mac("Relay - swarm", "audit log write failed - "
-                       "NOT delivering message", self.alert_sound)
+            # The message stays queued and retries next tick, but the 2s poll
+            # would otherwise fire a notification + log line EVERY tick while
+            # the log stays unwritable. Gate it on the session's notify
+            # cooldown (approvals are debounced; delivery must be too).
+            now = time.time()
+            if now - info._last_notify_ts >= self.notify_cooldown:
+                info._last_notify_ts = now
+                self._note(f"AUDIT-FAIL: not delivering msg {m['id']}")
+                notify_mac("Relay - swarm", "audit log write failed - "
+                           "NOT delivering message", self.alert_sound)
             return
         # Send body then a STANDALONE Enter (bracketed-paste lesson): the TUI
         # treats the body as a paste and waits for a discrete \r.
