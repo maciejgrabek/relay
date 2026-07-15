@@ -28,6 +28,10 @@ def run():
     path = _tmpdb()
     conn = db.connect(path)
 
+    # --- schema versioning --------------------------------------------------
+    ok &= check("connect stamps user_version = 1",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 1)
+
     # --- sessions -----------------------------------------------------------
     db.register(conn, "bff-worker", "UUID-1", "worker", "webshop", now=100.0)
     row = db.get_session(conn, "bff-worker")
