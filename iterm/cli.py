@@ -129,6 +129,96 @@ def cmd_msgs(args) -> int:
     return 0
 
 
+def cmd_task_add(args) -> int:
+    conn = db.connect()
+    me, rc = _require_me(conn)
+    if me is None:
+        return rc
+    blockers = [int(x) for x in args.blocked_by.split(",") if x.strip()] \
+        if args.blocked_by else []
+    project = args.project or me["project"]
+    tid = db.add_task(conn, args.title, project=project, parent_id=args.parent,
+                      owner=args.owner, spec_path=args.spec,
+                      blocked_by=blockers, created_by=me["name"])
+    print(f"created task #{tid} [{'epic' if args.parent is None else 'subtask'}]"
+          f" {args.title}")
+    # Assignment wake-up - but not when assigning to yourself (a worker
+    # breaking its own epic into subtasks must not spam its own inbox).
+    if args.owner and args.owner != me["name"]:
+        task = db.get_task(conn, tid)
+        db.queue_message(conn, "relay", args.owner,
+                         swarm.wakeup_assignment_body(task), project)
+    return 0
+
+
+def cmd_task_update(args) -> int:
+    conn = db.connect()
+    me, rc = _require_me(conn)
+    if me is None:
+        return rc
+    if not db.set_task_state(conn, args.id, args.state):
+        return _err(f"no task #{args.id}")
+    print(f"task #{args.id} -> {args.state}")
+    if args.state == "done":
+        # Unblock trigger: poke the owner of every task this completion fully
+        # unblocked (all of its blockers are now done).
+        for t in swarm.unblocked_by_completion(db.list_tasks(conn), args.id):
+            if t["owner"]:
+                db.queue_message(conn, "relay", t["owner"],
+                                 swarm.wakeup_unblocked_body(t), t["project"])
+    return 0
+
+
+def cmd_task_list(args) -> int:
+    conn = db.connect()
+    owner = None
+    if args.mine:
+        me, rc = _require_me(conn)
+        if me is None:
+            return rc
+        owner = me["name"]
+    rows = db.list_tasks(conn, project=args.project, owner=owner)
+    if not rows:
+        print("no tasks")
+        return 0
+    # Epics first with their subtasks nested under them.
+    by_parent = {}
+    for t in rows:
+        by_parent.setdefault(t["parent_id"], []).append(t)
+
+    # For --mine filtering, only show blockers that are also owned by this owner
+    blockers_to_show = None
+    if owner is not None:
+        blockers_to_show = {t["id"] for t in rows}
+
+    def fmt(t):
+        bits = [f"#{t['id']} [{t['state']}] {t['title']}"]
+        if t["owner"]:
+            bits.append(f"@{t['owner']}")
+        bb = swarm.parse_blockers(t["blocked_by"])
+        if bb:
+            # When filtering by owner, only show blockers in the filtered set
+            if blockers_to_show is not None:
+                bb = [b for b in bb if b in blockers_to_show]
+            if bb:
+                bits.append("blocked-by " + ",".join(f"#{b}" for b in bb))
+        if t["spec_path"]:
+            bits.append(f"spec:{t['spec_path']}")
+        return "  ".join(bits)
+
+    listed = set()
+    for t in by_parent.get(None, []):
+        print(fmt(t))
+        listed.add(t["id"])
+        for c in by_parent.get(t["id"], []):
+            print("    " + fmt(c))
+            listed.add(c["id"])
+    for t in rows:                      # orphans (parent outside the filter)
+        if t["id"] not in listed:
+            print(fmt(t))
+    return 0
+
+
 # --- parser --------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -157,6 +247,28 @@ def build_parser() -> argparse.ArgumentParser:
     ms.add_argument("--with", dest="with_name", default=None)
     ms.add_argument("--project", default=None)
     ms.set_defaults(fn=cmd_msgs)
+
+    t = sub.add_parser("task", help="task board verbs")
+    tsub = t.add_subparsers(dest="task_verb", required=True)
+
+    ta = tsub.add_parser("add", help="create a task (no --parent = epic)")
+    ta.add_argument("title")
+    ta.add_argument("--parent", type=int, default=None)
+    ta.add_argument("--owner", default=None)
+    ta.add_argument("--spec", default=None)
+    ta.add_argument("--blocked-by", dest="blocked_by", default=None)
+    ta.add_argument("--project", default=None)
+    ta.set_defaults(fn=cmd_task_add)
+
+    tu = tsub.add_parser("update", help="change a task's state")
+    tu.add_argument("id", type=int)
+    tu.add_argument("--state", required=True, choices=db.TASK_STATES)
+    tu.set_defaults(fn=cmd_task_update)
+
+    tl = tsub.add_parser("list", help="list tasks (epics with nested subtasks)")
+    tl.add_argument("--project", default=None)
+    tl.add_argument("--mine", action="store_true")
+    tl.set_defaults(fn=cmd_task_list)
 
     return p
 
