@@ -426,9 +426,14 @@ cleaned up), and titles are **never touched in `--dry-run`** - the same
 "dry-run mutates nothing" guarantee as everything else in this repo.
 
 **Crash honesty:** if relay dies without restoring, a prefix lingers on the
-tab bar until relay next runs (its write path self-heals: it strips on read
-and rewrites/restores) or you rename the tab yourself. Same residue class as
-any other tool that writes tab titles.
+tab bar. The next run self-heals it **only** for a tab that is armed or in an
+attention state - its write path recomputes the prefix and rewrites/restores.
+A **manual, idle** tab is deliberately never rewritten (that protects titles
+you set by hand), so a leftover prefix there persists until you rename the tab
+yourself or briefly arm it (which lets relay take ownership and then restore
+the bare name). Reads are always clean regardless - the UNIT column and swarm
+addressing strip the prefix on read. Same residue class as any other tool that
+writes tab titles.
 
 ## Project layout
 

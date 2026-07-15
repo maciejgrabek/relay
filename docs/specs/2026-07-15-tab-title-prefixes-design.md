@@ -109,10 +109,14 @@ next tick if the style calls for it.
 
 ## 4. Crash honesty
 
-If relay dies without restoring, prefixes linger on the tab bar until relay
-next runs (its write path self-heals: strip-on-read + rewrite/restore) or
-the user renames the tab. Same residue class as any title-writing tool.
-Documented in the README section.
+If relay dies without restoring, prefixes linger on the tab bar. The next run
+self-heals a leftover prefix ONLY for a tab that is armed or in an attention
+state (the write path recomputes and rewrites/restores it). A manual + idle
+tab is deliberately never rewritten - that protects hand-set titles - so a
+leftover prefix there persists until the user renames the tab or briefly arms
+it (relay then takes ownership and restores the bare name on the next
+manual+idle tick / on quit). Reads are always clean either way (strip-on-read).
+Same residue class as any title-writing tool. Documented in the README section.
 
 ## 5. Testing
 
