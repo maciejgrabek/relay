@@ -154,7 +154,10 @@ class Watcher:
                         res = await self._snapshot(info)
                         if res:
                             await self._handle(info, *res)
-                        await self._deliver(info)
+                            # Only deliver on fresh screen evidence this tick -
+                            # a failed snapshot leaves state/last_screen stale,
+                            # which must not be used to decide a delivery.
+                            await self._deliver(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -385,14 +388,14 @@ class Watcher:
         reg = self.registry.get(info.session_id)
         if not reg:
             return
+        if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
+            return
         try:
             msgs = swarmdb.undelivered(self._swarm_conn(), reg["name"])
         except Exception as e:
             self._note(f"swarm db error: {e}")
             return
         if not msgs:
-            return
-        if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
             return
         m = msgs[0]
         text = swarm.delivery_text(m["from_name"], m["body"])
