@@ -66,18 +66,47 @@ def delivery_text(from_name: str, body: str) -> str:
 # Claude Code idle screens end with a bordered input box ("│ > ") and/or the
 # shortcuts footer. A bare shell prompt has neither - and injecting a message
 # into a SHELL would execute it as a command, so default to NOT ready.
+#
+# Anchoring matters: after you quit claude, the input box / footer chrome
+# lingers on screen a line or three ABOVE a live shell prompt. Scanning a
+# 15-line tail would still see that chrome and wrongly report "ready", so we
+# require the VERY LAST non-empty line to itself be Claude chrome. A shell
+# prompt (or any other non-chrome line) at the bottom vetoes delivery.
 _INPUT_BOX_RE = re.compile(r"^\s*│\s*>")
 _READY_MARKERS = ("? for shortcuts", "⏵⏵")
+_BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
+
+
+def _is_marker_line(l: str) -> bool:
+    """A footer marker or the input-box row - the 'ready' signal itself."""
+    return bool(_INPUT_BOX_RE.match(l)) or any(m in l for m in _READY_MARKERS)
+
+
+def _is_chrome_line(l: str) -> bool:
+    """True when this line is unmistakably Claude UI chrome (never a shell
+    prompt): the input-box row, a box border, or a footer marker line."""
+    s = l.strip()
+    if not s:
+        return False
+    if _is_marker_line(l):
+        return True
+    if s[0] in "╰╭":                      # box top/bottom corner
+        return True
+    if all(c in _BOX_GLYPHS for c in s):  # a pure border line
+        return True
+    return False
 
 
 def claude_prompt_ready(lines: List[str]) -> bool:
-    tail = [l for l in lines[-15:] if l.strip()]
-    for l in tail:
-        if _INPUT_BOX_RE.match(l):
-            return True
-        if any(m in l for m in _READY_MARKERS):
-            return True
-    return False
+    tail = [l for l in lines if l.strip()]
+    if not tail:
+        return False
+    # (a) the ready signal must appear near the bottom, AND
+    if not any(_is_marker_line(l) for l in tail[-3:]):
+        return False
+    # (b) the bottom line itself must be chrome - a shell prompt below the
+    #     lingering box (ends with $, %, ❯, or anything non-chrome) vetoes.
+    return _is_chrome_line(tail[-1])
 
 
 # --- staleness ---------------------------------------------------------------

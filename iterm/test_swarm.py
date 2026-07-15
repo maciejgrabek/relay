@@ -38,6 +38,21 @@ WORKING_TAIL = [
 SHELL_TAIL = [
     "~/work/myproject $",
 ]
+# After the user quits claude, the input box + footer chrome lingers ABOVE a
+# live shell prompt. Delivering here would type a message into the SHELL and
+# press Enter = command execution. Must be treated as NOT ready.
+SHELL_AFTER_CLAUDE_TAIL = [
+    "╭──────────────────────────────────────────╮",
+    "│ >                                        │",
+    "╰──────────────────────────────────────────╯",
+    "  ? for shortcuts",
+    "~/work/relay $",
+]
+# An idle screen whose bottom line is the box's closing border is still ready.
+BOX_BOTTOM_TAIL = [
+    "│ >                                        │",
+    "╰──────────────────────────────────────────╯",
+]
 
 
 def run():
@@ -83,6 +98,10 @@ def run():
     ok &= check("working tail -> not ready", not claude_prompt_ready(WORKING_TAIL))
     ok &= check("bare shell -> not ready", not claude_prompt_ready(SHELL_TAIL))
     ok &= check("empty screen -> not ready", not claude_prompt_ready([]))
+    ok &= check("shell prompt below lingering chrome -> not ready",
+                not claude_prompt_ready(SHELL_AFTER_CLAUDE_TAIL))
+    ok &= check("box-bottom last line -> ready",
+                claude_prompt_ready(BOX_BOTTOM_TAIL))
 
     # stale_reason (threshold 600s)
     ok &= check("fresh -> None",
