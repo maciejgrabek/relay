@@ -206,6 +206,56 @@ def clean_plan_text(cands) -> str:
     return "\n".join(lines)
 
 
+# --- wipe planning (pure; rows in, plans out) --------------------------------
+
+def _all_ids(tasks, owner):
+    return [t["id"] for t in tasks if t["owner"] == owner]
+
+
+def wipe_candidates(sessions, tasks, names=None):
+    """Closed sessions to delete outright (optionally filtered to `names`),
+    each with ALL its owned task ids (any state - wipe removes done too)."""
+    out = []
+    for s in sorted(sessions, key=lambda r: r["name"]):
+        if not s["closed_at"]:
+            continue
+        if names is not None and s["name"] not in names:
+            continue
+        out.append({"name": s["name"], "task_ids": _all_ids(tasks, s["name"])})
+    return out
+
+
+def wipe_blocker_warnings(cands, tasks):
+    """Warn when a task being wiped is a blocker of a task that is NOT being
+    wiped - that dependent may never unblock once its blocker is gone."""
+    wiped = set()
+    for c in cands:
+        wiped.update(c["task_ids"])
+    out = []
+    for t in tasks:
+        if t["id"] in wiped:
+            continue
+        for b in parse_blockers(t["blocked_by"]):
+            if b in wiped:
+                out.append(f"WARNING: #{b} is a blocker of #{t['id']} "
+                           f"(not being wiped) - #{t['id']} may never unblock")
+    return out
+
+
+def wipe_plan_text(cands, project_all=None) -> str:
+    if project_all is not None:
+        nt, ns, nm = project_all
+        return ("WIPE PLAN (whole project)\n"
+                f"  delete {nt} task(s), {ns} session(s), {nm} message(s)")
+    lines = ["WIPE PLAN"]
+    for c in cands:
+        lines.append(f"  delete {len(c['task_ids'])} task(s), "
+                     f"session {c['name']}")
+    if len(lines) == 1:
+        lines.append("  (nothing to wipe)")
+    return "\n".join(lines)
+
+
 def resume_prompt(name: str, project: str, role: str, spawn_prompt: str) -> str:
     skill = "relay-worker" if role == "worker" else "relay-coordinator"
     p = (f"Invoke the {skill} skill. You are '{name}'"

@@ -10,7 +10,8 @@ from swarm import (  # noqa: E402
     parse_blockers, unblocked_by_completion, wakeup_assignment_body,
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
-    clean_plan_text, resume_prompt,
+    clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
+    wipe_plan_text,
 )
 
 
@@ -209,6 +210,44 @@ def run():
     ok &= check("resume prompt invokes skill + RESUMING + mission",
                 "relay-worker" in rp and "RESUMING" in rp and "bff work" in rp
                 and "relay task list --mine" in rp)
+
+    # --- wipe planning ------------------------------------------------------
+    WS = [
+        {"name": "dead", "closed_at": 500.0},
+        {"name": "live", "closed_at": 0.0},
+    ]
+    WT = [
+        {"id": 1, "owner": "dead", "state": "doing", "blocked_by": ""},
+        {"id": 2, "owner": "dead", "state": "done", "blocked_by": ""},
+        {"id": 3, "owner": "live", "state": "todo", "blocked_by": "1"},
+    ]
+    wc = wipe_candidates(WS, WT)
+    ok &= check("wipe candidates = closed sessions only",
+                [c["name"] for c in wc] == ["dead"])
+    ok &= check("wipe includes done tasks",
+                sorted(wc[0]["task_ids"]) == [1, 2])
+    ok &= check("wipe names filter to a closed session",
+                [c["name"] for c in wipe_candidates(WS, WT, names=["dead"])] == ["dead"])
+    ok &= check("wipe names filter excludes a live session",
+                wipe_candidates(WS, WT, names=["live"]) == [])
+
+    warns = wipe_blocker_warnings(wc, WT)
+    ok &= check("blocker warning fires across the wipe boundary",
+                any("#1 is a blocker of #3" in w for w in warns))
+    # if the dependent is ALSO wiped, no warning
+    WT2 = WT + [{"id": 4, "owner": "dead", "state": "todo", "blocked_by": "1"}]
+    wc2 = wipe_candidates(WS, WT2)
+    warns2 = wipe_blocker_warnings(wc2, WT2)
+    ok &= check("no warning when dependent is also wiped",
+                not any("#4" in w for w in warns2))
+
+    txt = wipe_plan_text(wc)
+    ok &= check("wipe plan lists session + task count",
+                "dead" in txt and "delete" in txt.lower())
+    ok &= check("empty wipe plan", "(nothing to wipe)" in wipe_plan_text([]))
+    allt = wipe_plan_text([], project_all=(5, 2, 9))
+    ok &= check("project --all plan shows totals",
+                "5" in allt and "2" in allt and "9" in allt)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
