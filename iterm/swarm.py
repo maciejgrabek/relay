@@ -136,6 +136,82 @@ def stale_reason(now: float, threshold_s: float,
     return None
 
 
+# --- restore / clean planning (pure; rows in, plans out) ----------------------
+
+def _nondone_ids(tasks, owner):
+    return [t["id"] for t in tasks
+            if t["owner"] == owner and t["state"] != "done"]
+
+
+def restore_candidates(sessions, tasks, names=None):
+    """Sessions to revive. Auto (names=None): closed sessions owning non-done
+    work. Manual (names given): those named sessions owning non-done work,
+    regardless of closed state. Sorted by name."""
+    out = []
+    for s in sorted(sessions, key=lambda r: r["name"]):
+        if names is None:
+            if not s["closed_at"]:
+                continue
+        elif s["name"] not in names:
+            continue
+        ids = _nondone_ids(tasks, s["name"])
+        if not ids:
+            continue
+        out.append({"name": s["name"], "role": s["role"],
+                    "project": s["project"], "workdir": s["workdir"],
+                    "spawn_prompt": s["spawn_prompt"], "task_ids": ids,
+                    "live": not s["closed_at"]})
+    return out
+
+
+def clean_candidates(sessions, tasks):
+    """Every closed session (whether or not it owns work), with its non-done
+    task ids."""
+    return [{"name": s["name"], "task_ids": _nondone_ids(tasks, s["name"])}
+            for s in sorted(sessions, key=lambda r: r["name"])
+            if s["closed_at"]]
+
+
+def restore_plan_text(cands, spawn_arm: str) -> str:
+    lines = ["RESTORE PLAN"]
+    for c in cands:
+        ids = " ".join(f"#{i}" for i in c["task_ids"])
+        if not c["workdir"]:
+            lines.append(f"  SKIP {c['name']} - no known workdir "
+                         f"(use relay clean, or re-run relay in the dir)")
+            continue
+        zombie = "  [tab still open - old tab left as a zombie]" if c["live"] else ""
+        lines.append(f"  restore {c['name']} ({c['role']}) in {c['workdir']} "
+                     f"- {len(c['task_ids'])} task(s): {ids}{zombie}")
+    if spawn_arm == "off":
+        lines.append("  WARNING: spawn_arm is off - restored workers will not "
+                     "act unattended (arm them, or set [swarm] spawn_arm)")
+    return "\n".join(lines)
+
+
+def clean_plan_text(cands) -> str:
+    lines = ["CLEAN PLAN"]
+    for c in cands:
+        n = len(c["task_ids"])
+        reset = f"reset {n} task(s) to todo, " if n else ""
+        lines.append(f"  {reset}remove session {c['name']}")
+    if len(lines) == 1:
+        lines.append("  (nothing to clean)")
+    return "\n".join(lines)
+
+
+def resume_prompt(name: str, project: str, role: str, spawn_prompt: str) -> str:
+    skill = "relay-worker" if role == "worker" else "relay-coordinator"
+    p = (f"Invoke the {skill} skill. You are '{name}'"
+         + (f" on project '{project}'" if project else "")
+         + ", RESUMING work a previous session left unfinished. Run "
+         f"`relay task list --mine` and `relay inbox`, then continue the "
+         f"in-progress task(s) from where they were left.")
+    if spawn_prompt:
+        p += f" Original mission: {spawn_prompt}"
+    return p
+
+
 # --- swarm view rendering (plain text; the TUI Static uses markup=False) ------
 
 _STATE_COLS = ("todo", "doing", "blocked", "done")
