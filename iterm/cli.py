@@ -414,6 +414,53 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def cmd_wipe(args) -> int:
+    import swarm
+    conn = db.connect()
+    if args.all:
+        if not args.project:
+            return _err("--all requires --project (refusing to wipe every "
+                        "project at once)")
+        nt = len(db.list_tasks(conn, project=args.project))
+        ns = len(db.list_sessions(conn, project=args.project))
+        nm = len(db.message_history(conn, project=args.project, limit=10**9))
+        print(swarm.wipe_plan_text([], project_all=(nt, ns, nm)))
+        if args.dry_run:
+            return 0
+        if not (nt or ns or nm):
+            return 0
+        if not args.yes and not _confirm(
+                f"permanently DELETE all of project '{args.project}' "
+                f"({nt} tasks + {ns} sessions + {nm} messages)?"):
+            print("aborted.")
+            return 0
+        db.wipe_project(conn, args.project)
+        print(f"wiped project '{args.project}'.")
+        return 0
+
+    sessions = [dict(r) for r in db.closed_sessions(conn, args.project)]
+    tasks = [dict(r) for r in db.list_tasks(conn, project=args.project)]
+    names = args.names or None
+    cands = swarm.wipe_candidates(sessions, tasks, names=names)
+    print(swarm.wipe_plan_text(cands))
+    for w in swarm.wipe_blocker_warnings(cands, tasks):
+        print("  " + w)
+    if not cands or args.dry_run:
+        return 0
+    total_tasks = sum(len(c["task_ids"]) for c in cands)
+    if not args.yes and not _confirm(
+            f"permanently DELETE {total_tasks} task(s) + {len(cands)} "
+            f"session(s)?"):
+        print("aborted.")
+        return 0
+    for c in cands:
+        db.delete_tasks_for_owner(conn, c["name"])
+        db.delete_undelivered_to(conn, c["name"])
+        db.delete_session(conn, c["name"])
+    print(f"wiped {len(cands)} session(s).")
+    return 0
+
+
 def cmd_restore(args) -> int:
     import config as relay_config
     import swarm
@@ -540,6 +587,18 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--yes", action="store_true")
     rs.add_argument("--dry-run", dest="dry_run", action="store_true")
     rs.set_defaults(fn=cmd_restore)
+
+    wp = sub.add_parser("wipe", help="DELETE dead sessions' tasks (or a whole "
+                                     "project with --all)")
+    wp.add_argument("names", nargs="*", help="specific closed sessions to wipe "
+                    "(default: all closed sessions)")
+    wp.add_argument("--project", default=None)
+    wp.add_argument("--all", action="store_true",
+                    help="with --project: delete the ENTIRE project "
+                         "(all tasks/sessions/messages, even live)")
+    wp.add_argument("--yes", action="store_true")
+    wp.add_argument("--dry-run", dest="dry_run", action="store_true")
+    wp.set_defaults(fn=cmd_wipe)
 
     return p
 
