@@ -67,6 +67,10 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(_SCHEMA)
+    # Stamp the schema version on a fresh DB (0 = never stamped) so future
+    # migrations have a baseline to branch on.
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+        conn.execute("PRAGMA user_version = 1")
     return conn
 
 
