@@ -349,6 +349,26 @@ def delete_session(conn, name: str) -> None:
     conn.commit()
 
 
+def delete_tasks_for_owner(conn, owner: str) -> int:
+    """Delete every task owned by `owner` (any state). Used by wipe to remove a
+    dead session's work outright, vs reset_owner_tasks which only resets."""
+    cur = conn.execute("DELETE FROM tasks WHERE owner=?", (owner,))
+    conn.commit()
+    return cur.rowcount
+
+
+def wipe_project(conn, project: str) -> tuple:
+    """Delete ALL tasks, sessions, and messages for one project - a blank slate.
+    Returns (n_tasks, n_sessions, n_messages)."""
+    nt = conn.execute("DELETE FROM tasks WHERE project=?", (project,)).rowcount
+    ns = conn.execute("DELETE FROM sessions WHERE project=?",
+                      (project,)).rowcount
+    nm = conn.execute("DELETE FROM messages WHERE project=?",
+                      (project,)).rowcount
+    conn.commit()
+    return (nt, ns, nm)
+
+
 def delete_undelivered_to(conn, name: str) -> int:
     cur = conn.execute(
         "DELETE FROM messages WHERE to_name=? AND delivered_at IS NULL",

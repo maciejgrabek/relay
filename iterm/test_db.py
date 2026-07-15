@@ -296,6 +296,38 @@ def run():
                 any(m["id"] == hm for m in db.message_history(k)))
     k.close()
 
+    # --- wipe helpers -------------------------------------------------------
+    wpath = _tmpdb()
+    wdb = db.connect(wpath)
+    db.register(wdb, "dead", "SID-WD", "worker", "proj", now=1.0)
+    t1 = db.add_task(wdb, "a", project="proj", owner="dead", now=2.0)
+    t2 = db.add_task(wdb, "b", project="proj", owner="dead", now=3.0)
+    db.set_task_state(wdb, t2, "done", now=4.0)
+    keep = db.add_task(wdb, "other", project="proj", owner="live", now=5.0)
+    n = db.delete_tasks_for_owner(wdb, "dead")
+    ok &= check("delete_tasks_for_owner deletes all owner's tasks (incl done)",
+                n == 2 and db.get_task(wdb, t1) is None and db.get_task(wdb, t2) is None)
+    ok &= check("delete_tasks_for_owner leaves other owners",
+                db.get_task(wdb, keep) is not None)
+
+    # wipe_project: everything for a project, other projects intact
+    db.register(wdb, "s1", "S1", "worker", "P1", now=10.0)
+    db.register(wdb, "s2", "S2", "worker", "P2", now=11.0)
+    db.add_task(wdb, "p1t", project="P1", owner="s1", now=12.0)
+    db.add_task(wdb, "p2t", project="P2", owner="s2", now=13.0)
+    db.queue_message(wdb, "s1", "s2", "hi", "P1", now=14.0)
+    db.queue_message(wdb, "s2", "s1", "yo", "P2", now=15.0)
+    nt, ns, nm = db.wipe_project(wdb, "P1")
+    ok &= check("wipe_project returns counts", nt == 1 and ns == 1 and nm == 1)
+    ok &= check("wipe_project clears P1",
+                db.list_tasks(wdb, project="P1") == []
+                and db.get_session(wdb, "s1") is None)
+    ok &= check("wipe_project leaves P2 intact",
+                len(db.list_tasks(wdb, project="P2")) == 1
+                and db.get_session(wdb, "s2") is not None
+                and len(db.message_history(wdb, project="P2")) == 1)
+    wdb.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
