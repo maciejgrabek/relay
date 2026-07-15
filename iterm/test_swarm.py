@@ -92,6 +92,9 @@ def run():
                 delivery_text("coord", "go") == "[relay msg from coord] go")
     ok &= check("delivery text flattens newlines",
                 "\n" not in delivery_text("coord", "a\nb"))
+    dt = delivery_text("x", "a\x1b[Ab\x07c")
+    ok &= check("delivery text strips control bytes",
+                "\x1b" not in dt and "\x07" not in dt)
 
     # claude_prompt_ready
     ok &= check("idle input box -> ready", claude_prompt_ready(IDLE_TAIL))

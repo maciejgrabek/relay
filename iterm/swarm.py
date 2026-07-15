@@ -56,8 +56,14 @@ def wakeup_unblocked_body(task) -> str:
 
 def delivery_text(from_name: str, body: str) -> str:
     """The literal text typed into the target session. Newlines flattened so
-    the injected turn is one paste + one Enter (bracketed-paste lesson)."""
+    the injected turn is one paste + one Enter (bracketed-paste lesson).
+
+    This text is sent as raw keystrokes, so ESC / C0 control bytes (e.g. an
+    interrupt sequence) in an attacker-influenceable body would be interpreted
+    by the terminal, not typed. Strip everything that isn't printable or a
+    plain space after flattening."""
     flat = " ".join(str(body).splitlines())
+    flat = "".join(c for c in flat if c.isprintable() or c == " ")
     return f"[relay msg from {from_name}] {flat}"
 
 
