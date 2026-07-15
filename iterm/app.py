@@ -172,6 +172,7 @@ class RelayApp(App):
         Binding("x", "hide", "Hide/show"),
         Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("R", "restore", "Restore orphaned", show=True),
+        Binding("W", "wipe", "Wipe orphaned", show=True),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -188,6 +189,7 @@ class RelayApp(App):
         self._swarm_visible = False
         self._swarm_db = None
         self._restore_armed = False
+        self._wipe_armed = False
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
@@ -355,8 +357,8 @@ class RelayApp(App):
         n_ctrl = len(self._controllable())
         orphans = getattr(self.watcher, "orphan_count", 0)
         if orphans:
-            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - press R to "
-                    f"restore, or run 'relay clean'[/]")
+            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - R restore, "
+                    f"W wipe, or 'relay clean'[/]")
         elif n_ctrl == 0:
             hint = "  [#2a7d4f]· open another session to control (see panel ->)[/]"
         elif armed == 0:
@@ -599,6 +601,26 @@ class RelayApp(App):
             self.query_one(Log).write_line("restore: launching dead workers...")
         except Exception as e:
             self.query_one(Log).write_line(f"restore failed: {e}")
+
+    # --- wipe (delete orphaned task-owner work) --------------------------
+    def action_wipe(self) -> None:
+        if not getattr(self.watcher, "orphan_count", 0):
+            return
+        if not self._wipe_armed:
+            self._wipe_armed = True
+            self.set_timer(3.0, lambda: setattr(self, "_wipe_armed", False))
+            self.query_one(Log).write_line(
+                "wipe: press W again within 3s to DELETE orphaned work")
+            return
+        self._wipe_armed = False
+        here = os.path.dirname(os.path.abspath(__file__))
+        relay_bin = os.path.join(here, "..", "bin", "relay")
+        try:
+            subprocess.Popen([relay_bin, "wipe", "--yes"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.query_one(Log).write_line("wipe: deleting orphaned work...")
+        except Exception as e:
+            self.query_one(Log).write_line(f"wipe failed: {e}")
 
     async def action_quit(self) -> None:
         # Signal the poll loop (interruptible - wakes immediately), then WAIT
