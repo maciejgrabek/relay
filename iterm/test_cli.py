@@ -57,6 +57,14 @@ def run():
                            iterm_id="w0t1p0:BFF-ID")
     ok &= check("bad role -> exit 2 (argparse)", code == 2)
 
+    # reserved + empty names rejected
+    code, _, err = run_cli("register", "--name", "relay", "--role", "worker",
+                           iterm_id="w0t1p0:RES-ID")
+    ok &= check("name 'relay' reserved -> exit 1", code == 1 and "reserved" in err)
+    code, _, err = run_cli("register", "--name", "   ", "--role", "worker",
+                           iterm_id="w0t1p0:EMPTY-ID")
+    ok &= check("empty name -> exit 1", code == 1 and "empty" in err)
+
     # status requires registration
     code, _, err = run_cli("status", "working on #1", iterm_id="w9t9p9:GHOST")
     ok &= check("status unregistered -> error", code == 1 and "register" in err)
