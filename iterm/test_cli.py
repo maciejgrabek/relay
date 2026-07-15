@@ -266,6 +266,44 @@ def run():
                 code == 0 and "orphan" in out.lower() and "orph" in out)
     dc.close()
 
+    # --- wipe: orphaned + --all + guards ------------------------------------
+    import db as _wdb
+    wc = db.connect()
+    _wdb.register(wc, "deadw", "DWX", "worker", "wp", now=1.0)
+    wt = _wdb.add_task(wc, "gone", project="wp", owner="deadw", now=2.0)
+    _wdb.set_task_state(wc, wt, "doing", now=3.0)
+    _wdb.mark_closed(wc, "deadw", 400.0)
+
+    code, out, _ = run_cli("wipe", "--project", "wp", "--dry-run",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe --dry-run plans, deletes nothing",
+                code == 0 and "deadw" in out
+                and db.get_task(wc, wt) is not None)
+    code, out, _ = run_cli("wipe", "--project", "wp", "--yes",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe --yes deletes task + session",
+                code == 0 and db.get_task(wc, wt) is None
+                and db.get_session(wc, "deadw") is None)
+
+    # --all requires --project
+    code, _, err = run_cli("wipe", "--all", iterm_id="w0t0p0:CO-ID")
+    ok &= check("--all without --project -> error", code == 1 and "project" in err)
+
+    # --all nukes a project, leaves another intact
+    _wdb.register(wc, "a1", "A1", "worker", "PA", now=1.0)
+    _wdb.register(wc, "b1", "B1", "worker", "PB", now=1.0)
+    _wdb.add_task(wc, "pa", project="PA", owner="a1", now=2.0)
+    _wdb.add_task(wc, "pb", project="PB", owner="b1", now=2.0)
+    code, out, _ = run_cli("wipe", "--project", "PA", "--all", "--yes",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("wipe --all empties the project",
+                code == 0 and db.list_tasks(wc, project="PA") == []
+                and db.get_session(wc, "a1") is None)
+    ok &= check("wipe --all leaves other project",
+                len(db.list_tasks(wc, project="PB")) == 1
+                and db.get_session(wc, "b1") is not None)
+    wc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
