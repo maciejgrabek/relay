@@ -71,6 +71,22 @@ def run():
     ok &= check("malformed file -> defaults + warning",
                 cfg.title_style == "off" and len(warns) >= 1)
 
+    # Inline comments: the README's documented example line carries a trailing
+    # `; ...` comment; it must parse to the value alone, no warning.
+    p = _write("[titles]\n"
+               "style = hybrid         ; off | glyphs | words | hybrid (default off)\n")
+    cfg, warns = config.load(p)
+    ok &= check("inline comment stripped from value",
+                cfg.title_style == "hybrid" and warns == [])
+
+    # Non-UTF-8 bytes -> defaults + warning, never raises.
+    fd, p = tempfile.mkstemp(suffix=".ini")
+    with os.fdopen(fd, "wb") as f:
+        f.write(b"\xff\xfe[titles]\n")
+    cfg, warns = config.load(p)
+    ok &= check("non-utf8 file -> defaults + warning",
+                cfg.title_style == "off" and len(warns) >= 1)
+
     # Env beats config for the two mirrored keys.
     p = _write("[swarm]\nstale_minutes = 5\nnotify_cooldown = 60\n")
     os.environ["RELAY_STALE_MINUTES"] = "2"
