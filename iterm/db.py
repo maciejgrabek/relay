@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS sessions(
   registered_at REAL NOT NULL,
   last_seen REAL NOT NULL,
   arm_request TEXT NOT NULL DEFAULT '',
-  mode TEXT NOT NULL DEFAULT ''
+  mode TEXT NOT NULL DEFAULT '',
+  workdir TEXT NOT NULL DEFAULT '',
+  spawn_prompt TEXT NOT NULL DEFAULT '',
+  closed_at REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,16 +78,20 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     # Schema versioning: 0 = fresh (CREATEs above built the current schema),
     # otherwise migrate step by step. v2 added sessions.arm_request, v3 added
     # sessions.mode (persisted arm level, so a relay restart doesn't disarm a
-    # live swarm).
+    # live swarm), v4 added sessions.workdir/spawn_prompt/closed_at (restore
+    # context for a dead session, and whether it's closed).
     _migrate(conn)
     return conn
 
 
-_CURRENT_VERSION = 3
+_CURRENT_VERSION = 4
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
     2: ("ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT ''",),
+    3: ("ALTER TABLE sessions ADD COLUMN workdir TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN spawn_prompt TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN closed_at REAL NOT NULL DEFAULT 0"),
 }
 
 
@@ -116,7 +123,9 @@ def register(conn, name: str, iterm_session_id: str, role: str,
     updates the binding (a respawned worker reclaims its identity) but keeps
     the original registered_at - and keeps the existing project when the
     re-register omits one (a spawned worker re-registering per the skill
-    without --project must not wipe its pre-registered project)."""
+    without --project must not wipe its pre-registered project). Also clears
+    closed_at: a re-register revives a session that was previously marked
+    closed."""
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     t = _now(now)
@@ -130,7 +139,8 @@ def register(conn, name: str, iterm_session_id: str, role: str,
              project=CASE WHEN excluded.project = ''
                           THEN sessions.project
                           ELSE excluded.project END,
-             last_seen=excluded.last_seen""",
+             last_seen=excluded.last_seen,
+             closed_at=0""",
         (name, iterm_session_id, role, project, t, t))
     conn.commit()
 
@@ -181,6 +191,37 @@ def set_session_mode(conn, name: str, mode: str) -> bool:
     cur = conn.execute("UPDATE sessions SET mode=? WHERE name=?", (mode, name))
     conn.commit()
     return cur.rowcount > 0
+
+
+def set_session_context(conn, name: str, workdir: str,
+                        spawn_prompt: str) -> bool:
+    """Persist where a session was spawned and its original mission, so a dead
+    session can be restored in the right place with context."""
+    cur = conn.execute(
+        "UPDATE sessions SET workdir=?, spawn_prompt=? WHERE name=?",
+        (workdir, spawn_prompt, name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def mark_closed(conn, name: str, ts: float) -> bool:
+    cur = conn.execute("UPDATE sessions SET closed_at=? WHERE name=?",
+                       (ts, name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def clear_closed(conn, name: str) -> None:
+    conn.execute("UPDATE sessions SET closed_at=0 WHERE name=?", (name,))
+    conn.commit()
+
+
+def closed_sessions(conn, project=None):
+    if project is None:
+        return conn.execute("SELECT * FROM sessions WHERE closed_at != 0 "
+                            "ORDER BY name").fetchall()
+    return conn.execute("SELECT * FROM sessions WHERE closed_at != 0 "
+                        "AND project=? ORDER BY name", (project,)).fetchall()
 
 
 def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:

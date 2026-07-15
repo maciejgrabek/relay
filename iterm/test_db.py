@@ -29,11 +29,12 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 3",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 3)
+    ok &= check("fresh connect stamps user_version = 4",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 4)
 
-    # v1 -> v3 migration: old sessions table gains arm_request AND mode, one
-    # step at a time, ending at the current version.
+    # v1 -> v4 migration: old sessions table gains arm_request, mode, and the
+    # context/closed_at columns, one step at a time, ending at the current
+    # version.
     import sqlite3 as _sq
     mpath = _tmpdb()
     mconn = _sq.connect(mpath)
@@ -49,9 +50,15 @@ def run():
     db.register(mig, "migrated", "M-1", "worker", "p")
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
-    ok &= check("v1 db migrates to v3 with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 3
+    ok &= check("v1 db migrates to v4 with arm_request + mode columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 4
                 and row["arm_request"] == "" and row["mode"] == "")
+    mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
+                       "WHERE name='migrated'").fetchone()
+    ok &= check("v1 db migrates to v4 with context + closed_at columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 4
+                and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
+                and mrow["closed_at"] == 0)
 
     # --- persisted mode (restart survival): its own DB so the session-count
     # assertions later in run() aren't perturbed by an extra registration.
@@ -67,6 +74,38 @@ def run():
                 not db.set_session_mode(pconn, "ghostw", "wild"))
     pconn.close()
     mig.close()
+
+    # --- session context + closed_at (restore/clean foundation) -------------
+    cpath = _tmpdb()
+    cconn = db.connect(cpath)
+    db.register(cconn, "w", "SID-W", "worker", "proj", now=10.0)
+    ok &= check("context defaults empty",
+                db.get_session(cconn, "w")["workdir"] == ""
+                and db.get_session(cconn, "w")["spawn_prompt"] == ""
+                and db.get_session(cconn, "w")["closed_at"] == 0)
+    ok &= check("set_session_context stores both",
+                db.set_session_context(cconn, "w", "/work/api", "build the API")
+                and db.get_session(cconn, "w")["workdir"] == "/work/api"
+                and db.get_session(cconn, "w")["spawn_prompt"] == "build the API")
+    ok &= check("set_session_context unknown -> False",
+                not db.set_session_context(cconn, "ghost", "/x", "y"))
+    ok &= check("mark_closed stamps ts",
+                db.mark_closed(cconn, "w", 500.0)
+                and db.get_session(cconn, "w")["closed_at"] == 500.0)
+    ok &= check("closed_sessions lists it",
+                [r["name"] for r in db.closed_sessions(cconn)] == ["w"])
+    # re-register revives (clears closed_at); keeps workdir/spawn_prompt.
+    db.register(cconn, "w", "SID-W2", "worker", "proj", now=600.0)
+    ok &= check("re-register clears closed_at",
+                db.get_session(cconn, "w")["closed_at"] == 0
+                and db.closed_sessions(cconn) == [])
+    ok &= check("re-register keeps workdir",
+                db.get_session(cconn, "w")["workdir"] == "/work/api")
+    db.mark_closed(cconn, "w", 700.0)
+    db.clear_closed(cconn, "w")
+    ok &= check("clear_closed resets to 0",
+                db.get_session(cconn, "w")["closed_at"] == 0)
+    cconn.close()
 
     # --- sessions -----------------------------------------------------------
     db.register(conn, "bff-worker", "UUID-1", "worker", "webshop", now=100.0)
