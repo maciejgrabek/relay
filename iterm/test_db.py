@@ -244,6 +244,50 @@ def run():
     ok &= check("current_task_for none -> None",
                 db.current_task_for(conn, "ghost") is None)
 
+    # --- clean helpers ------------------------------------------------------
+    kpath = _tmpdb()
+    k = db.connect(kpath)
+    db.register(k, "dead", "SID-D", "worker", "p", now=1.0)
+    e = db.add_task(k, "epic", project="p", owner="dead", now=2.0)
+    s = db.add_task(k, "sub", project="p", owner="dead", parent_id=e, now=3.0)
+    db.set_task_state(k, s, "doing", now=4.0)
+    done = db.add_task(k, "finished", project="p", owner="dead", now=5.0)
+    db.set_task_state(k, done, "done", now=6.0)
+    n = db.reset_owner_tasks(k, "dead")
+    ok &= check("reset_owner_tasks resets non-done owned tasks", n == 2)
+    ok &= check("reset -> todo + unowned",
+                db.get_task(k, e)["state"] == "todo"
+                and db.get_task(k, e)["owner"] is None
+                and db.get_task(k, s)["state"] == "todo")
+    ok &= check("reset leaves done tasks alone",
+                db.get_task(k, done)["state"] == "done"
+                and db.get_task(k, done)["owner"] == "dead")
+
+    db.queue_message(k, "coord", "dead", "you there?", "p", now=7.0)
+    db.queue_message(k, "coord", "dead", "delivered one", "p", now=8.0)
+    # mark one delivered so only the queued one is dropped
+    mid = db.undelivered(k, "dead")[1]["id"]
+    db.mark_delivered(k, mid, now=9.0)
+    dn = db.delete_undelivered_to(k, "dead")
+    ok &= check("delete_undelivered_to drops only queued", dn == 1)
+
+    db.delete_session(k, "dead")
+    ok &= check("delete_session removes the row",
+                db.get_session(k, "dead") is None)
+
+    # prune_messages: delivered + old only
+    db.register(k, "x", "SID-X", "worker", "p", now=10.0)
+    old = db.queue_message(k, "x", "coord", "old", "p", now=100.0)
+    db.mark_delivered(k, old, now=101.0)
+    new = db.queue_message(k, "x", "coord", "new", "p", now=1_000_000.0)
+    db.mark_delivered(k, new, now=1_000_001.0)
+    qd = db.queue_message(k, "x", "coord", "still queued", "p", now=100.0)
+    pn = db.prune_messages(k, older_than_days=7, now=1_000_100.0)
+    ok &= check("prune_messages drops old delivered only", pn == 1)
+    ok &= check("prune keeps queued + recent",
+                any(m["id"] == qd for m in db.undelivered(k)))
+    k.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

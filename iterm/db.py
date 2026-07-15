@@ -330,3 +330,40 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
            ORDER BY CASE state WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1
                     ELSE 2 END, updated_at DESC LIMIT 1""",
         (owner,)).fetchone()
+
+
+# --- clean helpers ---------------------------------------------------------------
+
+def reset_owner_tasks(conn, owner: str, now=None) -> int:
+    """Send every non-done task owned by `owner` back to unowned todo (used by
+    clean when giving up on a dead session)."""
+    cur = conn.execute(
+        "UPDATE tasks SET state='todo', owner=NULL, updated_at=? "
+        "WHERE owner=? AND state!='done'", (_now(now), owner))
+    conn.commit()
+    return cur.rowcount
+
+
+def delete_session(conn, name: str) -> None:
+    conn.execute("DELETE FROM sessions WHERE name=?", (name,))
+    conn.execute("DELETE FROM messages WHERE from_name=? OR to_name=?", (name, name))
+    conn.commit()
+
+
+def delete_undelivered_to(conn, name: str) -> int:
+    cur = conn.execute(
+        "DELETE FROM messages WHERE to_name=? AND delivered_at IS NULL",
+        (name,))
+    conn.commit()
+    return cur.rowcount
+
+
+def prune_messages(conn, older_than_days: float, now=None) -> int:
+    """Drop delivered messages older than the retention window. Queued
+    (undelivered) messages are always kept."""
+    cutoff = _now(now) - older_than_days * 86400
+    cur = conn.execute(
+        "DELETE FROM messages WHERE delivered_at IS NOT NULL AND created_at < ?",
+        (cutoff,))
+    conn.commit()
+    return cur.rowcount
