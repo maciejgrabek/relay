@@ -12,7 +12,6 @@ optional callbacks. The Textual TUI subscribes to it; a headless mode can too.
 from __future__ import annotations
 
 import asyncio
-import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -167,6 +166,15 @@ class Watcher:
                     if self._stop_event.is_set():
                         break
                     if info.hidden and not info.active:
+                        # Hidden & disarmed: nothing to poll. But if we ever
+                        # wrote a prefix here (armed, then hidden, then
+                        # disarmed) it would linger forever - _apply_title
+                        # below never runs. Restore the bare name once first.
+                        if info.session_id in self._titled:
+                            try:
+                                await self._apply_title(info)
+                            except Exception as e:
+                                self._note(f"session error {info.title}: {e}")
                         continue  # hidden & disarmed: skip, per the refresh rule
                     try:
                         res = await self._snapshot(info)
@@ -585,15 +593,27 @@ class Watcher:
 
     async def _restore_titles(self) -> None:
         """On quit: write the bare name back to every session we prefixed.
-        Best-effort - sessions may already be gone."""
+        Best-effort - sessions may already be gone.
+
+        Catch BaseException per session, not just Exception: quit cancels the
+        worker running start(), so a CancelledError (a BaseException) can land
+        on any await here. One cancelled/failed restore must NOT abort the
+        rest, or later sessions keep their stale prefix. If we were cancelled,
+        we still finish every remaining restore, then re-raise CancelledError
+        after the loop so the caller's cancellation semantics are preserved."""
+        cancelled: Optional[BaseException] = None
         for sid in list(self._titled):
             info = self.sessions.get(sid)
             if info is not None and info._iterm_session is not None:
                 try:
                     await info._iterm_session.async_set_name(info.title)
+                except asyncio.CancelledError as e:
+                    cancelled = e   # remember, keep restoring the rest
                 except Exception:
                     pass
             self._titled.discard(sid)
+        if cancelled is not None:
+            raise cancelled
 
     async def focus_session(self, sid: str) -> bool:
         """Bring the real iTerm2 tab for this session to the foreground."""
