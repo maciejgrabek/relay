@@ -187,5 +187,95 @@ async def go():
     return ok
 
 
+# A minimal idle Claude tail that satisfies swarm.claude_prompt_ready:
+# a ready marker in the last 3 lines and a chrome bottom line.
+_READY_SCREEN = [
+    "│ >                                        │",
+    "╰──────────────────────────────────────────╯",
+    "  ? for shortcuts",
+]
+
+
+async def deliver_tests():
+    """Drive Watcher._deliver directly against a fake session + monkeypatched
+    swarmdb/audit/notify_mac, asserting the audit-before-act delivery contract.
+    """
+    from watcher import Watcher, SessionInfo
+    import swarm as S
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    audited = []
+    delivered = []
+    W.notify_mac = lambda *a, **k: None
+    W.audit.record = lambda *a, **k: (audited.append(a), True)[1]
+    W.swarmdb.mark_delivered = lambda conn, mid, **k: delivered.append(mid)
+
+    def _mk(w, sid, name, state="idle"):
+        fs = FakeSession()
+        info = SessionInfo(sid, title=name, _iterm_session=fs, state=state)
+        info.last_screen = list(_READY_SCREEN)
+        w.registry[sid] = {"name": name, "iterm_session_id": sid}
+        w.sessions[sid] = info
+        return info, fs
+
+    # HAPPY PATH: idle + ready + queued + audit ok -> body then \r, THEN marked.
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 7, "from_name": "coord", "body": "hi"}]
+    w = Watcher(connection=None, dry_run=False)
+    w._db = object()                     # non-None so _swarm_conn won't connect
+    info, fs = _mk(w, "sid1", "worker-1")
+    await w._deliver(info)
+    body = S.delivery_text("coord", "hi")
+    chk("deliver: body sent then Enter (two sends)", fs.sent == [body, "\r"])
+    chk("deliver: marked delivered after the sends", delivered == [7])
+    chk("deliver: audited once", len(audited) == 1)
+
+    # AUDIT FAILS: nothing sent, message NOT marked delivered.
+    W.audit.record = lambda *a, **k: False
+    delivered.clear()
+    info2, fs2 = _mk(w, "sid2", "worker-2")
+    await w._deliver(info2)
+    chk("audit-fail: nothing sent", fs2.sent == [])
+    chk("audit-fail: not marked delivered", delivered == [])
+
+    # NON-IDLE: no DB query, nothing sent.
+    W.audit.record = lambda *a, **k: (audited.append(a), True)[1]
+    q = {"n": 0}
+
+    def _counting_undelivered(conn, name=None):
+        q["n"] += 1
+        return [{"id": 9, "from_name": "c", "body": "x"}]
+    W.swarmdb.undelivered = _counting_undelivered
+    info3, fs3 = _mk(w, "sid3", "worker-3", state="working")
+    await w._deliver(info3)
+    chk("non-idle: no DB query", q["n"] == 0)
+    chk("non-idle: nothing sent", fs3.sent == [])
+
+    # DRY-RUN: nothing sent, not marked, audited once as would-deliver; a
+    # second call does NOT re-audit.
+    audited.clear()
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 11, "from_name": "c", "body": "y"}]
+    w.dry_run = True
+    info4, fs4 = _mk(w, "sid4", "worker-4")
+    await w._deliver(info4)
+    await w._deliver(info4)
+    would = [a for a in audited if a and a[0] == "would-deliver"]
+    chk("dry-run: nothing sent", fs4.sent == [])
+    chk("dry-run: not marked delivered", 11 not in delivered)
+    chk("dry-run: audited once, second call does not re-audit", len(would) == 1)
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
-    sys.exit(0 if asyncio.run(go()) else 1)
+    r1 = asyncio.run(go())
+    r2 = asyncio.run(deliver_tests())
+    sys.exit(0 if (r1 and r2) else 1)
