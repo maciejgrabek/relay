@@ -400,6 +400,21 @@ class RelayApp(App):
         if not info:
             preview.update("")
             return
+        if sid == self._own_sid:
+            # Previewing relay's own tab would mirror the whole UI into itself
+            # (an infinite RELAY-inside-RELAY). Relay also never acts on its own
+            # session, so there is nothing to watch here.
+            w = max(40, preview.size.width - 2)
+            bar = "═" * w
+            preview.update(
+                f"╔{bar}╗\n"
+                f" ▓ THIS IS THE RELAY PANEL\n"
+                f"╚{bar}╝\n"
+                "\n"
+                " Relay does not monitor or act on its own tab - there is\n"
+                " nothing to preview here. Move the cursor to another session\n"
+                " to see its live terminal feed.\n")
+            return
         mode = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE"}.get(info.mode, "MANUAL")
         loc = "QUARANTINED" if info.hidden else "ACTIVE"
         # Size the frame to the pane width so the header bars span the full pane.
@@ -420,9 +435,10 @@ class RelayApp(App):
         # fresh screen for the now-selected session so it reflects reality NOW.
         self._update_preview()
         sid = self._selected_sid()
-        if sid and self.watcher:
+        if sid and sid != self._own_sid and self.watcher:
             # exclusive=True: fast j/k scrolling cancels the prior pull instead
             # of piling up N concurrent iTerm2 reads on the shared connection.
+            # Skip relay's own tab: reading its screen is what feeds the mirror.
             self.run_worker(self._pull_and_show(sid), exclusive=True,
                             group="preview-pull")
 
