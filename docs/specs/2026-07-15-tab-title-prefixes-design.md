@@ -1,7 +1,7 @@
 # Tab-Title Status Prefixes + Config File - Design Spec
 
 **Date:** 2026-07-15
-**Status:** Approved for planning
+**Status:** Implemented (see docs/plans/2026-07-15-tab-title-prefixes.md)
 
 ## Summary
 

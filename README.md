@@ -365,8 +365,70 @@ Environment variables (set before launching `relay`):
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
 | `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
 
+Two of these - `RELAY_STALE_MINUTES` and `RELAY_NOTIFY_COOLDOWN` - also have a
+home in the config file below. **Precedence: defaults < config file <
+environment variable.** The env var always wins, so anything already set in
+your shell keeps working unchanged.
+
 Risk posture (which commands auto-approve vs escalate) is edited directly in
 [`lib/danger.sh`](lib/danger.sh).
+
+### Configuration file
+
+`~/.relay/config`, INI format (override the path with `RELAY_CONFIG`). Read
+once at startup. A missing file, missing section, or missing key silently
+falls back to the default; a malformed file logs one warning line and falls
+back too - it never crashes the TUI.
+
+```ini
+# ~/.relay/config
+[titles]
+style = hybrid         ; off | glyphs | words | hybrid (default off)
+
+[sounds]
+alert = /System/Library/Sounds/Sosumi.aiff
+done  = /System/Library/Sounds/Glass.aiff
+
+[swarm]
+stale_minutes   = 10
+notify_cooldown = 30
+```
+
+Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
+`RELAY_CONFIG`), session-scoped flags (`RELAY_NO_CAFFEINATE`,
+`RELAY_NO_REACTOR`, `--dry-run`), the spawn boot delay, `lib/danger.sh`'s
+rules (own home), and the title glyph/word vocabulary (it doubles as the
+strip-parser - a configurable vocabulary would double the bug surface).
+
+### Tab-title prefixes
+
+Set `[titles] style` and Relay rewrites the iTerm2 tab title itself, so arm
+mode and attention state are glanceable on the tab bar without opening the
+TUI - `✦[BLOCKED] api-server`.
+
+| situation          | glyphs   | words                    | hybrid            |
+| ------------------ | -------- | ------------------------ | ----------------- |
+| safe, working      | `◉ api`  | `[SAFE] api`             | `◉ api`           |
+| insane, blocked    | `✦⊘ api` | `[INSANE][BLOCKED] api`  | `✦[BLOCKED] api`  |
+| safe, prompting    | `◉‼ api` | `[SAFE][AWAITING] api`   | `◉[AWAITING] api` |
+| armed, stale       | `◉⧗ api` | `[SAFE][STALE] api`      | `◉[STALE] api`    |
+| manual, blocked    | `⊘ api`  | `[BLOCKED] api`          | `[BLOCKED] api`   |
+| manual, idle       | `api`    | `api`                    | `api`             |
+
+Relay only writes a title for a session that's **armed (any level) or in an
+attention state** (prompting, blocked, or stale) - a manual, idle tab is left
+untouched. If a manual+idle session was previously prefixed, Relay writes the
+bare name back once and then leaves it alone. On quit, Relay restores the
+bare name on every session it wrote to during that run (best-effort - a
+session may already be closed). `style = off` is fully inert on the write
+path (it still strips on read, so a leftover prefix from an old run gets
+cleaned up), and titles are **never touched in `--dry-run`** - the same
+"dry-run mutates nothing" guarantee as everything else in this repo.
+
+**Crash honesty:** if relay dies without restoring, a prefix lingers on the
+tab bar until relay next runs (its write path self-heals: it strips on read
+and rewrites/restores) or you rename the tab yourself. Same residue class as
+any other tool that writes tab titles.
 
 ## Project layout
 
@@ -377,11 +439,15 @@ relay/
   iterm/watcher.py       # iTerm2 connection: stream screens, run gates, inject, deliver
   iterm/gates.py         # pure gate logic (type + safety), no iTerm2 imports
   iterm/audit.py         # durable audit log of unattended decisions
+  iterm/config.py        # ~/.relay/config loader (titles/sounds/swarm), pure stdlib
+  iterm/titles.py        # tab-title render/strip, pure, no iTerm2 imports
   iterm/db.py            # swarm SQLite schema + connection (~/.relay/relay.db)
   iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
   iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
   iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
   iterm/test_*.py        # gate/TUI/swarm suites, built from real captured prompts
+  iterm/test_config.py   # config loader tests (temp files, precedence)
+  iterm/test_titles.py   # render/strip round-trip tests
   iterm/test_db.py       # swarm schema + query tests (temp DB file)
   iterm/test_swarm.py    # delivery/staleness/rendering logic tests
   iterm/test_cli.py      # CLI verb tests against a temp DB file
