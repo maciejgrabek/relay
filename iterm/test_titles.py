@@ -31,7 +31,7 @@ def run():
     ok &= check("words: safe prompting", render("words", "safe", "prompting", False, N) == f"[SAFE][AWAITING] {N}")
     ok &= check("hybrid: safe prompting", render("hybrid", "safe", "prompting", False, N) == f"◉[AWAITING] {N}")
 
-    ok &= check("glyphs: safe stale", render("glyphs", "safe", "idle", True, N) == f"◉? {N}")
+    ok &= check("glyphs: safe stale", render("glyphs", "safe", "idle", True, N) == f"◉⧗ {N}")
     ok &= check("words: safe stale", render("words", "safe", "idle", True, N) == f"[SAFE][STALE] {N}")
     ok &= check("hybrid: safe stale", render("hybrid", "safe", "idle", True, N) == f"◉[STALE] {N}")
 
@@ -62,6 +62,9 @@ def run():
     ok &= check("empty title", strip_prefix("") == "")
     ok &= check("prefix-like glyph inside name kept",
                 strip_prefix("api ◉ server") == "api ◉ server")
+    ok &= check("user '? help' title preserved", strip_prefix("? help") == "? help")
+    ok &= check("stale glyph round-trip",
+                strip_prefix(render("glyphs", "off", "idle", True, "api")) == "api")
 
     # --- round-trip property over the full input space ------------------------
     rt = True

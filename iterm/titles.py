@@ -16,14 +16,16 @@ import re
 MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦"}
 MODE_WORD = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE"}
 # Attention priority: blocked > prompting > stale. One state indicator max.
-STATE_GLYPH = {"blocked": "⊘", "prompting": "‼", "stale": "?"}
+# stale uses "⧗" - a glyph nobody types in a real tab title, so strip_prefix
+# can never eat a user's name.
+STATE_GLYPH = {"blocked": "⊘", "prompting": "‼", "stale": "⧗"}
 STATE_WORD = {"blocked": "BLOCKED", "prompting": "AWAITING", "stale": "STALE"}
 
 # Strip exactly one leading relay prefix: an optional mode glyph, an optional
 # state glyph, then up to two known bracket words, then the separating space.
 # Unknown bracket words ([WIP]) don't match, so user titles survive.
 _PREFIX_RE = re.compile(
-    r"^[◉▲✦]?[‼⊘?]?"
+    r"^[◉▲✦]?[‼⊘⧗]?"
     r"(?:\[(?:SAFE|WILD|INSANE|AWAITING|BLOCKED|STALE)\]){0,2}"
     r" ")
 
