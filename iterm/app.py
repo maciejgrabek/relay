@@ -241,6 +241,7 @@ class RelayApp(App):
                 connection,
                 on_change=self._safe_refresh,
                 dry_run=self.dry_run,
+                own_sid=self._own_sid,
             )
             # One poll loop reads every visible/armed session every 2s.
             await self.watcher.start(interval=2.0)

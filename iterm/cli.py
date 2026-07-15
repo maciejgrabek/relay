@@ -68,9 +68,15 @@ def cmd_register(args) -> int:
     sid = my_iterm_id()
     if not sid:
         return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    name = args.name.strip()
+    if not name:
+        return _err("name cannot be empty")
+    if name == "relay":
+        return _err("'relay' is reserved - it is the sender name for system "
+                    "wake-ups; pick another name")
     conn = db.connect()
-    db.register(conn, args.name, sid, args.role, args.project or "")
-    print(f"registered '{args.name}' as {args.role}"
+    db.register(conn, name, sid, args.role, args.project or "")
+    print(f"registered '{name}' as {args.role}"
           + (f" on project '{args.project}'" if args.project else ""))
     return 0
 

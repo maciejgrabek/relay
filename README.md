@@ -215,6 +215,76 @@ Tunable via `RELAY_AUDIT_LOG` and `RELAY_AUDIT_RETENTION_DAYS`.
 tail -50 ~/.relay/audit.jsonl | jq -r 'select(.verdict=="auto-approved") | "\(.session): \(.command)"'
 ```
 
+## Examples
+
+### Walk away from a few long jobs
+
+```bash
+# 1. Open 2-3 iTerm2 tabs and start whatever you want babysat -
+#    a build, a test loop, a Claude Code session working a task.
+# 2. Launch the panel:
+relay
+# 3. Cursor to a tab you trust, press SPACE to arm it (◉ SAFE).
+#    Relay now auto-clears that tab's safe permission prompts and
+#    pings you (sound + notification) on anything dangerous.
+# 4. Walk away. Come back when you hear a ping, or check the audit log:
+tail -f ~/.relay/audit.jsonl
+```
+
+With only relay's own tab open you get a getting-started panel - that is
+expected; relay controls the sessions *around* it.
+
+### Run a coordinated swarm
+
+From one session, become the coordinator, spawn armed workers, hand out
+work, and let relay ferry the messages:
+
+```bash
+# in a Claude Code session (or your shell), register as coordinator:
+relay register --name coord --role coordinator --project webshop
+
+# spawn two workers, each ARMED so it can act unattended (a new tab per worker):
+relay spawn --name bff  --project webshop --dir ~/work/bff --arm wild "await your task"
+relay spawn --name api  --project webshop --dir ~/work/api --arm wild "await your task"
+
+# assign an epic to each - the owner is woken automatically with the task:
+relay task add "add /checkout endpoint" --owner bff --project webshop
+relay task add "checkout order model"   --owner api --project webshop \
+               --blocked-by 1     # api's task waits until the bff task is done
+
+# launch the panel and watch it happen (TAB toggles the swarm board):
+relay
+```
+
+Workers report back by messaging the coordinator; those messages are typed
+into the coordinator session's prompt when it is idle. When the bff task is
+marked done, relay automatically wakes the api worker (its blocker cleared).
+
+### Check swarm health without the TUI
+
+If you launched relay and feel stuck, or a worker seems frozen, ask from any
+shell:
+
+```bash
+relay doctor
+# relay <sha> <date>
+#   sessions: 2 registered   (bff mode=wild doing #1, api mode=wild ...)
+#   messages: 0 queued
+#   tasks: 1 doing, 1 blocked
+#   !! possible stall: #1 'add /checkout endpoint' doing, no update in 22m
+```
+
+`relay doctor` reads the database only - it never changes anything - and
+flags the two things that silently trap people: messages piling up
+undelivered (the panel is not running) and tasks stuck in `doing`.
+
+### Update to the latest version
+
+```bash
+relay version          # what you have now
+relay update           # fetch + fast-forward (safe: stops on local changes)
+```
+
 ## Swarm
 
 Relay is also a session control plane: named Claude Code sessions register

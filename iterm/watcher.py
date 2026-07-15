@@ -102,8 +102,13 @@ class Watcher:
                  done_sound=None,
                  on_change: Optional[Callable[[], None]] = None,
                  dry_run: bool = False,
-                 cfg=None):
+                 cfg=None,
+                 own_sid=None):
         self.connection = connection
+        # Relay's own tab (bare UUID). Relay must never auto-approve prompts in,
+        # or inject into, its own session - that would be relay pressing keys on
+        # itself. Display-only for the own tab, always.
+        self.own_sid = own_sid
         # Config: defaults < ~/.relay/config < env (load() applies all three).
         if cfg is None:
             cfg, cfg_warnings = relay_config.load()
@@ -321,6 +326,8 @@ class Watcher:
 
         if not info.active:
             return  # unarmed: display only, no alert / no audit / no inject
+        if info.session_id == self.own_sid:
+            return  # relay's own tab: never act on itself, whatever its mode
 
         # Armed. Debounce: act at most once per distinct prompt instance.
         if decision.prompt_id is not None and decision.prompt_id == info._last_prompt_id:
@@ -479,6 +486,8 @@ class Watcher:
         """Deliver AT MOST ONE queued message into a registered session, only
         when it is idle at Claude's input box. Audit before act, like
         approvals. One per tick keeps the injected turns observable."""
+        if info.session_id == self.own_sid:
+            return  # never type a swarm message into relay's own panel tab
         reg = self.registry.get(info.session_id)
         if not reg:
             return

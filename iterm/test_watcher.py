@@ -96,6 +96,18 @@ async def go():
     chk("armed safe: exactly 1 Enter", fsafe.sent == ["\r"])
     chk("armed safe: n_approved == 1", s.n_approved == 1)
 
+    # OWN TAB: even armed safe with a safe prompt, relay must never act on its
+    # own panel session (that would be relay pressing keys on itself).
+    w.own_sid = "me"
+    fown = FakeSession()
+    me = SessionInfo("me", title="relay", _iterm_session=fown, mode="safe")
+    w.sessions["me"] = me
+    for _ in range(3):
+        await w._handle(me, sraw, shard)
+    chk("own tab: never injected", fown.sent == [])
+    chk("own tab: never auto-approved", me.n_approved == 0)
+    w.own_sid = None
+
     # SAFETY: if the audit write FAILS, must NOT inject (escalate instead).
     W.audit.record = lambda *a, **k: False   # simulate log write failure
     notify["n"] = 0
