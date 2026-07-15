@@ -24,6 +24,8 @@ from textual.containers import Horizontal, Vertical  # noqa: E402
 from textual.widgets import DataTable, Footer, Static, Log  # noqa: E402
 
 import audit  # noqa: E402
+import db as swarmdb  # noqa: E402
+import swarm as swarmlogic  # noqa: E402
 from watcher import Watcher  # noqa: E402
 
 # Retro phosphor-green CRT terminal aesthetic. Big block logo (ANSI Shadow figlet).
@@ -117,6 +119,10 @@ class RelayApp(App):
         height: 7; border-top: solid #1d5c38;
         background: #010602; color: #2a7d4f;
     }
+    #swarmview {
+        display: none; height: 1fr; padding: 0 2;
+        background: #010602; color: #2fc866;
+    }
     Footer { background: #061a0e; color: #2a7d4f; }
     Footer > .footer--key { background: #0d3a22; color: #ffb000; text-style: bold; }
     Footer > .footer--description { color: #3aff7a; }
@@ -135,6 +141,7 @@ class RelayApp(App):
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
+        Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -148,6 +155,8 @@ class RelayApp(App):
         self._temp = 0.0          # reactor temperature (integrates toward pressure)
         self._tick = 0            # frame counter for the CRITICAL pulse
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
+        self._swarm_visible = False
+        self._swarm_db = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -158,6 +167,7 @@ class RelayApp(App):
             with Horizontal(id="middle"):
                 yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
                 yield Static("", id="preview", markup=False)
+            yield Static("", id="swarmview", markup=False)
             yield Log(id="log", max_lines=200)
         yield Footer()
 
@@ -294,6 +304,8 @@ class RelayApp(App):
             f"[#ffb000]{armed} armed[/] [#2a7d4f]·[/] "
             f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{dry}")
         self._update_preview()
+        if self._swarm_visible:
+            self._render_swarm_view()
 
     def _tick_reactor(self) -> None:
         """Integrate reactor temp toward current pressure and render the meter.
@@ -408,6 +420,32 @@ class RelayApp(App):
         if self.watcher:
             self.watcher.set_all(False)
             self._refresh()
+
+    # --- swarm view (TAB toggles a full-width kanban board) -------------------
+    def action_swarm_view(self) -> None:
+        self._swarm_visible = not self._swarm_visible
+        on = self._swarm_visible
+        self.query_one("#middle").styles.display = "none" if on else "block"
+        self.query_one("#log").styles.display = "none" if on else "block"
+        self.query_one("#swarmview").styles.display = "block" if on else "none"
+        if on:
+            self._render_swarm_view()
+
+    def _render_swarm_view(self) -> None:
+        import time as _time
+        try:
+            if self._swarm_db is None:
+                self._swarm_db = swarmdb.connect()
+            sessions = [dict(r) for r in swarmdb.list_sessions(self._swarm_db)]
+            tasks = [dict(r) for r in swarmdb.list_tasks(self._swarm_db)]
+            msgs = [dict(r) for r in swarmdb.message_history(self._swarm_db,
+                                                             limit=8)]
+            w = max(60, self.query_one("#swarmview").size.width - 4)
+            text = swarmlogic.render_swarm(sessions, tasks, msgs,
+                                           _time.time(), width=w)
+        except Exception as e:
+            text = f"swarm db unavailable: {e}"
+        self.query_one("#swarmview", Static).update(text)
 
     # --- hide / show ----------------------------------------------------------
     def action_hide(self) -> None:

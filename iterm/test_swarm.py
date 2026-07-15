@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from swarm import (  # noqa: E402
     parse_blockers, unblocked_by_completion, wakeup_assignment_body,
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
+    render_swarm,
 )
 
 
@@ -95,6 +96,40 @@ def run():
     r = stale_reason(2000.0, 600, doing_since=1000.0, screen_changed_ts=None)
     ok &= check("doing + no screen data falls back to doing_since", r is not None)
     ok &= check("no signals -> None", stale_reason(2000.0, 600) is None)
+
+    # render_swarm: board columns, epic progress, messages
+    sessions = [
+        {"name": "coord", "role": "coordinator", "project": "webshop",
+         "status_text": "orchestrating", "last_seen": 950.0},
+        {"name": "bff-worker", "role": "worker", "project": "webshop",
+         "status_text": "on #2", "last_seen": 990.0},
+    ]
+    tasks = [
+        {"id": 1, "project": "webshop", "parent_id": None, "title": "BFF epic",
+         "state": "doing", "owner": "bff-worker", "spec_path": "/s/bff.md",
+         "blocked_by": ""},
+        {"id": 2, "project": "webshop", "parent_id": 1, "title": "endpoint",
+         "state": "done", "owner": "bff-worker", "spec_path": None,
+         "blocked_by": ""},
+        {"id": 3, "project": "webshop", "parent_id": 1, "title": "tests",
+         "state": "todo", "owner": "bff-worker", "spec_path": None,
+         "blocked_by": ""},
+        {"id": 4, "project": "webshop", "parent_id": None, "title": "review",
+         "state": "blocked", "owner": "coord", "spec_path": None,
+         "blocked_by": "3"},
+    ]
+    msgs = [{"from_name": "coord", "to_name": "bff-worker", "body": "go",
+             "created_at": 900.0, "delivered_at": 901.0}]
+    out = render_swarm(sessions, tasks, msgs, now=1000.0, width=100)
+    ok &= check("board has the four columns",
+                all(h in out for h in ("TODO", "DOING", "BLOCKED", "DONE")))
+    ok &= check("tasks appear in their columns",
+                "#3" in out and "#2" in out and "#4" in out)
+    ok &= check("epic progress rendered", "1/2" in out and "BFF epic" in out)
+    ok &= check("session roster with roles",
+                "coord" in out and "bff-worker" in out)
+    ok &= check("message feed present", "coord -> bff-worker: go" in out)
+    ok &= check("empty inputs render", render_swarm([], [], [], 0.0) != "")
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
