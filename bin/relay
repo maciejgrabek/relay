@@ -20,7 +20,7 @@ set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
   -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  register|send|status|task|inbox|msgs|spawn|doctor|version|update)
+  register|send|status|task|inbox|msgs|spawn|doctor|version|update|clean)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 exec python3 "$HERE/../iterm/app.py" "$@"

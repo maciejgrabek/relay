@@ -189,6 +189,30 @@ def run():
     ok &= check("register --dir stores workdir",
                 code == 0 and db.get_session(conn, "ctxw")["workdir"] == "/work/ctx")
 
+    # --- clean: reset + remove closed sessions, plan/dry-run/confirm ---------
+    import db as _db
+    cc = db.connect()
+    # a closed session owning a doing task
+    _db.register(cc, "deadw", "DW", "worker", "webshop", now=1.0)
+    ct = _db.add_task(cc, "half done", project="webshop", owner="deadw", now=2.0)
+    _db.set_task_state(cc, ct, "doing", now=3.0)
+    _db.mark_closed(cc, "deadw", 400.0)
+
+    code, out, _ = run_cli("clean", "--project", "webshop", "--dry-run",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("clean --dry-run shows plan, changes nothing",
+                code == 0 and "deadw" in out
+                and db.get_session(cc, "deadw") is not None
+                and db.get_task(cc, ct)["state"] == "doing")
+    code, out, _ = run_cli("clean", "--project", "webshop", "--yes",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("clean --yes resets task to unowned todo",
+                code == 0 and db.get_task(cc, ct)["state"] == "todo"
+                and db.get_task(cc, ct)["owner"] is None)
+    ok &= check("clean --yes removes the closed session row",
+                db.get_session(cc, "deadw") is None)
+    cc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

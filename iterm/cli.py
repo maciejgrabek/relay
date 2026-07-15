@@ -45,6 +45,13 @@ def _err(msg: str) -> int:
     return 1
 
 
+def _confirm(question: str) -> bool:
+    try:
+        return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
 def _require_me(conn):
     me = whoami(conn)
     if me is None:
@@ -378,6 +385,26 @@ def cmd_spawn(args) -> int:
     return 0
 
 
+def cmd_clean(args) -> int:
+    import swarm
+    conn = db.connect()
+    sessions = [dict(r) for r in db.closed_sessions(conn, args.project)]
+    tasks = [dict(r) for r in db.list_tasks(conn, project=args.project)]
+    cands = swarm.clean_candidates(sessions, tasks)
+    print(swarm.clean_plan_text(cands))
+    if not cands or args.dry_run:
+        return 0
+    if not args.yes and not _confirm(f"clean {len(cands)} session(s)?"):
+        print("aborted.")
+        return 0
+    for c in cands:
+        db.reset_owner_tasks(conn, c["name"])
+        db.delete_undelivered_to(conn, c["name"])
+        db.delete_session(conn, c["name"])
+    print(f"cleaned {len(cands)} session(s).")
+    return 0
+
+
 # --- parser --------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -452,6 +479,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     up = sub.add_parser("update", help="fetch + fast-forward to the latest relay")
     up.set_defaults(fn=cmd_update)
+
+    cl = sub.add_parser("clean", help="reset abandoned tasks + remove dead "
+                                      "sessions")
+    cl.add_argument("--project", default=None)
+    cl.add_argument("--yes", action="store_true")
+    cl.add_argument("--dry-run", dest="dry_run", action="store_true")
+    cl.set_defaults(fn=cmd_clean)
 
     return p
 
