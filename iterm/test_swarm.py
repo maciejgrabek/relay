@@ -189,6 +189,15 @@ def run():
                 "will not act" in restore_plan_text(auto, spawn_arm="off"))
     ok &= check("named-live plan notes zombie tab",
                 "zombie" in restore_plan_text(named, spawn_arm="wild"))
+    miss_txt = restore_plan_text(
+        [{"name": "bff", "role": "worker", "project": "shop",
+          "workdir": "/nonexistent/relay-x", "spawn_prompt": "bff work",
+          "task_ids": [1], "live": False}],
+        spawn_arm="wild", missing_workdirs={"bff"})
+    ok &= check("missing workdir renders SKIP line",
+                "workdir no longer exists" in miss_txt and "SKIP bff" in miss_txt)
+    ok &= check("empty restore plan notes nothing to restore",
+                "(nothing to restore)" in restore_plan_text([], spawn_arm="wild"))
 
     cc = clean_candidates(S, T)
     ok &= check("clean candidates = all closed sessions",
