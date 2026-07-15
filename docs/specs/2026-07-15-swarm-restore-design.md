@@ -57,13 +57,23 @@ Add three columns to `sessions`:
 
 ## 3. Liveness (`closed_at`)
 
-The watcher is the authority on which iTerm2 tabs exist. Each tick (and on the
-first pass at startup), for every registered session:
+The watcher is the authority on which iTerm2 tabs exist. Each tick, for every
+registered session:
 
-- iterm_session_id NOT among the live tabs (`self.sessions`) and `closed_at==0`
-  -> stamp `closed_at = now`, log `CLOSED <name>`.
-- iterm_session_id IS live and `closed_at != 0` -> clear it (the tab
-  reappeared, e.g. a restore respawned it).
+- iterm_session_id NOT among the live tabs (`self.sessions`) -> increment an
+  in-memory miss counter for that sid; once it reaches **2 consecutive misses**
+  and `closed_at==0`, stamp `closed_at = now` and log `CLOSED <name>`.
+- iterm_session_id IS live -> reset the miss counter, and if `closed_at != 0`
+  clear it (the tab reappeared, e.g. a restore respawned it).
+
+**Startup-race guard (self-review finding).** The closed marking runs ONLY on
+a tick whose roster sync succeeded (a flag set after `_sync_sessions` returns
+without raising). Without this, a first tick that hasn't yet enumerated tabs -
+or a transient iTerm2 error that empties `self.sessions` - would falsely mark
+every registered session closed, flap `closed_at`, and let a `restore` run in
+that window try to revive live sessions. The 2-miss debounce plus the
+sync-succeeded gate together make a false "closed" require two consecutive
+good syncs that both lack the tab.
 
 `db.register()` also clears `closed_at` (a respawn under the same name revives
 it). New helpers: `db.mark_closed(conn, name, ts)`, `db.clear_closed(conn,
@@ -72,17 +82,35 @@ name)`, `db.closed_sessions(conn, project=None)`.
 Startup coverage: because the watcher does a full pass on startup, a death
 that happened while relay was closed is detected the next time relay runs.
 
-## 4. `relay restore [--project P] [--yes] [--dry-run]`
+## 4. `relay restore [names...] [--project P] [--yes] [--dry-run]`
 
 Resume abandoned work.
 
-1. Find candidates: sessions with `closed_at != 0` that still own at least one
-   non-`done` task. Group by session (name, role, workdir).
+**Two entry modes (self-review finding: the common case is stalled, not
+closed).** A worker often does not *close* its tab - it ends its turn or sits
+on a question, tab still open, task stuck `doing`. `closed_at` never fires for
+those, so auto-restore alone would miss them:
+
+- **Auto (no names):** candidates are sessions with `closed_at != 0` that own a
+  non-`done` task - unambiguously dead tabs, safe to revive without asking
+  which.
+- **Manual (`relay restore designer critic`):** restore the named sessions
+  regardless of `closed_at`, so a stalled-but-open worker can be revived on the
+  user's judgement. If the old tab is still open, the respawn rebinds the name
+  to the NEW tab; the old tab becomes a harmless unregistered zombie the user
+  can close. The plan output warns when a named target is still live.
+
+Flow:
+
+1. Resolve candidates (auto or named). Group by session (name, role, workdir).
 2. Print a plan, one line per candidate: `restore <name> (<role>) in <workdir>
-   - N task(s): #a #b`. A candidate whose `workdir` is empty is listed as
-   `SKIP <name> - no known workdir (use relay clean, or re-run in the dir)`.
+   - N task(s): #a #b`, with `[tab still open - old tab left as a zombie]`
+   appended when applicable. A candidate whose `workdir` is empty is listed as
+   `SKIP <name> - no known workdir (use relay clean, or re-run relay in the
+   dir)`. If `spawn_arm` resolves to `off`, print a one-line warning that
+   restored workers will not act unattended (arm them or set `spawn_arm`).
 3. Stop here if `--dry-run`. Otherwise, unless `--yes`, ask for confirmation
-   (`restore N session(s)? [y/N]`) reading from stdin.
+   (`restore N session(s)? [y/N]`) from stdin.
 4. For each confirmed candidate, `spawn_worker(name, project, resume_prompt,
    workdir, role, arm=<config spawn_arm>)`. Reusing the same name rebinds the
    session and clears `closed_at`; the tasks are already owned by that name.
@@ -122,19 +150,25 @@ older_than_days, now)`.
 - The watcher exposes `orphan_count` (closed sessions owning non-done tasks).
 - When `orphan_count > 0`, the subtitle carries a hint:
   `N task(s) orphaned by closed sessions - press R to restore, or 'relay clean'`.
-- A new `R` binding runs restore from the TUI: it spawns the candidates (same
-  code path as the CLI verb, armed per config) after a one-key confirm. Because
-  spawning opens tabs, `R` shows a brief confirm state first (press R again to
-  proceed), not an instant fan-out.
+- A new `R` binding runs restore from the TUI. To avoid entangling tab-spawning
+  with the Textual event loop, `R` **shells out** to `bin/relay restore --yes
+  --project <active>` as a subprocess (the same verb, which spawns in its own
+  process). Because spawning opens tabs, `R` shows a brief confirm state first
+  (press R again within a couple seconds to proceed), not an instant fan-out.
+  Auto-restore only (closed sessions); manual by-name restore stays a CLI action.
 - The swarm view (TAB) marks a task whose owner is closed with a `!` and the
   owner dimmed, so orphans are visible on the board.
 
 ## 8. CLI wiring
 
-`bin/relay` dispatches `restore` and `clean` to `cli.py`. `restore` and
-`clean` need iTerm2 only for the actual spawn (restore) - the planning and
-`clean` are pure DB and work headless. `relay doctor` gains an "orphans: N"
-line and lists closed sessions owning work.
+`bin/relay` dispatches `restore` and `clean` to `cli.py`. `restore` takes
+optional positional `names`. Planning and `clean` are pure DB and work
+headless; only restore's spawn step needs iTerm2. `relay doctor` gains an
+"orphans: N" line and lists closed sessions owning work.
+
+Also: `clean` drops **undelivered** messages addressed TO a session it deletes
+(they could never be delivered once the session row is gone); message history
+keeps the name strings on remaining rows since there is no foreign key.
 
 ## 9. Testing
 
@@ -155,4 +189,21 @@ line and lists closed sessions owning work.
 Restoring the exact conversation/context of the dead Claude session (relay
 only knows tasks + mission, not the transcript); auto-restore without any
 confirmation; restoring across machines; snapshotting partial file work
-(that lives in git / on disk already).
+(that lives in git / on disk already); relay auto-closing a stalled worker's
+old tab on manual restore (it is left as a zombie for the user to close -
+relay closing a user's tab is too aggressive for v1).
+
+## Self-review summary (findings folded in above)
+
+1. **Stalled != closed.** The live failure case is a worker whose tab is still
+   open but idle; `closed_at` misses it. Fixed by adding manual
+   `relay restore <names>` alongside closed-only auto-restore (section 4).
+2. **closed_at startup race.** A first/failed roster sync could false-mark
+   everything closed. Fixed with a 2-miss debounce + sync-succeeded gate
+   (section 3).
+3. **Restore into `spawn_arm=off`** revives workers that immediately re-stall
+   unarmed. Fixed with a warning in the plan (section 4).
+4. **TUI spawning on the Textual loop** is fragile. Fixed by shelling out to
+   the CLI verb (section 7).
+5. **clean vs restore ordering** (clean destroys restore's workdir context) -
+   already called out in the summary at the top; both verbs confirm first.
