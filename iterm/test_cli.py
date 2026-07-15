@@ -213,6 +213,32 @@ def run():
                 db.get_session(cc, "deadw") is None)
     cc.close()
 
+    # --- restore: plan + dry-run (spawn side is live-only) ------------------
+    rc = db.connect()
+    import db as _db2
+    _db2.register(rc, "rw", "RW", "worker", "webshop", now=1.0)
+    _db2.set_session_context(rc, "rw", "/work/rw", "do the thing")
+    rt = _db2.add_task(rc, "unfinished", project="webshop", owner="rw", now=2.0)
+    _db2.set_task_state(rc, rt, "doing", now=3.0)
+    _db2.mark_closed(rc, "rw", 500.0)
+
+    code, out, _ = run_cli("restore", "--project", "webshop", "--dry-run",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("restore --dry-run plans, spawns nothing",
+                code == 0 and "restore rw" in out and "/work/rw" in out
+                and "#" + str(rt) in out
+                and db.get_session(rc, "rw")["closed_at"] == 500.0)
+
+    # no-workdir closed session is SKIPped
+    _db2.register(rc, "nowd", "NW", "worker", "webshop", now=4.0)
+    nt = _db2.add_task(rc, "x", project="webshop", owner="nowd", now=5.0)
+    _db2.set_task_state(rc, nt, "doing", now=6.0)
+    _db2.mark_closed(rc, "nowd", 500.0)
+    code, out, _ = run_cli("restore", "--project", "webshop", "--dry-run",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("restore skips no-workdir session", "SKIP nowd" in out)
+    rc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
