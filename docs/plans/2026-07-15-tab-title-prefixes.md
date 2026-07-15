@@ -878,7 +878,7 @@ In `docs/specs/2026-07-15-tab-title-prefixes-design.md` change
 
 ```bash
 ./test/run.sh                              # ALL SUITES PASSED
-grep -rn $'—' iterm/ README.md docs/specs/2026-07-15-tab-title-prefixes-design.md || echo "no em-dashes"
+grep -rn $'\u2014' iterm/ README.md docs/specs/2026-07-15-tab-title-prefixes-design.md || echo "no em-dashes"
 python3 - <<'EOF'
 import sys; sys.path.insert(0, "iterm")
 import config, titles
