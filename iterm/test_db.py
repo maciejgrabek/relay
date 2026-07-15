@@ -79,6 +79,65 @@ def run():
     finally:
         os.environ.pop("RELAY_DB", None)
 
+    # --- messages -------------------------------------------------------------
+    m1 = db.queue_message(conn, "coord", "bff-worker", "spec ready", "webshop", now=400.0)
+    m2 = db.queue_message(conn, "coord", "bff-worker", "and hurry", "webshop", now=401.0)
+    m3 = db.queue_message(conn, "bff-worker", "coord", "ack", "webshop", now=402.0)
+    ok &= check("queue_message returns ids", m1 > 0 and m2 == m1 + 1)
+
+    und = db.undelivered(conn, "bff-worker")
+    ok &= check("undelivered for name, oldest first",
+                [m["id"] for m in und] == [m1, m2])
+    ok &= check("undelivered all -> 3", len(db.undelivered(conn)) == 3)
+
+    db.mark_delivered(conn, m1, now=410.0)
+    und = db.undelivered(conn, "bff-worker")
+    ok &= check("mark_delivered removes from queue",
+                [m["id"] for m in und] == [m2])
+
+    hist = db.message_history(conn, with_name="coord")
+    ok &= check("history with_name matches both directions", len(hist) == 3)
+    hist = db.message_history(conn, with_name="bff-worker")
+    ok &= check("history newest last", hist[-1]["id"] == m3)
+
+    # --- tasks ------------------------------------------------------------------
+    epic = db.add_task(conn, "BFF changes", project="webshop", owner="bff-worker",
+                       spec_path="/w/specs/bff.md", created_by="coord", now=500.0)
+    t_a = db.add_task(conn, "wire endpoint", project="webshop", parent_id=epic,
+                      owner="bff-worker", created_by="bff-worker", now=501.0)
+    t_b = db.add_task(conn, "fe form", project="webshop", owner="fe-ui",
+                      blocked_by=(t_a,), created_by="coord", now=502.0)
+    row = db.get_task(conn, t_b)
+    ok &= check("add_task blocked_by stored", row["blocked_by"] == str(t_a))
+    ok &= check("epic has no parent", db.get_task(conn, epic)["parent_id"] is None)
+    ok &= check("subtask parent set", db.get_task(conn, t_a)["parent_id"] == epic)
+
+    ok &= check("set_task_state", db.set_task_state(conn, t_a, "doing", now=510.0)
+                and db.get_task(conn, t_a)["state"] == "doing")
+    ok &= check("set_task_state bumps updated_at",
+                db.get_task(conn, t_a)["updated_at"] == 510.0)
+    ok &= check("set_task_state unknown id -> False",
+                not db.set_task_state(conn, 9999, "done"))
+    try:
+        db.set_task_state(conn, t_a, "paused")
+        ok &= check("bad state raises", False)
+    except ValueError:
+        ok &= check("bad state raises", True)
+
+    ok &= check("list_tasks by project",
+                len(db.list_tasks(conn, project="webshop")) == 3)
+    ok &= check("list_tasks by owner",
+                {t["id"] for t in db.list_tasks(conn, owner="bff-worker")} == {epic, t_a})
+
+    # current_task_for: doing beats blocked beats todo
+    ok &= check("current_task_for prefers doing",
+                db.current_task_for(conn, "bff-worker")["id"] == t_a)
+    db.set_task_state(conn, t_a, "done", now=520.0)
+    ok &= check("current_task_for falls back (epic todo)",
+                db.current_task_for(conn, "bff-worker")["id"] == epic)
+    ok &= check("current_task_for none -> None",
+                db.current_task_for(conn, "ghost") is None)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

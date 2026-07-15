@@ -121,3 +121,102 @@ def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM sessions WHERE project=? ORDER BY registered_at",
         (project,)).fetchall()
+
+
+# --- messages ------------------------------------------------------------------
+
+def queue_message(conn, from_name: str, to_name: str, body: str,
+                  project: str = "", now: Optional[float] = None) -> int:
+    cur = conn.execute(
+        """INSERT INTO messages(project, from_name, to_name, body, created_at)
+           VALUES(?,?,?,?,?)""",
+        (project, from_name, to_name, body, _now(now)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def undelivered(conn, to_name: Optional[str] = None) -> List[sqlite3.Row]:
+    if to_name is None:
+        return conn.execute(
+            "SELECT * FROM messages WHERE delivered_at IS NULL "
+            "ORDER BY created_at, id").fetchall()
+    return conn.execute(
+        "SELECT * FROM messages WHERE delivered_at IS NULL AND to_name=? "
+        "ORDER BY created_at, id", (to_name,)).fetchall()
+
+
+def mark_delivered(conn, msg_id: int, now: Optional[float] = None) -> None:
+    conn.execute("UPDATE messages SET delivered_at=? WHERE id=?",
+                 (_now(now), msg_id))
+    conn.commit()
+
+
+def message_history(conn, with_name: Optional[str] = None,
+                    project: Optional[str] = None,
+                    limit: int = 200) -> List[sqlite3.Row]:
+    """Newest LAST (chronological), capped at `limit` most recent."""
+    where, args = [], []
+    if with_name is not None:
+        where.append("(from_name=? OR to_name=?)")
+        args += [with_name, with_name]
+    if project is not None:
+        where.append("project=?")
+        args.append(project)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(
+        f"SELECT * FROM messages {w} ORDER BY created_at DESC, id DESC LIMIT ?",
+        (*args, limit)).fetchall()
+    return list(reversed(rows))
+
+
+# --- tasks -----------------------------------------------------------------------
+
+def add_task(conn, title: str, project: str = "", parent_id: Optional[int] = None,
+             owner: Optional[str] = None, spec_path: Optional[str] = None,
+             blocked_by=(), created_by: Optional[str] = None,
+             now: Optional[float] = None) -> int:
+    bb = ",".join(str(int(b)) for b in blocked_by)
+    cur = conn.execute(
+        """INSERT INTO tasks(project, parent_id, title, state, owner, spec_path,
+                             blocked_by, created_by, updated_at)
+           VALUES(?,?,?,'todo',?,?,?,?,?)""",
+        (project, parent_id, title, owner, spec_path, bb, created_by, _now(now)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_task(conn, task_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+
+
+def set_task_state(conn, task_id: int, state: str,
+                   now: Optional[float] = None) -> bool:
+    if state not in TASK_STATES:
+        raise ValueError(f"state must be one of {TASK_STATES}, got {state!r}")
+    cur = conn.execute("UPDATE tasks SET state=?, updated_at=? WHERE id=?",
+                       (state, _now(now), task_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def list_tasks(conn, project: Optional[str] = None,
+               owner: Optional[str] = None) -> List[sqlite3.Row]:
+    where, args = [], []
+    if project is not None:
+        where.append("project=?")
+        args.append(project)
+    if owner is not None:
+        where.append("owner=?")
+        args.append(owner)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    return conn.execute(f"SELECT * FROM tasks {w} ORDER BY id", args).fetchall()
+
+
+def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
+    """The task to show in the TUI's TASK NOW column: an in-flight task if any
+    (doing beats blocked beats todo), most recently updated first."""
+    return conn.execute(
+        """SELECT * FROM tasks WHERE owner=? AND state!='done'
+           ORDER BY CASE state WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1
+                    ELSE 2 END, updated_at DESC LIMIT 1""",
+        (owner,)).fetchone()
