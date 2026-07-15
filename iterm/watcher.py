@@ -470,28 +470,58 @@ class Watcher:
             info.stale = False
             info._stale_notified = False
 
+    def _deliverable(self, conn, name: str) -> bool:
+        """True when a message TO `name` could actually be delivered right now:
+        its sessions row exists, its bound iterm_session_id is live, and the
+        registry still maps that id back to THIS name. The round-trip check
+        catches name collisions (two names bound to one id - only the current
+        binding is deliverable) and never-registered owners (no row at all)."""
+        try:
+            row = swarmdb.get_session(conn, name)
+        except Exception:
+            return False
+        if row is None:
+            return False
+        sid = row["iterm_session_id"]
+        if sid not in self.sessions:
+            return False
+        reg = self.registry.get(sid)
+        return reg is not None and reg["name"] == name
+
     def _check_gone(self) -> None:
-        """A registered name whose iTerm2 session no longer exists but which
-        has messages queued past the threshold - its tab was closed. Notify
-        once per name; reset when it re-registers (reappears) or drains."""
-        live = set(self.sessions.keys())
+        """Notify once per name whose queued messages can't reach it. Keyed by
+        the RECIPIENT name (not by live session id), so it also covers a name
+        that was shadowed by a collision or was never registered at all - both
+        would silently black-hole their queue under a session-keyed scan.
+
+        A name is cleared from the notified set once it becomes deliverable
+        again (re-registered / rebound) or its queue drains (no undelivered
+        rows). Only a name with a message older than stale_after that is not
+        currently deliverable fires the alert."""
         now = time.time()
-        for sid, reg in list(self.registry.items()):
-            name = reg["name"]
-            if sid in live:
+        try:
+            conn = self._swarm_conn()
+            msgs = swarmdb.undelivered(conn)
+        except Exception:
+            return
+        by_name: Dict[str, float] = {}
+        for m in msgs:
+            ts = m["created_at"]
+            if m["to_name"] not in by_name or ts < by_name[m["to_name"]]:
+                by_name[m["to_name"]] = ts
+        # Reset names that recovered or drained.
+        for name in list(self._gone_notified):
+            if name not in by_name or self._deliverable(conn, name):
                 self._gone_notified.discard(name)
+        for name, oldest in by_name.items():
+            if self._deliverable(conn, name):
                 continue
-            try:
-                msgs = swarmdb.undelivered(self._swarm_conn(), name)
-            except Exception:
-                continue
-            oldest = min((m["created_at"] for m in msgs), default=None)
-            if (oldest is not None and now - oldest > self.stale_after
-                    and name not in self._gone_notified):
+            if now - oldest > self.stale_after and name not in self._gone_notified:
                 self._gone_notified.add(name)
-                self._note(f"STALE {name}: session gone, messages queued")
+                self._note(f"STALE {name}: session gone or unreachable, "
+                           f"messages queued")
                 notify_mac(f"Relay - {name} STALE",
-                           "session gone with queued messages",
+                           "session gone or unreachable, messages queued",
                            self.alert_sound)
 
     async def focus_session(self, sid: str) -> bool:
