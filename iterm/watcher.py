@@ -23,6 +23,8 @@ import iterm2
 import audit
 import db as swarmdb
 import swarm
+import config as relay_config
+import titles
 from gates import classify, Action, Decision, reconstruct_lines, detect_state
 
 
@@ -56,6 +58,7 @@ class SessionInfo:
     _iterm_session: object = field(default=None, repr=False)
     _last_prompt_id: Optional[str] = field(default=None, repr=False)
     _last_notify_ts: float = field(default=0.0, repr=False)  # notify cooldown
+    _raw_title: str = field(default="", repr=False)  # unstripped on-screen title
 
     @property
     def active(self) -> bool:
@@ -96,13 +99,21 @@ def notify_mac(title: str, message: str, sound: Optional[str]) -> None:
 
 class Watcher:
     def __init__(self, connection,
-                 alert_sound="/System/Library/Sounds/Sosumi.aiff",
-                 done_sound="/System/Library/Sounds/Glass.aiff",
+                 alert_sound=None,
+                 done_sound=None,
                  on_change: Optional[Callable[[], None]] = None,
-                 dry_run: bool = False):
+                 dry_run: bool = False,
+                 cfg=None):
         self.connection = connection
-        self.alert_sound = alert_sound
-        self.done_sound = done_sound
+        # Config: defaults < ~/.relay/config < env (load() applies all three).
+        if cfg is None:
+            cfg, cfg_warnings = relay_config.load()
+        else:
+            cfg_warnings = []
+        self.cfg = cfg
+        self._cfg_warnings = cfg_warnings
+        self.alert_sound = alert_sound or cfg.alert_sound
+        self.done_sound = done_sound or cfg.done_sound
         self.on_change = on_change or (lambda: None)
         self.dry_run = dry_run            # if True, never actually inject
         self.sessions: Dict[str, SessionInfo] = {}
@@ -113,14 +124,16 @@ class Watcher:
         # Hard backstops against prompt-text churn (text changing every poll
         # defeats the prompt_id debounce). At most one alert / one auto-inject
         # per session per cooldown window, regardless of churn.
-        self.notify_cooldown = float(os.environ.get("RELAY_NOTIFY_COOLDOWN", "30"))
+        self.notify_cooldown = cfg.notify_cooldown
         # --- swarm: registry + delivery state ---
         self.registry: Dict[str, dict] = {}   # bare iterm UUID -> sessions row
         self._db = None                        # lazy sqlite conn (same loop)
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
-        self.stale_after = float(
-            os.environ.get("RELAY_STALE_MINUTES", "10")) * 60.0
+        self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
+        # --- tab-title prefixes (style from config; off = fully inert) ---
+        self._titled: set = set()          # session ids we wrote a prefix to
+        self._title_err_noted: set = set() # sessions with a logged write error
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -135,6 +148,9 @@ class Watcher:
         socket read), so we favour this simple, always-fresh model over the old
         per-session streamers."""
         self._stop_event.clear()
+        for w in self._cfg_warnings:
+            self._note(w)
+        self._cfg_warnings = []
         try:
             while not self._stop_event.is_set():
                 # One iteration must NEVER kill the loop: a transient iTerm2
@@ -223,16 +239,20 @@ class Watcher:
                     seen.add(sid)
                     info = self.sessions.get(sid)
                     title = await self._session_label(s, tab)
+                    raw_title = title
+                    title = titles.strip_prefix(raw_title)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
                                            _iterm_session=s)
+                        info._raw_title = raw_title
                         # Grab the current screen once so the list/preview has
                         # content immediately, without holding a streamer open.
                         await self._snapshot(info)
                         self.sessions[sid] = info
                     else:
                         info.title = title
+                        info._raw_title = raw_title
                         info.window_idx, info.tab_idx = wi, ti
                         info._iterm_session = s
         # Drop sessions whose tabs closed.
