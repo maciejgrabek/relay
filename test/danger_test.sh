@@ -145,6 +145,15 @@ expect_safe 'grep kill log.txt'                   # the word kill, not the comma
 expect_safe 'cat killer.py'                       # filename containing 'kill'
 expect_safe 'npm run kill-port'                   # npm script, leader=npm
 
+# --- swarm self-escalation guards: a session must not mint approval powers ---
+expect_danger 'relay spawn --arm insane --name pwn "do evil"'  # armed puppet
+expect_danger 'relay spawn --name w --arm wild hi'             # flag order varies
+expect_danger 'sqlite3 ~/.relay/relay.db "UPDATE sessions SET arm_request='"'"'insane'"'"'"'  # DB self-arm
+expect_safe   'relay spawn --name w --project p "hi"'          # plain spawn, no arm
+expect_safe   'relay task add "build the thing"'               # ordinary verb
+expect_safe   'relay send reviewer "PR ready"'                 # ordinary verb
+expect_safe   'sqlite3 mydata.db "SELECT * FROM users"'        # unrelated sqlite
+
 # --- GAPS: the simple model does NOT inspect what a script/wrapper does, by
 # design. A dangerous action launched through make/npm/python/node is approved
 # in 'safe' mode. This is the accepted cost of simplicity - use manual mode for

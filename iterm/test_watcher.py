@@ -10,6 +10,7 @@ Run: python3 iterm/test_watcher.py
 import asyncio
 import os
 import sys
+import time as _time
 
 sys.path.insert(0, os.path.dirname(__file__))
 # Hermetic: never read the developer's real ~/.relay/config in tests.
@@ -402,10 +403,14 @@ def arm_request_tests():
         ok = ok and cond
 
     cleared = []
+    notified = {"n": 0}
     W.swarmdb.current_task_for = lambda conn, name: None
     W.swarmdb.clear_arm_request = lambda conn, name: cleared.append(name)
+    W.notify_mac = lambda *a, **k: notified.__setitem__("n", notified["n"] + 1)
 
-    # Session exists -> request applied and cleared.
+    # Request present within the grace window -> applied, cleared, and the
+    # arming is escalated to the human (audible) since the operator did not
+    # arm by hand.
     w = Watcher(connection=None, dry_run=False, cfg=C.Config())
     w._db = object()
     info = SessionInfo("sidA", title="w1", _iterm_session=FakeSession())
@@ -414,10 +419,25 @@ def arm_request_tests():
         {"name": "w1", "iterm_session_id": "sidA", "role": "worker",
          "project": "demo", "status_text": "", "arm_request": "wild"}]
     w._swarm_refresh_registry()
-    chk("arm request applied", info.mode == "wild")
-    chk("arm request cleared", cleared == ["w1"])
+    chk("spawn arm within window applied", info.mode == "wild")
+    chk("spawn arm cleared", cleared == ["w1"])
+    chk("spawn arm notifies human", notified["n"] == 1)
 
-    # Session not seen yet -> request kept for a later tick.
+    # RACE: sid recorded a tick before the request lands (spawn creates the
+    # tab, then writes arm_request). Still within grace -> honored, not
+    # rejected. Simulate by seeding _arm_seen with a recent timestamp.
+    cleared.clear(); notified["n"] = 0
+    info_r = SessionInfo("sidR", title="wr", _iterm_session=FakeSession())
+    w.sessions["sidR"] = info_r
+    w._arm_seen["sidR"] = _time.time() - 2.0   # seen 2s ago, request now
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "wr", "iterm_session_id": "sidR", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "wild"}]
+    w._swarm_refresh_registry()
+    chk("race: request just after first sight still honored",
+        info_r.mode == "wild" and cleared == ["wr"])
+
+    # Session not seen yet -> request untouched (kept for a later tick).
     cleared.clear()
     W.swarmdb.list_sessions = lambda conn: [
         {"name": "w2", "iterm_session_id": "sidB", "role": "worker",
@@ -425,13 +445,11 @@ def arm_request_tests():
     w._swarm_refresh_registry()
     chk("no session yet -> request kept", cleared == [])
 
-    # SECURITY: a request appearing LATER for an already-seen session is a
-    # self-escalation attempt (any Bash-capable session can UPDATE the DB).
-    # It must be refused, cleared, and escalated - never applied.
-    notified = {"n": 0}
-    W.notify_mac = lambda *a, **k: notified.__setitem__("n", notified["n"] + 1)
+    # SECURITY: a request surfacing OUTSIDE the grace window on a long-running
+    # session is a self-escalation attempt - refused, cleared, escalated.
+    cleared.clear(); notified["n"] = 0
     w.set_mode("sidA", "safe")
-    cleared.clear()
+    w._arm_seen["sidA"] = _time.time() - 3600.0   # first seen an hour ago
     W.swarmdb.list_sessions = lambda conn: [
         {"name": "w1", "iterm_session_id": "sidA", "role": "worker",
          "project": "demo", "status_text": "", "arm_request": "insane"}]
