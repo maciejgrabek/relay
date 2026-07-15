@@ -364,6 +364,15 @@ def cmd_doctor(args) -> int:
                       f"doing, owner {t['owner'] or '?'}, no update in {mins}m")
     else:
         print("  tasks: none")
+
+    closed = db.closed_sessions(conn)
+    owners = {t["owner"] for t in tasks if t["state"] != "done" and t["owner"]}
+    orphans = [s for s in closed if s["name"] in owners]
+    if orphans:
+        print(f"  orphans: {len(orphans)} closed session(s) still own work "
+              f"- 'relay restore' to revive, 'relay clean' to reset")
+        for s in orphans:
+            print(f"    {s['name']} (workdir: {s['workdir'] or 'unknown'})")
     return 0
 
 
