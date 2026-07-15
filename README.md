@@ -393,6 +393,9 @@ done  = /System/Library/Sounds/Glass.aiff
 stale_minutes   = 10
 notify_cooldown = 30
 spawn_arm       = off  ; arm level for spawned workers: off | safe | wild | insane
+                       ; honored only at FIRST sight of a session (spawn's boot
+                       ; window); a request appearing later for a known session
+                       ; is refused and escalated (self-escalation guard)
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,

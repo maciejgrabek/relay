@@ -425,12 +425,27 @@ def arm_request_tests():
     w._swarm_refresh_registry()
     chk("no session yet -> request kept", cleared == [])
 
+    # SECURITY: a request appearing LATER for an already-seen session is a
+    # self-escalation attempt (any Bash-capable session can UPDATE the DB).
+    # It must be refused, cleared, and escalated - never applied.
+    notified = {"n": 0}
+    W.notify_mac = lambda *a, **k: notified.__setitem__("n", notified["n"] + 1)
+    w.set_mode("sidA", "safe")
+    cleared.clear()
+    W.swarmdb.list_sessions = lambda conn: [
+        {"name": "w1", "iterm_session_id": "sidA", "role": "worker",
+         "project": "demo", "status_text": "", "arm_request": "insane"}]
+    w._swarm_refresh_registry()
+    chk("late arm request refused (mode unchanged)", info.mode == "safe")
+    chk("late arm request cleared", cleared == ["w1"])
+    chk("late arm request escalates to human", notified["n"] == 1)
+
     # Old-schema row without the key -> no crash, nothing applied.
     W.swarmdb.list_sessions = lambda conn: [
         {"name": "w3", "iterm_session_id": "sidA", "role": "worker",
          "project": "demo", "status_text": ""}]
     w._swarm_refresh_registry()
-    chk("row without arm_request tolerated", info.mode == "wild")
+    chk("row without arm_request tolerated", info.mode == "safe")
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok

@@ -130,6 +130,7 @@ class Watcher:
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
         self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
+        self._arm_seen: set = set()        # sids observed registered at least once
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
@@ -411,14 +412,29 @@ class Watcher:
                     d["task_now"] = f"#{cur['id']} ⊘" + (f" by {bb}" if bb else "")
                 else:
                     d["task_now"] = f"#{cur['id']} {cur['state']} {cur['title']}"
-                # Spawn pre-arming: a pending arm request is applied the
-                # first tick the session actually exists, then cleared. The
-                # arm state itself lives in this process (SessionInfo.mode).
+                # Spawn pre-arming: a pending arm request is honored ONLY
+                # at first sight of the session (spawn sets it before claude
+                # boots). A request that appears LATER for a session we have
+                # already observed is a self-escalation attempt - any Bash-
+                # capable session can UPDATE this DB - so it is refused,
+                # cleared, and escalated to the human. The arm state itself
+                # lives in this process (SessionInfo.mode).
                 req = d.get("arm_request") or ""
-                if req and d["iterm_session_id"] in self.sessions:
-                    self.set_mode(d["iterm_session_id"], req)
-                    swarmdb.clear_arm_request(conn, d["name"])
-                    self._note(f"ARMED {d['name']} -> {req} (spawn request)")
+                sid = d["iterm_session_id"]
+                if req and sid in self.sessions:
+                    if sid not in self._arm_seen:
+                        self.set_mode(sid, req)
+                        swarmdb.clear_arm_request(conn, d["name"])
+                        self._note(f"ARMED {d['name']} -> {req} (spawn request)")
+                    else:
+                        swarmdb.clear_arm_request(conn, d["name"])
+                        self._note(f"REFUSED arm escalation {d['name']} -> {req}")
+                        notify_mac(f"Relay - {d['name']}",
+                                   f"refused arm escalation to {req} "
+                                   f"(request appeared after first sight)",
+                                   self.alert_sound)
+                if sid in self.sessions:
+                    self._arm_seen.add(sid)
                 reg[d["iterm_session_id"]] = d
             self.registry = reg
         except Exception as e:
