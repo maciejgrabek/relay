@@ -16,16 +16,22 @@ arm/disarm them with the arrow keys.
   ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝
   ██║  ██║███████╗███████╗██║  ██║   ██║
   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝
-  RELAY · SESSION CONTROL · 3 units · 2 armed · 7✓ 0⊘
+  RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
-  MODE      STATUS      LOC   UNIT            ✓/⊘   LAST DIRECTIVE
-▸ ◉ SAFE    ▸ ACTIVE    0.1   api-server      5/0   grep -rn "TODO" src/
-  ◉ SAFE    ⊘ LOCKED    0.2   infra-migrate   2/1   terraform apply -auto-…
-  ○ MANUAL  ◌ STANDBY   1.0   docs-site       -     -
+  MODE      STATUS      LOC  UNIT         ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
+▸ ◉ SAFE    ▸ ACTIVE    0.1  bff-worker   work   #14 doing    5/0  grep -rn "TODO" src/
+  ✦ INSANE  ⊘ LOCKED    0.2  api-worker   work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+  ○ MANUAL  ◌ STANDBY   1.0  coord        coord  specs 3/3    -    -
+  ──────────── live terminal feed of the selected session shows below ────────────
 
-  ↑↓ move · SPACE arm · ENTER send Enter · 1/2/3 send digit · n go to tab · q quit
+  ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
+  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · q quit
 ```
+
+The list is on top and the selected session's **live terminal feed** is stacked
+below it, both full-width. `TAB` flips to the **swarm view** (a kanban board of
+tasks + a message feed) when you're running a coordinated fleet.
 
 > **`relay`** is iTerm2-native: one Python process, no Claude Code hooks,
 > no session restart. It watches iTerm2 screens and auto-clears safe permission
@@ -175,14 +181,21 @@ can't silently auto-approve.)
 | `a` / `d` | Arm all (safe) / disarm all |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |
+| `TAB` | Toggle the **swarm view** (kanban board + message feed) |
+| `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
+| `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
 | `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`) |
+
+`R` and `W` only act when a worker's tab has closed while it still owned tasks;
+the panel shows a red hint and the count when that happens. The double-press is
+the confirm - the first press arms it (auto-cancels after 5s), the second fires.
 
 Hidden sessions don't vanish - they drop to a dimmed section at the bottom of the
 list, and the cursor skips the divider as you navigate, so you fly between your
 kept sessions while still being able to see and un-hide (`x` again) the rest. The
-right-hand **preview** pulls the selected session's current screen the moment you
-land on it (and updates as that session prints), so you see the live prompt
-before you answer it.
+**live feed** pane below the list pulls the selected session's current screen the
+moment you land on it (and updates as that session prints), so you see the live
+prompt before you answer it.
 
 The **UNIT** column is each session's name: the iTerm2 tab/session name you've
 set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's

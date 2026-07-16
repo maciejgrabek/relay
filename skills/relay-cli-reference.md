@@ -37,3 +37,30 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
                 [--role worker|coordinator] [--arm off|safe|wild|insane]
         Open a new iTerm2 tab running claude, pre-registered under <name>.
+
+    relay doctor
+        Print swarm health from outside the TUI: registered sessions and their
+        modes, queued messages, task counts, and any orphaned work (closed
+        sessions still owning tasks). Read-only; safe to run anytime.
+
+Recovering abandoned work (a session whose tab closed while it owned tasks is
+"closed"; relay detects this). These are dispositions - pick one per dead
+session; run restore FIRST if you might want either, since clean/wipe destroy
+the context restore needs:
+
+    relay restore [names...] [--project <p>] [--dry-run] [--yes]
+        Respawn dead workers IN THEIR ORIGINAL WORKDIR under their own name to
+        CONTINUE their tasks. No names = all closed sessions owning work; naming
+        a session also revives a stalled-but-open one.
+
+    relay clean [--project <p>] [--dry-run] [--yes]
+        RESET dead sessions' non-done tasks to unowned todo and remove the ghost
+        rows. Someone else can then pick the tasks up.
+
+    relay wipe [names...] [--project <p>] [--dry-run] [--yes]
+    relay wipe --project <p> --all [--dry-run] [--yes]
+        DELETE dead sessions' tasks + rows (orphaned scope), or with --all wipe
+        an ENTIRE project (all tasks/sessions/messages). Permanent - start over.
+
+    relay version | relay update
+        Show the installed relay version / fetch + fast-forward to the latest.
