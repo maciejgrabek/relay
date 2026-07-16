@@ -629,6 +629,9 @@ spawn_arm       = off  ; arm level for spawned workers: off | safe | wild | insa
                        ; honored only at FIRST sight of a session (spawn's boot
                        ; window); a request appearing later for a known session
                        ; is refused and escalated (self-escalation guard)
+
+[statusbar]
+enabled = true         ; register a per-tab arm badge in iTerm2's status bar
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
@@ -672,6 +675,42 @@ the bare name). Reads are always clean regardless - the UNIT column and swarm
 addressing strip the prefix on read. Same residue class as any other tool that
 writes tab titles.
 
+### iTerm2 status-bar arm badge
+
+Relay can put a per-tab **arm badge** in iTerm2's own status bar (the strip
+with your CPU / memory / network components), so you see and change a tab's arm
+level from the tab itself - no need to switch to the panel. It is **off by
+default**; enable it with `[statusbar] enabled = true` in `~/.relay/config`.
+
+Each tab's badge shows a colored circle for the arm mode plus `RELAY:<mode>`,
+and appends the swarm identity when the tab is a registered coordinator/worker:
+
+```
+⚪ RELAY:off                     a manual tab
+🟢 RELAY:safe                    armed safe
+🟡 RELAY:wild                    armed wild
+🔴 RELAY:insane                  armed insane
+🟢 RELAY:safe · bff-worker (work)   a swarm worker
+⬛ RELAY: panel                  relay's own tab (inert - relay never arms itself)
+```
+
+(The color comes from the emoji circle: iTerm2's status-bar API returns plain
+text, so a colored glyph is how you get color-per-mode.)
+
+**Click a badge to cycle its arm level** - `off -> safe -> wild -> insane -> off`,
+exactly what `Space` does in the panel, and the panel row updates in lockstep
+(the badge reads and writes relay's real state, not a copy). A click is a
+physical human action, so it is an un-spoofable way to arm - a Claude session
+cannot click a status bar. Relay's own panel tab shows `⬛ RELAY: panel` and its
+click does nothing.
+
+**Adding it (one-time):** with `enabled = true` and relay running, open iTerm2
+**Settings -> Profiles -> your profile -> Session -> Configure Status Bar**
+(enable "Status bar enabled" if needed), then drag the **"Relay"** component
+into the bar. It is live whenever relay is running and disappears when relay is
+closed (same "tool on === panel open" contract as everything else). The badge
+only reflects reality while relay is up.
+
 ## Project layout
 
 ```
@@ -687,6 +726,7 @@ relay/
   iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
   iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
   iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
+  iterm/statusbar.py     # pure label for the iTerm2 status-bar arm badge
   iterm/test_*.py        # gate/TUI/swarm suites, built from real captured prompts
   iterm/test_config.py   # config loader tests (temp files, precedence)
   iterm/test_titles.py   # render/strip round-trip tests
