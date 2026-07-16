@@ -73,7 +73,7 @@ KEYBAR = (
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("R", "restore"), ("W", "wipe"), ("q", "quit")]))
+             ("R×2", "restore"), ("W×2", "wipe"), ("q", "quit")]))
 
 
 def reactor_pressure(sessions) -> float:
@@ -374,8 +374,8 @@ class RelayApp(App):
         n_ctrl = len(self._controllable())
         orphans = getattr(self.watcher, "orphan_count", 0)
         if orphans:
-            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - R restore, "
-                    f"W wipe, or 'relay clean'[/]")
+            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - press R twice "
+                    f"to restore, W twice to wipe[/]")
         elif n_ctrl == 0:
             hint = "  [#2a7d4f]· open another session to control (see panel ->)[/]"
         elif armed == 0:
