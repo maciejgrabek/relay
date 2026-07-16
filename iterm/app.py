@@ -76,6 +76,38 @@ KEYBAR = (
              ("R×2", "restore"), ("W×2", "wipe"), ("q", "quit")]))
 
 
+def relay_self_panel(width, *, units, armed, approvals, escalations, orphans,
+                     db_path, dry_run) -> str:
+    """Shown in the feed pane when relay's OWN row is selected. Relay never
+    watches its own tab, so instead of dead space this answers 'what about
+    relay itself?' - this run's tallies + how to get around. Plain text (the
+    pane is markup=False; CSS gives it the phosphor color)."""
+    w = max(40, width)
+    bar = "═" * w
+    orphan_line = (f"   {orphans} orphaned task-owner(s) - press R twice to "
+                   f"restore, W twice to wipe\n" if orphans else "")
+    sim = "  [SIMULATION / dry-run]" if dry_run else ""
+    return (
+        f"╔{bar}╗\n"
+        f" ▓ RELAY CONTROL // this panel{sim}\n"
+        f"╚{bar}╝\n"
+        "\n"
+        " Relay does not watch or act on its own tab.\n"
+        "\n"
+        " THIS RUN\n"
+        f"   sessions {units} ({armed} armed) · {approvals} approved · "
+        f"{escalations} escalated\n"
+        f"{orphan_line}"
+        f"   db  {db_path}\n"
+        "\n"
+        " GETTING AROUND\n"
+        "   ↑↓ pick a session · SPACE arm it · n jump to its tab\n"
+        "   TAB swarm board · q quit  (full key bar is at the bottom)\n"
+        "\n"
+        " Add more to control: open a tab and start a long job or a\n"
+        " Claude Code session - it shows up in the list above.\n")
+
+
 def reactor_pressure(sessions) -> float:
     """Instantaneous 'heat input' from how much is happening UNATTENDED right
     now (0.0+). The reactor heats toward this and vents below it - so when you
@@ -434,18 +466,18 @@ class RelayApp(App):
             return
         if sid == self._own_sid:
             # Previewing relay's own tab would mirror the whole UI into itself
-            # (an infinite RELAY-inside-RELAY). Relay also never acts on its own
-            # session, so there is nothing to watch here.
-            w = max(40, preview.size.width - 2)
-            bar = "═" * w
-            preview.update(
-                f"╔{bar}╗\n"
-                f" ▓ THIS IS THE RELAY PANEL\n"
-                f"╚{bar}╝\n"
-                "\n"
-                " Relay does not monitor or act on its own tab - there is\n"
-                " nothing to preview here. Move the cursor to another session\n"
-                " to see its live terminal feed.\n")
+            # (an infinite RELAY-inside-RELAY), and relay never acts on its own
+            # session - so show relay's OWN status + orientation instead.
+            ctrl = self._controllable()
+            preview.update(relay_self_panel(
+                preview.size.width - 2,
+                units=len(ctrl),
+                armed=sum(1 for i in ctrl if i.active),
+                approvals=sum(i.n_approved for i in ctrl),
+                escalations=sum(i.n_escalated for i in ctrl),
+                orphans=getattr(self.watcher, "orphan_count", 0),
+                db_path=swarmdb.default_path(),
+                dry_run=self.dry_run))
             return
         mode = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE"}.get(info.mode, "MANUAL")
         loc = "QUARANTINED" if info.hidden else "ACTIVE"
