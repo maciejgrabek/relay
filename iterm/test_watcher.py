@@ -106,6 +106,19 @@ async def go():
         await w._handle(me, sraw, shard)
     chk("own tab: never injected", fown.sent == [])
     chk("own tab: never auto-approved", me.n_approved == 0)
+    # OWN TAB is not armable via ANY path (Space/toggle, set_mode, arm-all).
+    me.mode = "off"
+    w.toggle("me")
+    chk("own tab: toggle does not arm it", me.mode == "off")
+    w.set_mode("me", "insane")
+    chk("own tab: set_mode does not arm it", me.mode == "off")
+    other = SessionInfo("other", title="worker", _iterm_session=FakeSession(),
+                        mode="off")
+    w.sessions["other"] = other
+    w.set_all(True)
+    chk("arm-all skips own tab but arms others",
+        me.mode == "off" and other.mode == "safe")
+    del w.sessions["other"]
     w.own_sid = None
 
     # SAFETY: if the audit write FAILS, must NOT inject (escalate instead).
