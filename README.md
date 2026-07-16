@@ -247,6 +247,42 @@ tail -f ~/.relay/audit.jsonl
 With only relay's own tab open you get a getting-started panel - that is
 expected; relay controls the sessions *around* it.
 
+### Try the swarm (a 5-minute smoke test)
+
+You can exercise the whole loop from **one Claude Code session** - it plays the
+coordinator, drives the verbs through its Bash tool, and *sees the worker's
+reply arrive in its own prompt*, so it can confirm success itself. Prereqs:
+you're inside iTerm2 and `relay` is running in another tab.
+
+From the Claude session (or your shell) as coordinator:
+
+```bash
+relay register --name coord --role coordinator --project smoke
+
+# spawn an armed worker in a throwaway dir (a new tab opens):
+relay spawn --name w1 --project smoke --dir /tmp --arm wild \
+  "await your task via relay inbox, then do it"
+
+# give it a trivial task:
+relay task add "write a haiku about terminals, then relay send coord the haiku" \
+  --owner w1 --project smoke
+```
+
+**What success looks like**, in order:
+
+1. In the relay panel, `w1` flips to `✦ INSANE`/`▲ WILD` within a few seconds
+   (spawn pre-arming applied by the watcher).
+2. relay types the assignment into `w1`'s idle prompt; `w1` writes the haiku.
+3. `w1`'s haiku is **typed into this coordinator session's prompt** as a
+   `[relay msg from w1] ...` turn - the coordinator observes the reply directly.
+4. `TAB` in the panel shows the task move `todo -> doing -> done`.
+
+Then clean up: `relay wipe --project smoke --all --yes`.
+
+If it stalls, `relay doctor` shows where (worker not armed? message queued but
+undelivered because the panel is not running? task stuck in `doing`?). This is
+the same hand-check behind the "live paths" note at the top of this section.
+
 ### Run a coordinated swarm
 
 From one session, become the coordinator, spawn armed workers, hand out
@@ -304,11 +340,13 @@ relay update           # fetch + fast-forward (safe: stops on local changes)
 > swarm's DB, CLI, delivery, staleness, and recovery logic are unit-tested,
 > but the *live* paths - spawning a worker, typing a message into a real idle
 > session, restore/clean/wipe against actual tabs - are checked by hand, not
-> in CI (that is the nature of driving iTerm2). It works (the examples above
+> in CI (that is the nature of driving iTerm2). It works (the examples below
 > are real runs), but expect rougher edges than the approval half: keep
 > `--dry-run` and the confirmation prompts in the loop, and reach for
-> `relay doctor` when a worker seems stuck. Tab-side arm/disarm from an iTerm2
-> status-bar component is designed (`docs/drafts/`) but not yet built.
+> `relay doctor` when a worker seems stuck. To confirm your own setup drives
+> the full loop, run the 5-minute smoke test under
+> [Examples](#try-the-swarm-a-5-minute-smoke-test). Tab-side arm/disarm from an
+> iTerm2 status-bar component is designed (`docs/drafts/`) but not yet built.
 
 Relay is also a session control plane: named Claude Code sessions register
 as **coordinators** or **workers**, send each other messages, and track
