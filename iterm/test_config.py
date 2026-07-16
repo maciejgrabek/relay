@@ -110,6 +110,18 @@ def run():
     cfg, _ = config.load("/nonexistent/relay-config")
     ok &= check("spawn_arm default off", cfg.spawn_arm == "off")
 
+    # statusbar: default off; parsed as a bool; bad value -> off + warning
+    ok &= check("statusbar default off", cfg.statusbar_enabled is False)
+    p = _write("[statusbar]\nenabled = true\n")
+    cfg, warns = config.load(p)
+    ok &= check("statusbar enabled = true", cfg.statusbar_enabled is True
+                and warns == [])
+    p = _write("[statusbar]\nenabled = maybe\n")
+    cfg, warns = config.load(p)
+    ok &= check("statusbar bad value -> off + warning",
+                cfg.statusbar_enabled is False
+                and any("statusbar" in w for w in warns))
+
     # RELAY_CONFIG env selects the path when load() gets None.
     p = _write("[titles]\nstyle = words\n")
     os.environ["RELAY_CONFIG"] = p

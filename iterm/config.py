@@ -39,6 +39,7 @@ class Config:
     stale_minutes: float = 10.0
     notify_cooldown: float = 30.0
     spawn_arm: str = "off"
+    statusbar_enabled: bool = False
 
 
 def default_path() -> str:
@@ -92,6 +93,14 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     cooldown = _get_float(cp, "swarm", "notify_cooldown", d.notify_cooldown,
                           warns)
 
+    try:
+        statusbar = cp.getboolean("statusbar", "enabled",
+                                  fallback=d.statusbar_enabled)
+    except ValueError:
+        warns.append("config: [statusbar] enabled must be true/false - "
+                     "using false")
+        statusbar = False
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -115,4 +124,5 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         stale_minutes=stale,
         notify_cooldown=cooldown,
         spawn_arm=arm,
+        statusbar_enabled=statusbar,
     ), warns
