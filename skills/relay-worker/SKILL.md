@@ -33,6 +33,16 @@ An assignment message names a task id, and usually a spec file.
 5. When the work is done: `relay task update <epic-id> --state done` and
    `relay send <coordinator> "task #<id> done: <one-line summary>"`.
 
+## A thin brief is a blocker - clarify, do not guess
+
+If the assignment (spec or title) is too vague to do it WELL - unclear
+acceptance criteria, missing context, or two plausible interpretations - do NOT
+guess and build. Guessing wrong wastes your whole turn and the coordinator's
+review. Treat it like any other blocker: `relay send <coordinator> "need
+clarity on #<id>: <the specific question, or the interpretations you see>"`,
+mark the task `blocked`, and go idle until they reply. Asking a sharp question
+is reporting, not stalling - it is how you protect quality, not avoid work.
+
 ## Never go silent (the most important rule)
 
 The swarm only works if a stuck worker says so. A worker that stops without a
