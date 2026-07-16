@@ -22,6 +22,7 @@ import iterm2
 import audit
 import db as swarmdb
 import swarm
+import statusbar as statusbar_mod
 import config as relay_config
 import titles
 from gates import classify, Action, Decision, reconstruct_lines, detect_state
@@ -163,6 +164,7 @@ class Watcher:
         for w in self._cfg_warnings:
             self._note(w)
         self._cfg_warnings = []
+        await self._register_statusbar()
         try:
             while not self._stop_event.is_set():
                 # One iteration must NEVER kill the loop: a transient iTerm2
@@ -751,6 +753,65 @@ class Watcher:
 
     _MODE_CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
     MODES = ("off", "safe", "wild", "insane")
+
+    # --- iTerm2 status-bar component (opt-in) ---------------------------------
+
+    async def _register_statusbar(self) -> None:
+        """Register the per-tab arm badge on relay's connection (config-gated).
+        render() reads this process's real arm state; on_click toggles it - the
+        same state the TUI shows, so bar and panel stay in sync. A click is an
+        un-spoofable human action, which is why arm-from-the-tab is safe. Best
+        effort: a failure here must never stop the watcher starting."""
+        if not getattr(self.cfg, "statusbar_enabled", False):
+            return
+        try:
+            component = iterm2.StatusBarComponent(
+                short_description="Relay",
+                detailed_description="Relay arm state for this tab; "
+                                     "click to cycle off/safe/wild/insane.",
+                knobs=[],
+                exemplar="\U0001f7e2 RELAY:safe",
+                update_cadence=1.0,     # refresh so a Space-key change shows too
+                identifier="com.relay.arm",
+            )
+
+            @iterm2.StatusBarRPC
+            async def render(knobs, session_id=iterm2.Reference("id")):
+                return self._statusbar_label(session_id)
+
+            async def on_click(session_id):
+                self._statusbar_click(session_id)
+
+            await component.async_register(self.connection, render,
+                                           onclick=on_click)
+            self._note("statusbar component registered (add 'Relay' to your "
+                       "iTerm2 status bar)")
+        except Exception as e:
+            self._note(f"statusbar register failed: {e}")
+
+    def _statusbar_label(self, session_id: str) -> str:
+        """The badge text for one tab; never raises (a render error would blank
+        the bar)."""
+        try:
+            if session_id == self.own_sid:
+                return statusbar_mod.label("off", own_panel=True)
+            info = self.sessions.get(session_id)
+            mode = info.mode if info else "off"
+            reg = self.registry.get(session_id) or {}
+            return statusbar_mod.label(mode, name=reg.get("name"),
+                                       role=reg.get("role"))
+        except Exception:
+            return statusbar_mod.label("off")
+
+    def _statusbar_click(self, session_id: str) -> None:
+        """A status-bar click cycles that tab's arm level - same as Space in the
+        panel. Never on relay's own tab."""
+        if session_id == self.own_sid or session_id not in self.sessions:
+            return
+        self.toggle(session_id)
+        self._note(f"statusbar arm {self.sessions[session_id].title} -> "
+                   f"{self.sessions[session_id].mode}")
+        self.on_change()   # repaint the panel so its row reflects the new mode
 
     def toggle(self, sid: str) -> None:
         """Cycle arm level: off -> safe -> wild -> insane -> off."""
