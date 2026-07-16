@@ -21,7 +21,7 @@ from rich.markup import escape  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Vertical  # noqa: E402
-from textual.widgets import DataTable, Footer, Static, Log  # noqa: E402
+from textual.widgets import DataTable, Static, Log  # noqa: E402
 
 import audit  # noqa: E402
 import db as swarmdb  # noqa: E402
@@ -55,6 +55,25 @@ MODE_STYLE = {
     "wild":   ("▲", "WILD",    "#ffb000"),
     "insane": ("✦", "INSANE",  "#ff5555"),
 }
+
+
+# Two-line key bar. The Textual Footer crams every binding onto one row and
+# hides the overflow; with a dozen keys that truncates on a narrow window, so we
+# render our own two lines grouped by meaning: line 1 acts on the SELECTED
+# session, line 2 is fleet-wide + app. The bindings work regardless of this bar
+# (it is display only). Key glyphs amber, labels green, separators dim - the CRT
+# palette. Built once at import; keys don't change at runtime.
+def _keys(pairs) -> str:
+    return " [#2a7d4f]·[/] ".join(
+        f"[#ffb000 bold]{k}[/] [#3aff7a]{label}[/]" for k, label in pairs)
+
+
+KEYBAR = (
+    _keys([("↑↓", "move"), ("SPACE", "arm"), ("ENTER", "answer"),
+           ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide")])
+    + "\n"
+    + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
+             ("R", "restore"), ("W", "wipe"), ("q", "quit")]))
 
 
 def reactor_pressure(sessions) -> float:
@@ -152,9 +171,7 @@ class RelayApp(App):
         display: none; height: 1fr; padding: 0 2;
         background: #010602; color: #2fc866;
     }
-    Footer { background: #061a0e; color: #2a7d4f; }
-    Footer > .footer--key { background: #0d3a22; color: #ffb000; text-style: bold; }
-    Footer > .footer--description { color: #3aff7a; }
+    #keybar { height: 2; background: #061a0e; padding: 0 2; }
     """
     BINDINGS = [
         Binding("up,k", "cursor_up", "Up", show=False),
@@ -213,7 +230,7 @@ class RelayApp(App):
                 yield Static("", id="preview", markup=False)
             yield Static("", id="swarmview", markup=False)
             yield Log(id="log", max_lines=200)
-        yield Footer()
+        yield Static(KEYBAR, id="keybar")
 
     def on_mount(self) -> None:
         # Prune audit entries older than the retention window, once, at launch.
