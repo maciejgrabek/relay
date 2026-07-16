@@ -300,6 +300,16 @@ relay update           # fetch + fast-forward (safe: stops on local changes)
 
 ## Swarm
 
+> **Status: newer and less battle-tested than the arm/approve core.** The
+> swarm's DB, CLI, delivery, staleness, and recovery logic are unit-tested,
+> but the *live* paths - spawning a worker, typing a message into a real idle
+> session, restore/clean/wipe against actual tabs - are checked by hand, not
+> in CI (that is the nature of driving iTerm2). It works (the examples above
+> are real runs), but expect rougher edges than the approval half: keep
+> `--dry-run` and the confirmation prompts in the loop, and reach for
+> `relay doctor` when a worker seems stuck. Tab-side arm/disarm from an iTerm2
+> status-bar component is designed (`docs/drafts/`) but not yet built.
+
 Relay is also a session control plane: named Claude Code sessions register
 as **coordinators** or **workers**, send each other messages, and track
 tasks (epics with subtasks, states, blockers) - all through one SQLite
