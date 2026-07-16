@@ -599,45 +599,57 @@ class RelayApp(App):
                     return r
         return None
 
+    # Window (seconds) to land the confirming second press of R / W.
+    _CONFIRM_WINDOW = 5.0
+
     # --- restore (respawn dead task-owner workers) -----------------------
     def action_restore(self) -> None:
         if not getattr(self.watcher, "orphan_count", 0):
+            self.query_one(Log).write_line(
+                "restore: nothing orphaned - R acts only on CLOSED sessions "
+                "(tab gone) that still own tasks")
             return
         if not self._restore_armed:
             self._restore_armed = True
-            self.set_timer(3.0, lambda: setattr(self, "_restore_armed", False))
+            self.set_timer(self._CONFIRM_WINDOW,
+                           lambda: setattr(self, "_restore_armed", False))
+            n = self.watcher.orphan_count
             self.query_one(Log).write_line(
-                "restore: press R again within 3s to respawn dead workers")
+                f"restore ARMED: press R again to respawn {n} dead worker(s) "
+                f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._restore_armed = False
-        here = os.path.dirname(os.path.abspath(__file__))
-        relay_bin = os.path.join(here, "..", "bin", "relay")
-        try:
-            subprocess.Popen([relay_bin, "restore", "--yes"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.query_one(Log).write_line("restore: launching dead workers...")
-        except Exception as e:
-            self.query_one(Log).write_line(f"restore failed: {e}")
+        self._shell_verb("restore", "respawning dead workers")
 
     # --- wipe (delete orphaned task-owner work) --------------------------
     def action_wipe(self) -> None:
         if not getattr(self.watcher, "orphan_count", 0):
+            self.query_one(Log).write_line(
+                "wipe: nothing orphaned - W deletes work owned by CLOSED "
+                "sessions. To clear a whole project use: relay wipe "
+                "--project <p> --all")
             return
         if not self._wipe_armed:
             self._wipe_armed = True
-            self.set_timer(3.0, lambda: setattr(self, "_wipe_armed", False))
+            self.set_timer(self._CONFIRM_WINDOW,
+                           lambda: setattr(self, "_wipe_armed", False))
+            n = self.watcher.orphan_count
             self.query_one(Log).write_line(
-                "wipe: press W again within 3s to DELETE orphaned work")
+                f"wipe ARMED: press W again to DELETE {n} dead session(s)' work "
+                f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._wipe_armed = False
+        self._shell_verb("wipe", "deleting orphaned work")
+
+    def _shell_verb(self, verb: str, doing: str) -> None:
         here = os.path.dirname(os.path.abspath(__file__))
         relay_bin = os.path.join(here, "..", "bin", "relay")
         try:
-            subprocess.Popen([relay_bin, "wipe", "--yes"],
+            subprocess.Popen([relay_bin, verb, "--yes"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.query_one(Log).write_line("wipe: deleting orphaned work...")
+            self.query_one(Log).write_line(f"{verb}: {doing}...")
         except Exception as e:
-            self.query_one(Log).write_line(f"wipe failed: {e}")
+            self.query_one(Log).write_line(f"{verb} failed: {e}")
 
     async def action_quit(self) -> None:
         # Signal the poll loop (interruptible - wakes immediately), then WAIT
