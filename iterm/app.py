@@ -544,9 +544,14 @@ class RelayApp(App):
     # --- arming ---------------------------------------------------------------
     def action_toggle(self) -> None:
         sid = self._selected_sid()
-        if sid and self.watcher:
-            self.watcher.toggle(sid)
-            self._refresh()
+        if not (sid and self.watcher):
+            return
+        if sid == self._own_sid:
+            self.query_one(Log).write_line(
+                "arm: relay never acts on its own panel tab - nothing to arm here")
+            return
+        self.watcher.toggle(sid)
+        self._refresh()
 
     def action_all(self) -> None:
         if self.watcher:

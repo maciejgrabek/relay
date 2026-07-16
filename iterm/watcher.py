@@ -813,22 +813,29 @@ class Watcher:
                    f"{self.sessions[session_id].mode}")
         self.on_change()   # repaint the panel so its row reflects the new mode
 
+    def _armable(self, sid: str) -> bool:
+        """Relay must never arm its OWN panel tab (it never acts on itself), so
+        no arm path - Space, status-bar click, arm-all - may change its mode."""
+        return sid in self.sessions and sid != self.own_sid
+
     def toggle(self, sid: str) -> None:
         """Cycle arm level: off -> safe -> wild -> insane -> off."""
-        if sid in self.sessions:
+        if self._armable(sid):
             info = self.sessions[sid]
             info.mode = self._MODE_CYCLE.get(info.mode, "safe")
             info._last_prompt_id = None   # re-evaluate current prompt under new mode
             self._persist_mode(sid, info.mode)
 
     def set_mode(self, sid: str, mode: str) -> None:
-        if sid in self.sessions and mode in self.MODES:
+        if self._armable(sid) and mode in self.MODES:
             self.sessions[sid].mode = mode
             self.sessions[sid]._last_prompt_id = None
             self._persist_mode(sid, mode)
 
     def set_all(self, active: bool) -> None:
         for sid, info in self.sessions.items():
+            if sid == self.own_sid:
+                continue   # never arm relay's own tab
             info.mode = "safe" if active else "off"
             self._persist_mode(sid, info.mode)
 
