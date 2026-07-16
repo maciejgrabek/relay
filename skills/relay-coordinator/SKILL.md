@@ -30,6 +30,25 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
    (`--blocked-by <id,id>`) - completion wakes the dependents' owners
    automatically. Do not build polling loops around ordering.
 
+## The brief is where quality is won
+
+A one-line task title is a POINTER, not a brief. A worker's output quality
+tracks the brief you gave it: a thin brief yields plausible-but-wrong work that
+you only catch at review, after the worker burned a whole turn on it. Same
+discipline as a good implementation plan.
+
+- For any non-trivial epic, write a spec md file and pass `--spec <abs-path>`.
+  Put in it: the **goal**, the concrete **inputs** (file paths, existing code,
+  constraints), what **done** looks like (acceptance criteria), and what is
+  **out of scope**. A fresh session with zero context should be able to execute
+  it and land where you wanted.
+- Trivial, single-shot tasks (a rename, "list the TODOs in src/", a throwaway
+  demo) are fine as a one-line title - use judgment, do not ceremony-tax the
+  small stuff.
+- If you cannot yet write a clear brief, the work is not ready to delegate.
+  Clarify the goal first (with the human, or by exploring the code) before you
+  spawn a worker against it.
+
 ## Reacting (event-driven, not polling)
 
 - Workers report via messages that arrive as `[relay msg from <name>]` turns.
