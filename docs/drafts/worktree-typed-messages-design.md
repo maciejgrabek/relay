@@ -64,7 +64,8 @@ relay spawn --name bff --project webshop --dir ~/work/webshop --worktree "<promp
 
 ### Schema
 
-Migration 4 (existing numbered-migration mechanism in `iterm/db.py`):
+Migration to schema v5 (the DB is already at user_version 4; uses the
+existing numbered-migration mechanism in `iterm/db.py`):
 
 ```
 ALTER TABLE sessions ADD COLUMN worktree_repo TEXT NOT NULL DEFAULT ''
@@ -97,8 +98,9 @@ relay send --all --project webshop "freeze: rebasing main" --kind info
 - Delivery prefix carries non-info kinds: `[relay done from bff] ...`;
   plain `info` keeps today's `[relay msg from bff] ...` (no churn for the
   common case).
-- Swarm-view feed colors: done green, blocked yellow, escalation red, wake dim,
-  info default, custom plain.
+- Swarm-view feed tags non-info kinds as plain text (`a -> b: [done] ...`) -
+  the feed widget renders markup-free, so per-kind colors join the deferred
+  TUI-visuals batch rather than sneaking markup in here.
 - **Escalation notify:** when the panel's tick first sees a queued
   `escalation` message, it fires the dangerous-prompt notify path (sound +
   macOS notification, per-session cooldown respected) immediately - even if
