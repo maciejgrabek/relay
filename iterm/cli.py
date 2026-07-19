@@ -415,18 +415,52 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def _worktree_add(repo: str, name: str):
+    """Create branch relay/<name> and a sibling worktree <repo>-<name> from
+    the repo's current HEAD. Returns (worktree_path, None) on success or
+    (None, error). The worktree lives NEXT TO the repo, never under ~/.relay -
+    relay is a tech the session uses, not a place that owns the work."""
+    import subprocess
+    r = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, f"not a git repository: {repo}"
+    path = os.path.join(os.path.dirname(repo),
+                        f"{os.path.basename(repo)}-{name}")
+    if os.path.exists(path):
+        return None, (f"worktree path already exists: {path} - pick another "
+                      f"--name, or remove it (git -C {repo} worktree remove)")
+    r = subprocess.run(["git", "-C", repo, "worktree", "add", path,
+                        "-b", f"relay/{name}"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, (r.stderr.strip() or "git worktree add failed")
+    return path, None
+
+
 def cmd_spawn(args) -> int:
     import asyncio
     import config as relay_config
     import spawn as spawnmod
+    if args.worktree and not args.dir:
+        return _err("--worktree requires --dir <repo>")
     workdir = os.path.abspath(args.dir or os.getcwd())
     if not os.path.isdir(workdir):
         return _err(f"workdir not found: {workdir}")
+    repo = None
+    if args.worktree:
+        repo = workdir
+        workdir, wt_err = _worktree_add(repo, args.name)
+        if wt_err:
+            return _err(wt_err)
+        print(f"worktree {workdir} (branch relay/{args.name})")
     # --arm beats config [swarm] spawn_arm beats "off".
     arm = args.arm if args.arm is not None else relay_config.load()[0].spawn_arm
     sid = asyncio.run(spawnmod.spawn_worker(
         args.name, args.project or "", args.prompt, workdir, args.role,
         arm=arm))
+    if repo:
+        db.set_worktree_repo(db.connect(), args.name, repo)
     armed = f", arm={arm}" if arm != "off" else ""
     print(f"spawned '{args.name}' ({args.role}{armed}) in {workdir} "
           f"[session {sid[:8]}]")
@@ -617,6 +651,9 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=("off",) + db.ARM_REQUEST_MODES,
                     help="arm level the watcher applies to the new worker "
                          "(default: config [swarm] spawn_arm)")
+    sp.add_argument("--worktree", action="store_true",
+                    help="create a git worktree of --dir (branch relay/<name>, "
+                         "sibling dir <repo>-<name>) and spawn the worker there")
     sp.set_defaults(fn=cmd_spawn)
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
