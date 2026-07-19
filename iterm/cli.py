@@ -159,8 +159,10 @@ def cmd_inbox(args) -> int:
         print("no new messages")
         return 0
     for m in msgs:
-        print(f"#{m['id']} from {m['from_name']} ({_ago(m['created_at'])}): "
-              f"{m['body']}")
+        k = swarm.kind_of(m)
+        tag = f" [{k}]" if k != "info" else ""
+        print(f"#{m['id']} from {m['from_name']}{tag} "
+              f"({_ago(m['created_at'])}): {m['body']}")
         db.mark_delivered(conn, m["id"])
     return 0
 
@@ -174,8 +176,10 @@ def cmd_msgs(args) -> int:
         return 0
     for m in rows:
         tick = "" if m["delivered_at"] else "  [queued]"
+        k = swarm.kind_of(m)
+        tag = f" [{k}]" if k != "info" else ""
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(m['created_at']))} "
-              f"{m['from_name']} -> {m['to_name']}: {m['body']}{tick}")
+              f"{m['from_name']} -> {m['to_name']}{tag}: {m['body']}{tick}")
     return 0
 
 
@@ -209,7 +213,7 @@ def cmd_task_add(args) -> int:
     if args.owner and args.owner != me["name"]:
         task = db.get_task(conn, tid)
         db.queue_message(conn, "relay", args.owner,
-                         swarm.wakeup_assignment_body(task), project)
+                         swarm.wakeup_assignment_body(task), project, kind="wake")
     return 0
 
 
@@ -227,7 +231,8 @@ def cmd_task_update(args) -> int:
         for t in swarm.unblocked_by_completion(db.list_tasks(conn), args.id):
             if t["owner"]:
                 db.queue_message(conn, "relay", t["owner"],
-                                 swarm.wakeup_unblocked_body(t), t["project"])
+                                 swarm.wakeup_unblocked_body(t), t["project"],
+                                 kind="wake")
     return 0
 
 

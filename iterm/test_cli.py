@@ -177,6 +177,15 @@ def run():
                            iterm_id="w0t1p0:BFF-ID")
     ok &= check("task update unknown id -> error", code == 1)
 
+    # wake messages are kind='wake'; msgs shows kinds
+    code, _, _ = run_cli("task", "add", "wired task", "--owner", "bff-worker",
+                         iterm_id="w0t0p0:CO-ID")
+    wake = db.undelivered(conn, "bff-worker")[0]
+    ok &= check("assignment wake has kind=wake", wake["kind"] == "wake")
+    code, out, _ = run_cli("msgs", "--project", "webshop")
+    ok &= check("msgs shows kind tag", "[wake]" in out)
+    run_cli("inbox", iterm_id="w0t1p0:BFF-ID")   # drain
+
     # task list
     code, out, _ = run_cli("task", "list", "--project", "webshop",
                            iterm_id="w0t0p0:CO-ID")
