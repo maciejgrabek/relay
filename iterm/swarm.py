@@ -240,7 +240,11 @@ def wipe_candidates(sessions, tasks, names=None):
             continue
         if names is not None and s["name"] not in names:
             continue
-        out.append({"name": s["name"], "task_ids": _all_ids(tasks, s["name"])})
+        out.append({"name": s["name"], "task_ids": _all_ids(tasks, s["name"]),
+                    "workdir": s.get("workdir", "") if hasattr(s, "get")
+                               else s["workdir"],
+                    "worktree_repo": s.get("worktree_repo", "")
+                               if hasattr(s, "get") else s["worktree_repo"]})
     return out
 
 
@@ -270,6 +274,13 @@ def wipe_plan_text(cands, project_all=None) -> str:
     for c in cands:
         lines.append(f"  delete {len(c['task_ids'])} task(s), "
                      f"session {c['name']}")
+        wa = c.get("worktree_action")
+        if wa == "remove":
+            lines.append(f"    remove worktree {c['workdir']} "
+                         f"+ branch relay/{c['name']}")
+        elif wa == "keep-dirty":
+            lines.append(f"    KEEP worktree {c['workdir']} - uncommitted "
+                         f"changes (relay never deletes unsaved work)")
     if len(lines) == 1:
         lines.append("  (nothing to wipe)")
     return "\n".join(lines)

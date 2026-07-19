@@ -284,6 +284,20 @@ def run():
     ok &= check("project --all plan shows totals",
                 "5" in allt and "2" in allt and "9" in allt)
 
+    wsess = [{"name": "w1", "closed_at": 5, "workdir": "/tmp/r-w1",
+              "worktree_repo": "/tmp/r"}]
+    wc = wipe_candidates(wsess, [])
+    ok &= check("wipe candidate carries worktree fields",
+                wc[0]["workdir"] == "/tmp/r-w1"
+                and wc[0]["worktree_repo"] == "/tmp/r")
+    wc[0]["worktree_action"] = "remove"
+    ok &= check("wipe plan shows worktree removal",
+                "remove worktree /tmp/r-w1" in wipe_plan_text(wc)
+                and "relay/w1" in wipe_plan_text(wc))
+    wc[0]["worktree_action"] = "keep-dirty"
+    ok &= check("wipe plan keeps dirty worktree",
+                "uncommitted" in wipe_plan_text(wc))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
