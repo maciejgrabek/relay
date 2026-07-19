@@ -78,6 +78,14 @@ def kind_of(m) -> str:
     return k or "info"
 
 
+def escalation_pings(msgs, already: set) -> list:
+    """Queued messages that should ping the human NOW: kind 'escalation' and
+    not already pinged. Delivery still waits for the target's idle prompt;
+    the ping must not."""
+    return [m for m in msgs
+            if kind_of(m) == "escalation" and m["id"] not in already]
+
+
 # --- injection safety: is this Claude's idle input box? -----------------------
 
 # Claude Code idle screens end with a bordered input box ("│ > ") and/or the

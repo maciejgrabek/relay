@@ -178,6 +178,18 @@ def run():
           "kind": "info"}], now=0.0)
     ok &= check("feed leaves info untagged", "[info]" not in fed2)
 
+    # --- escalation pings ---------------------------------------------------
+    esc = [{"id": 1, "kind": "escalation", "from_name": "w1", "to_name": "c",
+            "body": "need creds"},
+           {"id": 2, "kind": "info", "from_name": "w1", "to_name": "c",
+            "body": "hi"},
+           {"id": 3, "kind": "escalation", "from_name": "w2", "to_name": "c",
+            "body": "stuck"}]
+    ok &= check("escalation_pings picks unpinged escalations",
+                [m["id"] for m in swarm.escalation_pings(esc, {1})] == [3])
+    ok &= check("escalation_pings empty when all seen",
+                swarm.escalation_pings(esc, {1, 3}) == [])
+
     # --- restore/clean planning ---------------------------------------------
     S = [
         {"name": "bff", "role": "worker", "project": "shop", "workdir": "/w/bff",

@@ -134,6 +134,7 @@ class Watcher:
         self.registry: Dict[str, dict] = {}   # bare iterm UUID -> sessions row
         self._db = None                        # lazy sqlite conn (same loop)
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
+        self._escalation_pinged: set = set()   # msg ids already pinged
         self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
         self._arm_seen: dict = {}          # sid -> time first seen registered
@@ -178,6 +179,7 @@ class Watcher:
                     self._roster_ok = False
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
+                self._check_escalations()
                 if self._roster_ok:
                     self._mark_closed_sessions()
                 self._check_gone()
@@ -590,6 +592,22 @@ class Watcher:
         # and retries next tick (a rare duplicate beats a lost wake-up).
         swarmdb.mark_delivered(self._swarm_conn(), m["id"])
         self._note(f"DELIVER -> {reg['name']}: {m['body'][:60]}")
+
+    def _check_escalations(self) -> None:
+        """A worker sending --kind escalation is calling for a human. Ping
+        (sound + notification) the moment the message is queued - even if the
+        target session is busy - once per message. Runs in dry-run too:
+        notify is the zero-blast-radius half, same as prompt alerts."""
+        try:
+            msgs = swarmdb.undelivered(self._swarm_conn())
+        except Exception:
+            return
+        for m in swarm.escalation_pings(msgs, self._escalation_pinged):
+            self._escalation_pinged.add(m["id"])
+            self._note(f"ESCALATION from {m['from_name']} -> {m['to_name']}: "
+                       f"{m['body'][:80]}")
+            notify_mac(f"Relay - escalation from {m['from_name']}",
+                       m["body"][:120], self.alert_sound)
 
     def _check_stale(self, info: SessionInfo) -> None:
         """Flag a registered session STALE (and notify ONCE per onset) when a
