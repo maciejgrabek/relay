@@ -37,6 +37,22 @@ def run_cli(*argv, iterm_id=None):
 def run():
     ok = True
 
+    # spawn stub: cmd_spawn does `import spawn as spawnmod` at call time, so
+    # patching the module attribute here sticks for every run_cli("spawn", ...)
+    # below. Registers the (fake) worker so later checks can inspect it.
+    import spawn as spawnmod
+    spawn_calls = []
+
+    async def _fake_spawn(name, project, prompt, workdir, role="worker",
+                          arm="off"):
+        spawn_calls.append({"name": name, "workdir": workdir, "arm": arm})
+        c = db.connect()
+        db.register(c, name, f"FAKE-{name}", role, project)
+        db.set_session_context(c, name, workdir, prompt)
+        return f"FAKE-{name}"
+
+    spawnmod.spawn_worker = _fake_spawn
+
     ok &= check("my_iterm_id strips prefix", cli.my_iterm_id() == "AAAA-1111")
 
     # register self as coordinator
@@ -396,6 +412,40 @@ def run():
     ok &= check("wipe with names + --all -> exit 1",
                 code == 1 and ("names" in err or "takes no" in err))
     wc.close()
+
+    # --- spawn --worktree -----------------------------------------------------
+    import subprocess
+    repo = os.path.join(tempfile.mkdtemp(), "webshop")
+    subprocess.run(["git", "init", "-q", repo], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t",
+                    "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                    "-m", "root"], check=True)
+
+    code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("--worktree requires --dir", code == 1 and "--dir" in err)
+
+    nogit = tempfile.mkdtemp()
+    code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
+                           "--dir", nogit, iterm_id="w0t0p0:CO-ID")
+    ok &= check("--worktree needs a git repo", code == 1
+                and "not a git repository" in err)
+
+    code, out, _ = run_cli("spawn", "go", "--name", "wt1", "--project",
+                           "webshop", "--worktree", "--dir", repo,
+                           iterm_id="w0t0p0:CO-ID")
+    wt = os.path.join(os.path.dirname(repo), "webshop-wt1")
+    ok &= check("worktree created + spawned there", code == 0
+                and os.path.isdir(wt) and spawn_calls[-1]["workdir"] == wt)
+    branches = subprocess.run(["git", "-C", repo, "branch", "--list",
+                               "relay/wt1"], capture_output=True, text=True)
+    ok &= check("branch relay/wt1 exists", "relay/wt1" in branches.stdout)
+    ok &= check("worktree_repo recorded",
+                db.get_session(conn, "wt1")["worktree_repo"] == repo)
+
+    code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
+                           "--dir", repo, iterm_id="w0t0p0:CO-ID")
+    ok &= check("existing worktree path refused", code == 1)
 
     conn.close()
     print()
