@@ -1,8 +1,8 @@
 # Worktree spawn + typed messages - design
 
 Date: 2026-07-19
-Status: approved (brainstormed with Maciej; TUI visualization explicitly deferred
-until these two ship)
+Status: implemented (see docs/drafts/worktree-typed-messages-plan.md commits;
+TUI visualization explicitly deferred until these two ship)
 
 Two swarm-layer features, inspired by a survey of peer orchestrators (Overstory's
 typed SQLite mail bus, cmux/claude-squad worktree isolation, Metaswarm's
