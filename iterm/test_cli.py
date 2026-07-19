@@ -94,6 +94,39 @@ def run():
     code, out, _ = run_cli("msgs", "--with", "coord", iterm_id="w0t1p0:BFF-ID")
     ok &= check("msgs history", code == 0 and "spec ready" in out)
 
+    # --- typed messages -------------------------------------------------------
+    code, _, _ = run_cli("send", "bff-worker", "branch ready", "--kind", "done",
+                         iterm_id="w0t0p0:CO-ID")
+    row = db.undelivered(conn, "bff-worker")[0]
+    ok &= check("send --kind stored", code == 0 and row["kind"] == "done")
+    run_cli("inbox", iterm_id="w0t1p0:BFF-ID")   # drain
+
+    code, _, err = run_cli("send", "bff-worker", "x", "--kind", "wake",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("kind wake reserved", code == 1 and "reserved" in err)
+    code, _, err = run_cli("send", "bff-worker", "x", "--kind", "Not Valid",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("bad kind rejected", code == 1 and "lowercase" in err)
+    code, _, _ = run_cli("send", "bff-worker", "y", "--kind", "review-me",
+                         iterm_id="w0t0p0:CO-ID")
+    ok &= check("custom kind allowed", code == 0
+                and db.undelivered(conn, "bff-worker")[0]["kind"] == "review-me")
+    run_cli("inbox", iterm_id="w0t1p0:BFF-ID")   # drain
+
+    # --- broadcast ------------------------------------------------------------
+    code, _, err = run_cli("send", "--all", "hello", iterm_id="w0t0p0:CO-ID")
+    ok &= check("--all needs --project", code == 1 and "--project" in err)
+    code, _, err = run_cli("send", "--all", "--project", "webshop", "a", "b",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("--all with two positionals rejected",
+                code == 1 and "only the message body" in err)
+    code, out, _ = run_cli("send", "--all", "--project", "webshop",
+                           "freeze: rebasing", iterm_id="w0t0p0:CO-ID")
+    ok &= check("broadcast queues to others, not sender", code == 0
+                and len(db.undelivered(conn, "bff-worker")) == 1
+                and db.undelivered(conn, "coord") == [])
+    run_cli("inbox", iterm_id="w0t1p0:BFF-ID")   # drain
+
     # --- task verbs ---------------------------------------------------------
     # coordinator creates an epic for the worker -> assignment wake-up queued
     code, out, _ = run_cli("task", "add", "--owner", "bff-worker",

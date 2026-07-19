@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -69,6 +70,11 @@ def _ago(ts: float) -> str:
     return f"{d // 3600}h ago"
 
 
+# Custom message kinds are allowed but kept machine-friendly: one short
+# lowercase token. Known kinds (db.MESSAGE_KINDS) get dedicated rendering.
+_KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{0,19}$")
+
+
 # --- verb handlers (each returns an exit code) --------------------------------
 
 def cmd_register(args) -> int:
@@ -106,10 +112,38 @@ def cmd_send(args) -> int:
     me, rc = _require_me(conn)
     if me is None:
         return rc
+    kind = args.kind or "info"
+    if kind == "wake":
+        return _err("kind 'wake' is reserved for relay's automatic wake-ups")
+    if not _KIND_RE.match(kind):
+        return _err(f"--kind must be one short lowercase token "
+                    f"(a-z, 0-9, -, _), got {kind!r}")
+    if args.all:
+        if args.body is not None:
+            return _err("with --all, pass only the message body")
+        if args.to is None:
+            return _err("message body required")
+        if not args.project:
+            return _err("--all requires --project")
+        body = args.to
+        targets = [s for s in db.list_sessions(conn, args.project)
+                   if s["name"] != me["name"] and not s["closed_at"]]
+        if not targets:
+            return _err(f"no live sessions in project '{args.project}'")
+        for s in targets:
+            db.queue_message(conn, me["name"], s["name"], body,
+                             args.project, kind=kind)
+        print(f"queued for {len(targets)} session(s): "
+              + ", ".join(s["name"] for s in targets))
+        return 0
+    if args.to is None or args.body is None:
+        return _err('usage: relay send <name> "<body>"  or  '
+                    'relay send --all --project <p> "<body>"')
     if db.get_session(conn, args.to) is None:
         return _err(f"unknown recipient '{args.to}' - relay msgs shows known "
                     f"names; sessions register themselves first")
-    db.queue_message(conn, me["name"], args.to, args.body, me["project"])
+    db.queue_message(conn, me["name"], args.to, args.body, me["project"],
+                     kind=kind)
     print(f"queued for {args.to} (delivered when their session is idle "
           f"and the relay TUI is running)")
     return 0
@@ -525,8 +559,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_status)
 
     sd = sub.add_parser("send", help="queue a message to a named session")
-    sd.add_argument("to")
-    sd.add_argument("body")
+    sd.add_argument("to", nargs="?", default=None,
+                    help="recipient name (omit with --all)")
+    sd.add_argument("body", nargs="?", default=None)
+    sd.add_argument("--kind", default="info",
+                    help="info|done|blocked|escalation or a custom lowercase "
+                         "token ('wake' is reserved)")
+    sd.add_argument("--all", action="store_true",
+                    help="broadcast to every live session in --project "
+                         "(except me)")
+    sd.add_argument("--project", default=None)
     sd.set_defaults(fn=cmd_send)
 
     ib = sub.add_parser("inbox", help="print + mark delivered my queued messages")
