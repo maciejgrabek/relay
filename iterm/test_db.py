@@ -29,10 +29,10 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 4",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 4)
+    ok &= check("fresh connect stamps user_version = 5",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 5)
 
-    # v1 -> v4 migration: old sessions table gains arm_request, mode, and the
+    # v1 -> v5 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.
     import sqlite3 as _sq
@@ -50,13 +50,13 @@ def run():
     db.register(mig, "migrated", "M-1", "worker", "p")
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
-    ok &= check("v1 db migrates to v4 with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 4
+    ok &= check("v1 db migrates to v5 with arm_request + mode columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 5
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
-    ok &= check("v1 db migrates to v4 with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 4
+    ok &= check("v1 db migrates to v5 with context + closed_at columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 5
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -339,6 +339,60 @@ def run():
                 and db.get_session(wdb, "s2") is not None
                 and len(db.message_history(wdb, project="P2")) == 1)
     wdb.close()
+
+    # --- v5: message kind + worktree_repo ------------------------------------
+    p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
+    conn5 = db.connect(p5)
+    ok &= check("fresh DB is schema v5",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 5)
+    mid = db.queue_message(conn5, "a", "b", "hello")
+    row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
+    ok &= check("queue_message defaults kind=info", row["kind"] == "info")
+    mid2 = db.queue_message(conn5, "a", "b", "done!", kind="done")
+    row2 = conn5.execute("SELECT * FROM messages WHERE id=?", (mid2,)).fetchone()
+    ok &= check("queue_message stores explicit kind", row2["kind"] == "done")
+
+    db.register(conn5, "w1", "SID-W1", "worker", "proj")
+    ok &= check("worktree_repo defaults empty",
+                db.get_session(conn5, "w1")["worktree_repo"] == "")
+    ok &= check("set_worktree_repo writes",
+                db.set_worktree_repo(conn5, "w1", "/tmp/repo")
+                and db.get_session(conn5, "w1")["worktree_repo"] == "/tmp/repo")
+    ok &= check("set_worktree_repo unknown name -> False",
+                not db.set_worktree_repo(conn5, "ghost", "/tmp/x"))
+
+    # upgrade path: hand-build a v4 DB (no kind / worktree_repo), then connect
+    p4 = os.path.join(tempfile.mkdtemp(), "v4.db")
+    import sqlite3 as _sq
+    old = _sq.connect(p4)
+    old.executescript("""
+      CREATE TABLE sessions(name TEXT PRIMARY KEY, iterm_session_id TEXT NOT NULL,
+        role TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+        status_text TEXT NOT NULL DEFAULT '', registered_at REAL NOT NULL,
+        last_seen REAL NOT NULL, arm_request TEXT NOT NULL DEFAULT '',
+        mode TEXT NOT NULL DEFAULT '', workdir TEXT NOT NULL DEFAULT '',
+        spawn_prompt TEXT NOT NULL DEFAULT '', closed_at REAL NOT NULL DEFAULT 0);
+      CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project TEXT NOT NULL DEFAULT '', from_name TEXT NOT NULL,
+        to_name TEXT NOT NULL, body TEXT NOT NULL, created_at REAL NOT NULL,
+        delivered_at REAL);
+      CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project TEXT NOT NULL DEFAULT '', parent_id INTEGER, title TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'todo', owner TEXT, spec_path TEXT,
+        blocked_by TEXT NOT NULL DEFAULT '', created_by TEXT,
+        updated_at REAL NOT NULL);
+      PRAGMA user_version = 4;
+    """)
+    old.commit(); old.close()
+    up = db.connect(p4)
+    ok &= check("v4 -> v5 migration runs",
+                up.execute("PRAGMA user_version").fetchone()[0] == 5)
+    cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
+    cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
+    ok &= check("migration adds kind + worktree_repo",
+                "kind" in cols_m and "worktree_repo" in cols_s)
+    conn5.close()
+    up.close()
 
     conn.close()
     print()
