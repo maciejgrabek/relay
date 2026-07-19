@@ -557,7 +557,7 @@ class Watcher:
         if not msgs:
             return
         m = msgs[0]
-        text = swarm.delivery_text(m["from_name"], m["body"])
+        text = swarm.delivery_text(m["from_name"], m["body"], swarm.kind_of(m))
         if self.dry_run:
             if m["id"] not in self._dryrun_delivered:
                 self._dryrun_delivered.add(m["id"])

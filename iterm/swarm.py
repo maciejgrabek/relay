@@ -54,7 +54,7 @@ def wakeup_unblocked_body(task) -> str:
             f"blockers are done. Set it to doing and start")
 
 
-def delivery_text(from_name: str, body: str) -> str:
+def delivery_text(from_name: str, body: str, kind: str = "info") -> str:
     """The literal text typed into the target session. Newlines flattened so
     the injected turn is one paste + one Enter (bracketed-paste lesson).
 
@@ -64,7 +64,18 @@ def delivery_text(from_name: str, body: str) -> str:
     plain space after flattening."""
     flat = " ".join(str(body).splitlines())
     flat = "".join(c for c in flat if c.isprintable() or c == " ")
-    return f"[relay msg from {from_name}] {flat}"
+    tag = "msg" if kind in ("", "info") else kind
+    return f"[relay {tag} from {from_name}] {flat}"
+
+
+def kind_of(m) -> str:
+    """A message row/dict's kind, defaulting 'info' for pre-v5 rows and plain
+    dict fixtures (sqlite Row and dict both support .keys())."""
+    try:
+        k = m["kind"] if "kind" in m.keys() else ""
+    except Exception:
+        k = ""
+    return k or "info"
 
 
 # --- injection safety: is this Claude's idle input box? -----------------------
@@ -342,8 +353,10 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str
     out.append("MESSAGES")
     for m in messages[-8:]:
         q = "" if m["delivered_at"] else "  [queued]"
+        k = kind_of(m)
+        tag = f"[{k}] " if k != "info" else ""
         out.append(f"  {m['from_name']} -> {m['to_name']}: "
-                   f"{_clip(m['body'], width - 30)}{q}")
+                   f"{tag}{_clip(m['body'], width - 30)}{q}")
     if not messages:
         out.append("  (none)")
     return "\n".join(out)

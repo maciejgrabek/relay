@@ -6,6 +6,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
+import swarm  # noqa: E402
 from swarm import (  # noqa: E402
     parse_blockers, unblocked_by_completion, wakeup_assignment_body,
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
@@ -154,6 +155,28 @@ def run():
                 "coord" in out and "bff-worker" in out)
     ok &= check("message feed present", "coord -> bff-worker: go" in out)
     ok &= check("empty inputs render", render_swarm([], [], [], 0.0) != "")
+
+    ok &= check("delivery_text info unchanged",
+                swarm.delivery_text("coord", "hi") == "[relay msg from coord] hi")
+    ok &= check("delivery_text carries kind",
+                swarm.delivery_text("bff", "done", "done")
+                == "[relay done from bff] done")
+    ok &= check("kind_of tolerates missing key",
+                swarm.kind_of({"id": 1, "body": "x"}) == "info")
+    ok &= check("kind_of reads kind",
+                swarm.kind_of({"id": 1, "kind": "blocked"}) == "blocked")
+    one_session = [{"name": "a", "role": "worker", "project": "",
+                    "status_text": ""}]
+    fed = swarm.render_swarm(
+        one_session, [],
+        [{"from_name": "a", "to_name": "b", "body": "hi", "delivered_at": 1,
+          "kind": "escalation"}], now=0.0)
+    ok &= check("feed tags non-info kind", "[escalation]" in fed)
+    fed2 = swarm.render_swarm(
+        one_session, [],
+        [{"from_name": "a", "to_name": "b", "body": "hi", "delivered_at": 1,
+          "kind": "info"}], now=0.0)
+    ok &= check("feed leaves info untagged", "[info]" not in fed2)
 
     # --- restore/clean planning ---------------------------------------------
     S = [
