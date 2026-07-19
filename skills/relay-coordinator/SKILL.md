@@ -23,6 +23,13 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
    An unarmed worker stalls at its first permission prompt with nobody to
    clear it. Use `--arm wild` (or `insane` for throwaway work); or set
    `[swarm] spawn_arm` in ~/.relay/config so every spawn arms by default.
+   When 2+ workers will touch the SAME repo, add --worktree so each gets an
+   isolated git worktree (branch relay/<name>, sibling dir <repo>-<name>):
+   `relay spawn --name <worker> --project <project> --dir <repo-path> --worktree --arm wild "<short mission>"`
+   Prefer this over pointing two workers at one working copy - parallel
+   sessions editing the same files clobber each other. If you need a custom
+   layout, create the worktree yourself (`git worktree add`) and pass --dir;
+   relay never forces the layout.
 3. Create one epic per worker:
    `relay task add "<epic title>" --owner <worker> --spec <abs-spec-path> --project <project>`
    The owner is woken automatically with the task id and spec path.
@@ -51,12 +58,23 @@ discipline as a good implementation plan.
 
 ## Reacting (event-driven, not polling)
 
-- Workers report via messages that arrive as `[relay msg from <name>]` turns.
-  React to those; between them, stay idle.
+- Workers report via messages that arrive as `[relay <kind> from <name>]`
+  turns (msg = plain info). Treat `done` as queue-advance, `blocked` and
+  `escalation` as interrupts to handle now. React to those; between them,
+  stay idle.
 - On "done": review, then assign follow-ups or mark the parent epic done.
 - On "blocked": resolve the blocker (answer, re-scope, reassign) and reply
   with `relay send <worker> "..."`.
 - `relay task list --project <project>` is your board when you need a sweep.
+
+## Integrating worktree branches
+
+Workers on worktrees commit to relay/<name> and report the branch in their
+done message. Merging is YOURS (or the human's), via normal git:
+- on done: review the branch, then merge/rebase it into the target branch
+  yourself, or escalate to the human if conflicts need judgment.
+- do not mark the epic done until its branch is integrated or explicitly
+  parked.
 
 ## Watch for silent stalls
 

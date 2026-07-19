@@ -296,6 +296,11 @@ relay register --name coord --role coordinator --project webshop
 relay spawn --name bff  --project webshop --dir ~/work/bff --arm wild "await your task"
 relay spawn --name api  --project webshop --dir ~/work/api --arm wild "await your task"
 
+# two workers on the SAME repo: add --worktree so each gets its own git
+# worktree (branch relay/<name>, sibling dir <repo>-<name>) instead of
+# clobbering one working copy:
+relay spawn --name api2 --project webshop --dir ~/work/api --worktree --arm wild "await your task"
+
 # assign an epic to each - the owner is woken automatically with the task:
 relay task add "add /checkout endpoint" --owner bff --project webshop
 relay task add "checkout order model"   --owner api --project webshop \
@@ -368,10 +373,14 @@ relay register --name <name> --role worker|coordinator [--project <p>]
 relay status "<one line>"
     Update your status line (shown in the relay TUI). Keep it fresh.
 
-relay send <name> "<body>"
-    Queue a message for a named session. It is TYPED INTO their Claude
+relay send <name> "<body>" [--kind <k>]
+relay send --all --project <p> "<body>" [--kind <k>]
+    Queue a message for a named session (or every live session in the
+    project except you, with --all). Delivered TYPED INTO their Claude
     prompt when they are idle and the relay TUI is running. Single line;
-    newlines are flattened.
+    newlines are flattened. --kind: info (default) | done | blocked |
+    escalation | a custom lowercase token ('wake' is reserved). escalation
+    also pings the human immediately.
 
 relay inbox
     Print your undelivered messages and mark them delivered. Check it when
@@ -393,8 +402,10 @@ relay task list [--project <p>] [--mine]
     Epics with nested subtasks, states, owners, blockers.
 
 relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
-            [--role worker|coordinator]
+            [--role worker|coordinator] [--worktree]
     Open a new iTerm2 tab running claude, pre-registered under <name>.
+    --worktree (with --dir <repo>): spawn in a fresh git worktree of that
+    repo instead of the repo itself.
 ```
 
 Identity-free verbs (`relay task list`, `relay msgs`) work anywhere. The
@@ -422,6 +433,25 @@ blockers are done, wakes its owner). Every delivery is written to the audit
 log **before** injection, same contract as auto-approvals - verdicts
 `delivered` (live) and `would-deliver` (`--dry-run`, logged but never
 typed).
+
+### Message kinds
+
+`relay send` and `relay send --all` take `--kind`: `info` (default) |
+`done` | `blocked` | `escalation` | a custom lowercase token. The kind
+shows up in the delivery prefix, e.g. a `done` message from `bff` arrives
+as:
+
+```
+[relay done from bff] task #4 done on branch relay/bff: /checkout endpoint added
+```
+
+(a plain `info` message still prefixes as `[relay msg from <name>]`, for
+backward compatibility.) `escalation` additionally plays the alert sound
+and posts a macOS notification for the human **immediately** on send -
+before the target session is even idle - so reserve it for messages that
+genuinely need a human's judgment, not routine coordinator back-and-forth.
+`wake` is reserved for relay's own automatic wake-ups (task assignment,
+unblocked-task notices) and cannot be passed to `--kind`.
 
 ### Staleness
 
@@ -451,6 +481,12 @@ generated first prompt is minimal - it invokes the relay-worker skill and
 states name, project, and task; the actual protocol lives in the skill, not
 in the spawned prompt. Boot delay before the tab is considered ready is
 `RELAY_SPAWN_BOOT_DELAY` seconds.
+
+Add `--worktree` (requires `--dir <repo>`) to create branch `relay/<name>`
+and a sibling git worktree `<repo>-<name>`, then spawn the worker there
+instead of in `<repo>` itself. Use it whenever two or more workers will
+touch the same repo, so their edits can't clobber each other; `relay wipe`
+cleans up the worktree later (see below).
 
 ### Recovering abandoned work
 
@@ -503,7 +539,10 @@ relay wipe [names...] [--project <p>] [--all] [--dry-run] [--yes]
     undelivered messages. Same candidate set as clean - no names =
     every closed session (including ones that own no tasks), named =
     those specific closed sessions. Live sessions are never touched by
-    the orphaned form.
+    the orphaned form. For a session spawned with `--worktree`, wiping it
+    also removes its git worktree and `relay/<name>` branch - but only
+    when the worktree is clean; a dirty worktree (uncommitted or untracked
+    changes) is always kept so in-progress work is never silently deleted.
 
     `--all` requires `--project <p>` and nukes that whole project in one
     shot: every task, session (live or closed), and message it has, no

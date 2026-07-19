@@ -30,8 +30,12 @@ An assignment message names a task id, and usually a spec file.
 4. Keep `relay status` fresh - one line, what you are on right now. This is
    also your heartbeat: relay flags a session STALE if it owns a `doing` task
    and goes quiet, so update status as you make progress on a long task.
-5. When the work is done: `relay task update <epic-id> --state done` and
-   `relay send <coordinator> "task #<id> done: <one-line summary>"`.
+5. When the work is done: commit it first - on a worktree you are on branch
+   relay/<your-name>; commit everything there (an uncommitted worktree
+   blocks cleanup and can be lost). Then `relay task update <epic-id>
+   --state done` and
+   `relay send <coordinator> "task #<id> done on branch relay/<your-name>: <one-line summary>" --kind done`.
+   (Not on a worktree? Same rule, minus the branch name.)
 
 ## A thin brief is a blocker - clarify, do not guess
 
@@ -53,10 +57,14 @@ word looks identical to one that is working - the coordinator waits forever.
 - **If you hit a question you cannot answer yourself** (a design decision only
   the human/coordinator can make), do NOT stop and wait: mark the task
   `blocked`, `relay send <coordinator> "need a decision on #<id>: <the
-  question>"`, then go idle. relay wakes you when they reply.
+  question>" --kind escalation`, then go idle. relay wakes you when they
+  reply. `--kind escalation` plays a sound for the human immediately - use it
+  when you need a HUMAN, not for routine coordinator questions (those are
+  --kind blocked).
 - **If you are blocked by another task**, `relay task update <id> --state
-  blocked`, `relay send <coordinator> "blocked on #<id>: <why>"`, then stop -
-  an injected message wakes you when the blocker clears. Do not spin or poll.
+  blocked`, `relay send <coordinator> "blocked on #<id>: <why>" --kind
+  blocked`, then stop - an injected message wakes you when the blocker
+  clears. Do not spin or poll.
 
 ## Discipline
 
