@@ -438,6 +438,30 @@ def _worktree_add(repo: str, name: str):
     return path, None
 
 
+def _worktree_dirty(workdir: str) -> bool:
+    """True when the worktree has uncommitted/untracked changes - or can't be
+    read at all (unreadable counts as dirty: never delete blind)."""
+    import subprocess
+    r = subprocess.run(["git", "-C", workdir, "status", "--porcelain"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return True
+    return bool(r.stdout.strip())
+
+
+def _worktree_remove(repo: str, workdir: str, name: str):
+    """Remove a relay-created worktree + its relay/<name> branch. Branch
+    deletion is best-effort (already merged-and-deleted is not an error)."""
+    import subprocess
+    r = subprocess.run(["git", "-C", repo, "worktree", "remove", workdir],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or "git worktree remove failed")
+    subprocess.run(["git", "-C", repo, "branch", "-D", f"relay/{name}"],
+                   capture_output=True, text=True)
+    return True, ""
+
+
 def cmd_spawn(args) -> int:
     import asyncio
     import config as relay_config
@@ -518,6 +542,12 @@ def cmd_wipe(args) -> int:
     tasks = [dict(r) for r in db.list_tasks(conn, project=args.project)]
     names = args.names or None
     cands = swarm.wipe_candidates(sessions, tasks, names=names)
+    for c in cands:
+        if (c.get("worktree_repo") and c.get("workdir")
+                and os.path.isdir(c["workdir"])):
+            c["worktree_action"] = ("keep-dirty"
+                                    if _worktree_dirty(c["workdir"])
+                                    else "remove")
     print(swarm.wipe_plan_text(cands))
     for w in swarm.wipe_blocker_warnings(cands, tasks):
         print("  " + w)
@@ -538,6 +568,11 @@ def cmd_wipe(args) -> int:
         db.delete_tasks_by_ids(conn, c["task_ids"])
         db.delete_undelivered_to(conn, c["name"])
         db.delete_session(conn, c["name"])
+        if c.get("worktree_action") == "remove":
+            ok_rm, rm_err = _worktree_remove(c["worktree_repo"], c["workdir"],
+                                             c["name"])
+            print(f"  removed worktree {c['workdir']}" if ok_rm
+                  else f"  worktree removal failed: {rm_err}")
         acted += 1
     print(f"wiped {acted} session(s).")
     return 0

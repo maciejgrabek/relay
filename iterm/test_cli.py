@@ -447,6 +447,34 @@ def run():
                            "--dir", repo, iterm_id="w0t0p0:CO-ID")
     ok &= check("existing worktree path refused", code == 1)
 
+    # --- wipe removes clean worktrees, keeps dirty ones -----------------------
+    # second worktree worker, made dirty
+    run_cli("spawn", "go", "--name", "wt2", "--project", "webshop",
+            "--worktree", "--dir", repo, iterm_id="w0t0p0:CO-ID")
+    wt2 = os.path.join(os.path.dirname(repo), "webshop-wt2")
+    with open(os.path.join(wt2, "uncommitted.txt"), "w") as f:
+        f.write("wip")
+    # both must be CLOSED to be wipe candidates
+    import time as _t
+    db.mark_closed(conn, "wt1", _t.time())
+    db.mark_closed(conn, "wt2", _t.time())
+
+    code, out, _ = run_cli("wipe", "wt1", "wt2", "--project", "webshop",
+                           "--dry-run")
+    ok &= check("dry-run plans removal + keep", code == 0
+                and "remove worktree" in out and "uncommitted" in out)
+    ok &= check("dry-run removed nothing",
+                os.path.isdir(wt) and os.path.isdir(wt2))
+
+    code, out, _ = run_cli("wipe", "wt1", "wt2", "--project", "webshop",
+                           "--yes")
+    ok &= check("wipe removed clean worktree", code == 0
+                and not os.path.exists(wt))
+    ok &= check("wipe kept dirty worktree", os.path.isdir(wt2))
+    branches = subprocess.run(["git", "-C", repo, "branch", "--list",
+                               "relay/wt1"], capture_output=True, text=True)
+    ok &= check("branch relay/wt1 deleted", "relay/wt1" not in branches.stdout)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
