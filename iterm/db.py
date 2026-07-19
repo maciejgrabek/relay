@@ -21,6 +21,11 @@ TASK_STATES = ("todo", "doing", "blocked", "done")
 # when it first sees the session; "off" is expressed by no request at all).
 ARM_REQUEST_MODES = ("safe", "wild", "insane")
 
+# Message kinds with dedicated rendering/behavior. 'wake' is reserved for
+# relay-generated wake-ups; custom kinds beyond this set are allowed and
+# render plain. Validation lives in the CLI - the DB stores what it is given.
+MESSAGE_KINDS = ("info", "done", "blocked", "escalation", "wake")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   name TEXT PRIMARY KEY,
@@ -34,7 +39,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   mode TEXT NOT NULL DEFAULT '',
   workdir TEXT NOT NULL DEFAULT '',
   spawn_prompt TEXT NOT NULL DEFAULT '',
-  closed_at REAL NOT NULL DEFAULT 0
+  closed_at REAL NOT NULL DEFAULT 0,
+  worktree_repo TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +49,8 @@ CREATE TABLE IF NOT EXISTS messages(
   to_name TEXT NOT NULL,
   body TEXT NOT NULL,
   created_at REAL NOT NULL,
-  delivered_at REAL
+  delivered_at REAL,
+  kind TEXT NOT NULL DEFAULT 'info'
 );
 CREATE TABLE IF NOT EXISTS tasks(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,12 +86,13 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     # otherwise migrate step by step. v2 added sessions.arm_request, v3 added
     # sessions.mode (persisted arm level, so a relay restart doesn't disarm a
     # live swarm), v4 added sessions.workdir/spawn_prompt/closed_at (restore
-    # context for a dead session, and whether it's closed).
+    # context for a dead session, and whether it's closed), v5 added
+    # messages.kind and sessions.worktree_repo.
     _migrate(conn)
     return conn
 
 
-_CURRENT_VERSION = 4
+_CURRENT_VERSION = 5
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -92,6 +100,8 @@ _MIGRATIONS = {
     3: ("ALTER TABLE sessions ADD COLUMN workdir TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN spawn_prompt TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN closed_at REAL NOT NULL DEFAULT 0"),
+    4: ("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'info'",
+        "ALTER TABLE sessions ADD COLUMN worktree_repo TEXT NOT NULL DEFAULT ''"),
 }
 
 
@@ -204,6 +214,15 @@ def set_session_context(conn, name: str, workdir: str,
     return cur.rowcount > 0
 
 
+def set_worktree_repo(conn, name: str, repo: str) -> bool:
+    """Record that this session's workdir is a relay-created git worktree of
+    `repo`, so wipe can offer to remove it (only when clean)."""
+    cur = conn.execute("UPDATE sessions SET worktree_repo=? WHERE name=?",
+                       (repo, name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def mark_closed(conn, name: str, ts: float) -> bool:
     cur = conn.execute("UPDATE sessions SET closed_at=? WHERE name=?",
                        (ts, name))
@@ -236,11 +255,13 @@ def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:
 # --- messages ------------------------------------------------------------------
 
 def queue_message(conn, from_name: str, to_name: str, body: str,
-                  project: str = "", now: Optional[float] = None) -> int:
+                  project: str = "", now: Optional[float] = None,
+                  kind: str = "info") -> int:
     cur = conn.execute(
-        """INSERT INTO messages(project, from_name, to_name, body, created_at)
-           VALUES(?,?,?,?,?)""",
-        (project, from_name, to_name, body, _now(now)))
+        """INSERT INTO messages(project, from_name, to_name, body, created_at,
+                                kind)
+           VALUES(?,?,?,?,?,?)""",
+        (project, from_name, to_name, body, _now(now), kind or "info"))
     conn.commit()
     return cur.lastrowid
 
