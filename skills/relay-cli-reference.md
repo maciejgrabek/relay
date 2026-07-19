@@ -10,10 +10,15 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay status "<one line>"
         Update your status line (shown in the relay TUI). Keep it fresh.
 
-    relay send <name> "<body>"
-        Queue a message for a named session. It is TYPED INTO their Claude
+    relay send <name> "<body>" [--kind <k>]
+    relay send --all --project <p> "<body>" [--kind <k>]
+        Queue a message for a named session (or every live session in the
+        project except you, with --all). Delivered TYPED INTO their Claude
         prompt when they are idle and the relay TUI is running. Single line;
-        newlines are flattened.
+        newlines are flattened. --kind: info (default) | done | blocked |
+        escalation | a custom lowercase token. 'escalation' also plays a
+        sound + notification for the human IMMEDIATELY - use it only when a
+        human decision is genuinely required. 'wake' is reserved.
 
     relay inbox
         Print your undelivered messages and mark them delivered. Check it when
@@ -36,7 +41,12 @@ inside your session. Errors print to stderr with a non-zero exit.
 
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
                 [--role worker|coordinator] [--arm off|safe|wild|insane]
+                [--worktree]
         Open a new iTerm2 tab running claude, pre-registered under <name>.
+        --worktree (with --dir <repo>): create branch relay/<name> and a
+        sibling git worktree <repo>-<name>, and spawn the worker THERE - use it
+        whenever 2+ workers touch the same repo, so they cannot clobber each
+        other's files.
 
     relay doctor
         Print swarm health from outside the TUI: registered sessions and their
