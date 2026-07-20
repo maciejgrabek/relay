@@ -425,6 +425,11 @@ def run():
                            iterm_id="w0t0p0:CO-ID")
     ok &= check("--worktree requires --dir", code == 1 and "--dir" in err)
 
+    code, _, err = run_cli("spawn", "go", "--name", "bad/name", "--worktree",
+                           "--dir", repo, iterm_id="w0t0p0:CO-ID")
+    ok &= check("--worktree refuses path-y names", code == 1
+                and "simple --name" in err)
+
     nogit = tempfile.mkdtemp()
     code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
                            "--dir", nogit, iterm_id="w0t0p0:CO-ID")
