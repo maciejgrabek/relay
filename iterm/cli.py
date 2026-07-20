@@ -473,6 +473,11 @@ def cmd_spawn(args) -> int:
         return _err(f"workdir not found: {workdir}")
     repo = None
     if args.worktree:
+        # The name becomes a branch (relay/<name>) and a sibling directory
+        # (<repo>-<name>) - keep it a simple token so it can't redirect either.
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", args.name):
+            return _err("--worktree requires a simple --name (letters, "
+                        "digits, - or _): it becomes a branch and dir name")
         repo = workdir
         workdir, wt_err = _worktree_add(repo, args.name)
         if wt_err:

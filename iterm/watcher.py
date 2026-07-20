@@ -600,14 +600,16 @@ class Watcher:
         notify is the zero-blast-radius half, same as prompt alerts."""
         try:
             msgs = swarmdb.undelivered(self._swarm_conn())
-        except Exception:
-            return
-        for m in swarm.escalation_pings(msgs, self._escalation_pinged):
-            self._escalation_pinged.add(m["id"])
-            self._note(f"ESCALATION from {m['from_name']} -> {m['to_name']}: "
-                       f"{m['body'][:80]}")
-            notify_mac(f"Relay - escalation from {m['from_name']}",
-                       m["body"][:120], self.alert_sound)
+            for m in swarm.escalation_pings(msgs, self._escalation_pinged):
+                self._escalation_pinged.add(m["id"])
+                self._note(f"ESCALATION from {m['from_name']} -> "
+                           f"{m['to_name']}: {m['body'][:80]}")
+                notify_mac(f"Relay - escalation from {m['from_name']}",
+                           m["body"][:120], self.alert_sound)
+        except Exception as e:
+            # Never let a bad row escape into start()'s tick loop (it has no
+            # per-tick except; an escape would kill the watcher outright).
+            self._note(f"escalation check error: {e}")
 
     def _check_stale(self, info: SessionInfo) -> None:
         """Flag a registered session STALE (and notify ONCE per onset) when a
