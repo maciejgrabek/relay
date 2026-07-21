@@ -553,6 +553,69 @@ def cmd_spawn(args) -> int:
     return 0
 
 
+def _panel_running() -> bool:
+    """True when a relay panel holds the singleton lock (kernel flock, so a
+    dead panel never reads as running). Never raises."""
+    import fcntl
+    p = os.path.expanduser(os.environ.get("RELAY_LOCK", "~/.relay/relay.lock"))
+    try:
+        with open(p, "a") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+                return False           # we could take it -> nobody holds it
+            except OSError:
+                return True
+    except OSError:
+        return False
+
+
+def cmd_demo(args) -> int:
+    """A guided 60-second tour of the whole loop, from YOUR current session:
+    registers you as the demo coordinator, spawns one armed worker in a temp
+    dir, assigns it a haiku task, and tells you what to watch. Everything is
+    ordinary relay machinery on a throwaway 'demo' project."""
+    import asyncio
+    import tempfile
+    import spawn as spawnmod
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - run this inside iTerm2")
+    conn = db.connect()
+    if not _panel_running():
+        print("!! the relay panel is not running - open another tab and run\n"
+              "   'relay' first: the panel is what delivers messages and\n"
+              "   auto-clears the worker's prompts. The demo will only queue\n"
+              "   things until it is up.")
+    db.register(conn, "demo-coord", sid, "coordinator", "demo")
+    workdir = tempfile.mkdtemp(prefix="relay-demo-")
+    try:
+        asyncio.run(spawnmod.spawn_worker(
+            "demo-w1", "demo", "await your task via relay inbox", workdir,
+            "worker", arm="wild"))
+    except Exception as e:
+        return _err(f"demo spawn failed: {e}")
+    tid = db.add_task(
+        conn,
+        'write a haiku about terminals, then: relay send demo-coord '
+        '"<the haiku>" --kind done',
+        project="demo", owner="demo-w1", created_by="demo-coord")
+    task = db.get_task(conn, tid)
+    db.queue_message(conn, "relay", "demo-w1",
+                     swarm.wakeup_assignment_body(task), "demo", kind="wake")
+    print(f"""
+demo is live. You are 'demo-coord'; worker 'demo-w1' spawned in {workdir}.
+
+WATCH, in order (~60s):
+  1. panel: demo-w1 flips to ▲ WILD within a few seconds (spawn pre-arm)
+  2. relay types task #{tid} into demo-w1's prompt; it writes the haiku
+  3. the haiku arrives HERE as a [relay done from demo-w1] turn
+  4. TAB in the panel: the task moves todo -> doing -> done
+
+then clean up with:  relay wipe --project demo --all --yes""")
+    return 0
+
+
 def cmd_clean(args) -> int:
     import swarm
     conn = db.connect()
@@ -755,6 +818,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
     dr.set_defaults(fn=cmd_doctor)
+
+    dm = sub.add_parser("demo", help="guided 60s tour: spawn a demo worker "
+                                     "and watch the whole loop run")
+    dm.set_defaults(fn=cmd_demo)
 
     vr = sub.add_parser("version", help="print the installed relay version")
     vr.set_defaults(fn=cmd_version)
