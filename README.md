@@ -202,9 +202,11 @@ prompt before you answer it.
 
 The **UNIT** column is each session's name: the iTerm2 tab/session name you've
 set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's
-auto, job-derived name. Relay's own tab is named **`⟿ RELAY CONSOLE`** while
-the panel runs (otherwise it would show its `caffeinate` child); the name is
-handed back to iTerm2's auto-naming on quit, and never touched in `--dry-run`.
+auto, job-derived name. Relay's own tab is named **`⟿ RELAY CONSOLE`** and
+**colored relay-green** in the tab bar while the panel runs (otherwise it
+would show its `caffeinate` child); name and color are handed back to
+iTerm2's defaults on quit (session-scoped - your profile is never modified),
+and never touched in `--dry-run`.
 
 **Manual send vs arming are different things.** *Arming* (`Space`) lets Relay
 auto-clear *safe* prompts for you. *Manual send* (`Enter` / `1` / `2` / `3`) is

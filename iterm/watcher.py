@@ -32,6 +32,18 @@ from gates import classify, Action, Decision, reconstruct_lines, detect_state
 # title from relay's `caffeinate` child - accurate, but not what the panel IS.
 OWN_TAB_NAME = "⟿ RELAY CONSOLE"
 
+
+def _own_tab_profile(on: bool):
+    """Write-only profile fragment for relay's own tab color: relay-phosphor
+    green while the console runs, back to profile default on quit. Session-
+    scoped (async_set_profile_properties) - the user's shared profile is
+    never modified."""
+    p = iterm2.LocalWriteOnlyProfile()
+    p.set_use_tab_color(on)
+    if on:
+        p.set_tab_color(iterm2.Color(58, 255, 122))   # #3aff7a
+    return p
+
 # The always-on status-bar provider (see statusbar_autolaunch.py). When this
 # symlink exists, the provider serves the badge and relay only publishes state.
 AUTOLAUNCH_PROVIDER = os.path.expanduser(
@@ -871,6 +883,8 @@ class Watcher:
             # without this, the tab strip keeps showing the `caffeinate` job.
             if self._own_tab is not None:
                 await self._own_tab.async_set_title(OWN_TAB_NAME)
+            await info._iterm_session.async_set_profile_properties(
+                _own_tab_profile(True))
             self._own_named = True
         except Exception:
             pass
@@ -882,9 +896,11 @@ class Watcher:
         if not self._own_named:
             return
         try:
-            await self.sessions[self.own_sid]._iterm_session.async_set_name("")
+            s = self.sessions[self.own_sid]._iterm_session
+            await s.async_set_name("")
             if self._own_tab is not None:
                 await self._own_tab.async_set_title("")
+            await s.async_set_profile_properties(_own_tab_profile(False))
         except Exception:
             pass
 
