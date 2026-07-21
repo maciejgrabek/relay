@@ -480,6 +480,62 @@ def run():
                                "relay/wt1"], capture_output=True, text=True)
     ok &= check("branch relay/wt1 deleted", "relay/wt1" not in branches.stdout)
 
+    # --- update --auto (quiet start-up self-update) ---------------------------
+    origin = os.path.join(tempfile.mkdtemp(), "origin")
+    subprocess.run(["git", "init", "-q", origin], check=True)
+    subprocess.run(["git", "-C", origin, "-c", "user.email=t@t",
+                    "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                    "-m", "v1"], check=True)
+    clone = os.path.join(tempfile.mkdtemp(), "clone")
+    subprocess.run(["git", "clone", "-q", origin, clone], check=True)
+    subprocess.run(["git", "-C", origin, "-c", "user.email=t@t",
+                    "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                    "-m", "v2"], check=True)
+    stamp = os.path.join(tempfile.mkdtemp(), "update-check")
+    os.environ["RELAY_UPDATE_STAMP"] = stamp
+    real_root = cli._repo_root
+    cli._repo_root = lambda: clone
+    try:
+        code, out, _ = run_cli("update", "--auto")
+        ok &= check("auto update fast-forwards + says so",
+                    code == 0 and "updated" in out)
+        heads = [subprocess.run(["git", "-C", d, "rev-parse", "HEAD"],
+                                capture_output=True, text=True).stdout
+                 for d in (origin, clone)]
+        ok &= check("clone is at origin HEAD", heads[0] == heads[1])
+        ok &= check("auto check wrote the throttle stamp",
+                    os.path.exists(stamp))
+
+        code, out, _ = run_cli("update", "--auto")
+        ok &= check("second auto check throttled, silent",
+                    code == 0 and out == "")
+
+        os.remove(stamp)
+        code, out, _ = run_cli("update", "--auto")
+        ok &= check("up to date -> silent", code == 0 and out == "")
+
+        os.remove(stamp)
+        os.environ["RELAY_NO_AUTOUPDATE"] = "1"
+        code, out, _ = run_cli("update", "--auto")
+        ok &= check("RELAY_NO_AUTOUPDATE=1 skips entirely",
+                    code == 0 and out == "" and not os.path.exists(stamp))
+        del os.environ["RELAY_NO_AUTOUPDATE"]
+
+        # dirty checkout: auto stays silent and touches nothing
+        subprocess.run(["git", "-C", origin, "-c", "user.email=t@t",
+                        "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                        "-m", "v3"], check=True)
+        with open(os.path.join(clone, "wip.txt"), "w") as f:
+            f.write("wip")
+        code, out, _ = run_cli("update", "--auto")
+        ok &= check("dirty checkout -> auto silent, no update",
+                    code == 0 and out == "")
+        os.remove(os.path.join(clone, "wip.txt"))
+    finally:
+        cli._repo_root = real_root
+        os.environ.pop("RELAY_UPDATE_STAMP", None)
+        os.environ.pop("RELAY_NO_AUTOUPDATE", None)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
