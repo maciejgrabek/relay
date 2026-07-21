@@ -624,6 +624,8 @@ Environment variables (set before launching `relay`):
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
 | `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
 | `RELAY_MSG_RETENTION_DAYS`   | `7`                        | Days a delivered message is kept before pruning |
+| `RELAY_STATUSBAR_STATE`      | `~/.relay/statusbar.json`  | Badge state relay publishes for the AutoLaunch provider |
+| `RELAY_STATUSBAR_CLICKS`     | `~/.relay/statusbar-clicks.jsonl` | Badge-click queue the provider writes, relay consumes |
 
 > **Keep `~/.relay/` on a local disk, not a synced folder** (iCloud Drive,
 > Dropbox, a network mount). Relay's SQLite DB uses WAL mode; a background
@@ -779,7 +781,8 @@ relay/
   iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
   iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
   iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
-  iterm/statusbar.py     # pure label for the iTerm2 status-bar arm badge
+  iterm/statusbar.py     # status-bar badge: pure labels + published state / click queue
+  iterm/statusbar_autolaunch.py  # always-on badge provider (symlinked into iTerm2 AutoLaunch)
   iterm/test_*.py        # gate/TUI/swarm suites, built from real captured prompts
   iterm/test_config.py   # config loader tests (temp files, precedence)
   iterm/test_titles.py   # render/strip round-trip tests

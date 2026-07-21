@@ -71,6 +71,10 @@ the context restore needs:
     relay wipe --project <p> --all [--dry-run] [--yes]
         DELETE dead sessions' tasks + rows (orphaned scope), or with --all wipe
         an ENTIRE project (all tasks/sessions/messages). Permanent - start over.
+        A relay-created worktree (spawn --worktree) is removed too, but ONLY
+        when fully committed - a dirty worktree is always kept. --all never
+        touches worktrees; commit your branch before reporting done so wipe
+        can actually clean up.
 
     relay version | relay update
         Show the installed relay version / fetch + fast-forward to the latest.
