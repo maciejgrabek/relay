@@ -312,38 +312,80 @@ def cmd_version(args) -> int:
     return 0
 
 
+def _update_stamp_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_UPDATE_STAMP", "~/.relay/update-check"))
+
+
 def cmd_update(args) -> int:
     """Fetch and fast-forward the relay checkout to the latest version. Safe:
     ff-only never rewrites local history, and a dirty tree or missing remote
-    stops with a clear message instead of clobbering anything."""
+    stops with a clear message instead of clobbering anything.
+
+    --auto is the quiet start-up flavor bin/relay runs before the TUI boots:
+    throttled to one check per day (stamp file), short fetch timeout, and
+    SILENT on every skip (offline, dirty, diverged, no remote, up to date) -
+    a version check must never delay or noise up a launch. It only speaks
+    when it actually updated. RELAY_NO_AUTOUPDATE=1 disables it."""
+    auto = getattr(args, "auto", False)
+    if auto:
+        if os.environ.get("RELAY_NO_AUTOUPDATE"):
+            return 0
+        stamp = _update_stamp_path()
+        try:
+            if time.time() - os.path.getmtime(stamp) < 86400:
+                return 0
+        except OSError:
+            pass
+        # Stamp the ATTEMPT, not the success - an offline day must not retry
+        # the network hit on every single launch.
+        try:
+            d = os.path.dirname(stamp)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(stamp, "w") as f:
+                f.write(str(time.time()))
+        except OSError:
+            pass
     rc, _ = _git("rev-parse", "--is-inside-work-tree")
     if rc != 0:
-        return _err("not a git checkout - update by re-pulling however you "
-                    "installed relay")
+        return 0 if auto else _err(
+            "not a git checkout - update by re-pulling however you "
+            "installed relay")
     rc, dirty = _git("status", "--porcelain")
     if dirty:
-        return _err("working tree has local changes - commit or stash them "
-                    "first, then rerun 'relay update'")
+        return 0 if auto else _err(
+            "working tree has local changes - commit or stash them "
+            "first, then rerun 'relay update'")
     rc, remote = _git("remote")
     if rc != 0 or not remote:
-        return _err("no git remote configured - nothing to update from")
-    print(f"current: {local_version()}")
-    print("fetching...")
-    rc, _ = _git("fetch", "--quiet", timeout=30)
+        return 0 if auto else _err("no git remote configured - nothing to "
+                                   "update from")
+    if not auto:
+        print(f"current: {local_version()}")
+        print("fetching...")
+    rc, _ = _git("fetch", "--quiet", timeout=10 if auto else 30)
     if rc != 0:
-        return _err("git fetch failed (offline?) - try again when connected")
+        return 0 if auto else _err("git fetch failed (offline?) - try again "
+                                   "when connected")
     rc, counts = _git("rev-list", "--count", "--left-right", "HEAD...@{u}")
     behind = counts.split("\t")[-1] if counts and "\t" in counts else "0"
     if behind == "0":
-        print("already up to date.")
+        if not auto:
+            print("already up to date.")
         return 0
-    print(f"{behind} new commit(s) available, fast-forwarding...")
+    if not auto:
+        print(f"{behind} new commit(s) available, fast-forwarding...")
     rc, out = _git("merge", "--ff-only", "@{u}", timeout=30)
     if rc != 0:
-        return _err("fast-forward failed (branch diverged) - resolve manually "
-                    "with git in the relay repo")
-    print(f"updated: {local_version()}")
-    print("restart relay (q, then run it again) to load the new version.")
+        return 0 if auto else _err(
+            "fast-forward failed (branch diverged) - resolve manually "
+            "with git in the relay repo")
+    if auto:
+        print(f"relay updated: {behind} new commit(s) -> {local_version()}")
+    else:
+        print(f"updated: {local_version()}")
+        print("restart relay (q, then run it again) to load the new version.")
     return 0
 
 
@@ -703,6 +745,9 @@ def build_parser() -> argparse.ArgumentParser:
     vr.set_defaults(fn=cmd_version)
 
     up = sub.add_parser("update", help="fetch + fast-forward to the latest relay")
+    up.add_argument("--auto", action="store_true",
+                    help="quiet start-up check: throttled daily, silent when "
+                         "offline/dirty/current (used by bin/relay)")
     up.set_defaults(fn=cmd_update)
 
     cl = sub.add_parser("clean", help="reset abandoned tasks + remove dead "

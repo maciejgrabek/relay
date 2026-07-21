@@ -87,6 +87,18 @@ else
   echo "$bad item(s) need attention above."
 fi
 
+# --- update check ------------------------------------------------------------
+# The TUI self-updates at start (throttled daily, ff-only); this is the same
+# check, run eagerly so a fresh install starts current.
+if [ "$CHECK_ONLY" != 1 ]; then
+  echo
+  read -r -p "Check for a newer relay now? [y/N] " up_ans
+  case "$up_ans" in
+    y|Y|yes|YES) python3 "$REPO/iterm/cli.py" update || true ;;
+    *) echo "Skipped (the TUI checks once a day at start anyway)." ;;
+  esac
+fi
+
 # --- Claude Code skills (worker/coordinator protocol) -----------------------
 SKILLS_SRC="$REPO/skills"
 SKILLS_DST="$HOME/.claude/skills"

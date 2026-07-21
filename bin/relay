@@ -9,6 +9,8 @@
 #                    swarm CLI verbs (see: relay register -h etc.)
 #   relay doctor     print swarm health from outside the TUI (debugging)
 #   relay update     fetch + fast-forward to the latest relay version
+#                    (the TUI also self-updates at start, at most once a day;
+#                    disable with RELAY_NO_AUTOUPDATE=1)
 #   relay -h         this help
 #
 # One process: tool on === TUI open; quit (q) === everything stops. No daemon,
@@ -19,8 +21,15 @@
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
-  -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   register|send|status|task|inbox|msgs|spawn|doctor|version|update|clean|restore|wipe)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
+# TUI start: quiet self-update BEFORE the app boots, so the code that runs is
+# current and any DB migration applies on this same launch. Throttled to once
+# a day, silent when offline/dirty/current, never blocks a launch on failure.
+# Skipped for --dry-run (dry-run mutates nothing, including the checkout).
+if [ "${1:-}" != "--dry-run" ]; then
+  python3 "$HERE/../iterm/cli.py" update --auto || true
+fi
 exec python3 "$HERE/../iterm/app.py" "$@"

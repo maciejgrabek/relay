@@ -334,6 +334,14 @@ undelivered (the panel is not running) and tasks stuck in `doing`.
 
 ### Update to the latest version
 
+Launching the TUI **self-updates first**: `bin/relay` runs a quiet
+fast-forward check before the app boots (at most once a day), so the code
+that starts is current and any DB migration applies on that same launch. It
+is silent when offline, up to date, or the checkout is dirty/diverged - a
+version check never delays or blocks a launch - and it prints one line when
+it actually updated. `--dry-run` skips it (dry-run mutates nothing, the
+checkout included); `RELAY_NO_AUTOUPDATE=1` disables it entirely. Manually:
+
 ```bash
 relay version          # what you have now
 relay update           # fetch + fast-forward (safe: stops on local changes)
@@ -624,6 +632,7 @@ Environment variables (set before launching `relay`):
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
 | `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
 | `RELAY_MSG_RETENTION_DAYS`   | `7`                        | Days a delivered message is kept before pruning |
+| `RELAY_NO_AUTOUPDATE`        | unset                      | Set to `1` to skip the TUI's start-up self-update |
 | `RELAY_STATUSBAR_STATE`      | `~/.relay/statusbar.json`  | Badge state relay publishes for the AutoLaunch provider |
 | `RELAY_STATUSBAR_CLICKS`     | `~/.relay/statusbar-clicks.jsonl` | Badge-click queue the provider writes, relay consumes |
 
