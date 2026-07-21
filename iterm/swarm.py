@@ -298,9 +298,12 @@ def resume_prompt(name: str, project: str, role: str, spawn_prompt: str) -> str:
     return p
 
 
-# --- swarm view rendering (plain text; the TUI Static uses markup=False) ------
+# --- swarm view rendering (Rich markup; ALL dynamic text escaped) -------------
 
 _STATE_COLS = ("todo", "doing", "blocked", "done")
+_KIND_COLOR = {"done": "green", "blocked": "yellow",
+               "escalation": "red", "wake": "dim"}
+_MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦"}
 
 
 def _clip(s: str, w: int) -> str:
@@ -308,10 +311,110 @@ def _clip(s: str, w: int) -> str:
     return s if len(s) <= w else s[: max(0, w - 1)] + "…"
 
 
-def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str:
-    """One plain-text screen: roster, kanban board, epic progress, message
+def _esc(s) -> str:
+    """Escape for Rich markup: a literal [ in dynamic text (bodies, titles,
+    names - attacker-influenceable) must never open a tag."""
+    return str(s).replace("[", "\\[")
+
+
+def _get(row, key, default=None):
+    """Tolerant field access for sqlite Rows and plain dict fixtures alike."""
+    try:
+        return row[key] if key in row.keys() else default
+    except Exception:
+        return default
+
+
+def fmt_age(seconds: float) -> str:
+    s = max(0, int(seconds))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
+def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0) -> str:
+    """The one-line 'how many workers doing what' header. busy = owns a doing
+    task, blocked = owns a blocked one (and nothing doing), idle = the rest;
+    armed counts come from the persisted per-session mode."""
+    names = [s["name"] for s in sessions]
+    doing = {t["owner"] for t in tasks if t["state"] == "doing" and t["owner"]}
+    blocked = {t["owner"] for t in tasks
+               if t["state"] == "blocked" and t["owner"]}
+    n_busy = sum(1 for n in names if n in doing)
+    n_blocked = sum(1 for n in names if n in blocked and n not in doing)
+    n_idle = len(names) - n_busy - n_blocked
+    bits = [f"{len(names)} units", f"{n_busy} busy",
+            f"{n_blocked} blocked", f"{n_idle} idle"]
+    armed = {}
+    for s in sessions:
+        m = _get(s, "mode", "") or ""
+        if m in _MODE_GLYPH:
+            armed[m] = armed.get(m, 0) + 1
+    if armed:
+        bits.append("armed " + " ".join(
+            f"{_MODE_GLYPH[m]}{armed[m]}"
+            for m in ("safe", "wild", "insane") if m in armed))
+    n_stale = sum(1 for n in names if n in stale)
+    if n_stale:
+        bits.append(f"{n_stale} STALE")
+    if queued:
+        bits.append(f"msgs {queued} queued")
+    return "FLEET  " + " · ".join(bits)
+
+
+def interaction_rows(messages, coordinators=frozenset(), now: float = 0.0,
+                     limit: int = 6) -> list:
+    """Who talks to whom: one row per unordered name pair - direction counts
+    (from the first name's perspective; a coordinator is always listed
+    first), last kind, age of the last message, and a flag when that last
+    word was blocked/escalation. relay's own wake-ups are system noise, not
+    interaction - excluded. Freshest pairs first, capped at `limit`."""
+    pairs = {}
+    for m in messages:
+        a, b = m["from_name"], m["to_name"]
+        if a == "relay" or b == "relay":
+            continue
+        key = tuple(sorted((a, b)))
+        p = pairs.setdefault(key, {"sent": {}, "last_ts": -1.0,
+                                   "last_kind": "info"})
+        p["sent"][a] = p["sent"].get(a, 0) + 1
+        ts = float(_get(m, "created_at", 0.0) or 0.0)
+        if ts >= p["last_ts"]:
+            p["last_ts"] = ts
+            p["last_kind"] = kind_of(m)
+    out = []
+    for (x, y), p in pairs.items():
+        a, b = ((y, x) if y in coordinators and x not in coordinators
+                else (x, y))
+        out.append({"a": a, "b": b,
+                    "sent": p["sent"].get(a, 0), "recv": p["sent"].get(b, 0),
+                    "last_kind": p["last_kind"],
+                    "age_s": max(0.0, now - p["last_ts"]),
+                    "flag": p["last_kind"] in ("blocked", "escalation")})
+    out.sort(key=lambda r: r["age_s"])
+    return out[:limit]
+
+
+def progress_bar(done: int, total: int, cells: int = 10) -> str:
+    if total <= 0:
+        return "▱" * cells
+    filled = min(cells, max(0, round(cells * done / total)))
+    return "▰" * filled + "▱" * (cells - filled)
+
+
+def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
+                 stale=frozenset(), activity=None) -> str:
+    """One Rich-markup screen: fleet line, roster (heartbeats, stale marks),
+    kanban board, epic progress bars, interaction map, kind-colored message
     feed. Grouped by project when more than one is present. With no swarm at
-    all, teaches how to start one instead of rendering an empty skeleton."""
+    all, teaches how to start one instead of rendering an empty skeleton.
+    Callers render with markup=True; every dynamic string goes through
+    _esc()."""
+    activity = activity or {}
     if not sessions and not tasks:
         return (
             "NO SWARM YET\n"
@@ -329,6 +432,9 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str
             "\n"
             "TAB returns to the session control view.")
     out: List[str] = []
+    queued = sum(1 for m in messages if _get(m, "delivered_at") is None)
+    out.append(_esc(fleet_line(sessions, tasks, stale=stale, queued=queued)))
+    out.append("")
     projects = sorted({s["project"] for s in sessions}
                       | {t["project"] for t in tasks}) or [""]
     for proj in projects:
@@ -337,11 +443,18 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str
         coord = next((s["name"] for s in p_sessions
                       if s["role"] == "coordinator"), "-")
         workers = sum(1 for s in p_sessions if s["role"] == "worker")
-        out.append(f"PROJECT {proj or '(none)'} · coordinator: {coord} · "
-                   f"{workers} workers")
+        out.append(_esc(f"PROJECT {proj or '(none)'} · coordinator: {coord} · "
+                        f"{workers} workers"))
         for s in p_sessions:
-            out.append(f"  {s['name']:<16} {s['role']:<12} "
-                       f"{_clip(s['status_text'] or '-', width - 32)}")
+            hb = (f"  ↻ {fmt_age(now - activity[s['name']])}"
+                  if s["name"] in activity else "")
+            line = (f"  {s['name']:<16} {s['role']:<12} "
+                    f"{_clip(_get(s, 'status_text', '') or '-', width - 40)}"
+                    f"{hb}")
+            if s["name"] in stale:
+                out.append(f"[red]{_esc(line + ' ⧗')}[/red]")
+            else:
+                out.append(_esc(line))
         out.append("")
 
         # kanban: 4 columns of "#id title"
@@ -354,28 +467,45 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100) -> str
                               for h in _STATE_COLS))
         out.append("   ".join("─" * colw for _ in _STATE_COLS))
         for i in range(height):
-            out.append("   ".join(
+            out.append(_esc("   ".join(
                 (cols[st][i] if i < len(cols[st]) else "").ljust(colw)
-                for st in _STATE_COLS))
+                for st in _STATE_COLS)))
         out.append("")
 
-        # epic progress: children done/total
+        # epic progress: children done/total as a bar
         epics = [t for t in p_tasks if t["parent_id"] is None]
         for e in epics:
             kids = [t for t in p_tasks if t["parent_id"] == e["id"]]
             if kids:
                 done = sum(1 for k in kids if k["state"] == "done")
-                out.append(f"  EPIC #{e['id']} {_clip(e['title'], width - 30)}"
-                           f"  {done}/{len(kids)}")
+                out.append(_esc(
+                    f"  EPIC #{e['id']} {_clip(e['title'], width - 30)}"
+                    f"  {progress_bar(done, len(kids))}  {done}/{len(kids)}"))
+        out.append("")
+
+    coords = {s["name"] for s in sessions if s["role"] == "coordinator"}
+    inter = interaction_rows(messages, coordinators=coords, now=now)
+    if inter:
+        out.append("INTERACTIONS                    sent recv  last        age")
+        for r in inter:
+            flag = "  ‼" if r["flag"] else ""
+            pair = _clip(f"{r['a']} ⇄ {r['b']}", 28)
+            line = (f"  {pair:<28} ▸{r['sent']:<3} ◂{r['recv']:<3} "
+                    f"{r['last_kind']:<10} {fmt_age(r['age_s']):>4}{flag}")
+            color = _KIND_COLOR.get(r["last_kind"])
+            out.append(f"[{color}]{_esc(line)}[/{color}]"
+                       if r["flag"] and color else _esc(line))
         out.append("")
 
     out.append("MESSAGES")
     for m in messages[-8:]:
-        q = "" if m["delivered_at"] else "  [queued]"
+        q = "" if _get(m, "delivered_at") else "  [queued]"
         k = kind_of(m)
         tag = f"[{k}] " if k != "info" else ""
-        out.append(f"  {m['from_name']} -> {m['to_name']}: "
-                   f"{tag}{_clip(m['body'], width - 30)}{q}")
+        line = (f"  {m['from_name']} -> {m['to_name']}: "
+                f"{tag}{_clip(m['body'], width - 30)}{q}")
+        color = _KIND_COLOR.get(k)
+        out.append(f"[{color}]{_esc(line)}[/{color}]" if color else _esc(line))
     if not messages:
         out.append("  (none)")
     return "\n".join(out)

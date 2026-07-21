@@ -95,6 +95,34 @@ async def go():
         await pilot.pause()
         chk("single Enter -> exactly one send", a.watcher.sent == [("s1", "\r")])
 
+    # --- needs-action section + attention header -----------------------------
+    chk("needs_action: prompting", appmod.needs_action("prompting", False))
+    chk("needs_action: blocked", appmod.needs_action("blocked", False))
+    chk("needs_action: stale wins", appmod.needs_action("idle", True))
+    chk("needs_action: working idle no", not appmod.needs_action("working", False)
+        and not appmod.needs_action("idle", False))
+
+    na_sessions = {
+        "s0": SessionInfo("s0", title="calm", window_idx=0, tab_idx=0,
+                          last_screen=["x"]),
+        "s1": SessionInfo("s1", title="hot", window_idx=0, tab_idx=1,
+                          last_command="rm -rf node_modules",
+                          last_screen=["x"]),
+    }
+    na_sessions["s1"].state = "prompting"
+    na = _TestApp(na_sessions, dry_run=True)
+    async with na.run_test() as pilot:
+        await pilot.pause()
+        na._refresh()
+        await pilot.pause()
+        chk("attention row first + divider rows unselectable",
+            na._row_sids[0] is None and na._row_sids[1] == "s1"
+            and na._row_sids[2] is None and na._row_sids[3] == "s0")
+        chk("cursor lands on a real row, not a divider",
+            na._selected_sid() in ("s0", "s1"))
+        sub = str(na.query_one("#subtitle", appmod.Static).render())
+        chk("header counts awaiting", "1 awaiting" in sub)
+
     # --- quit guard: instant when idle, double-press when something's live ---
     import tempfile
     os.environ["RELAY_DB"] = os.path.join(tempfile.mkdtemp(), "relay.db")

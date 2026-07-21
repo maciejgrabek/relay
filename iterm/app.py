@@ -13,6 +13,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -169,6 +170,13 @@ def getting_started_panel(width: int) -> str:
         " Keys:  ↑↓ move · SPACE arm · TAB swarm view · q quit\n")
 
 
+def needs_action(state: str, stale: bool) -> bool:
+    """A session a human should look at NOW: it is holding a prompt relay
+    escalated (or is not allowed to clear), it is blocked, or it went stale.
+    These rows group under the NEEDS ACTION divider at the top of the table."""
+    return bool(stale) or state in ("prompting", "blocked")
+
+
 def quit_stakes_text(n_armed: int, n_queued: int, n_doing: int) -> str:
     """What quitting would walk away from, as the confirm hint - or '' when
     nothing is at stake and q should quit instantly. Quitting stops
@@ -276,7 +284,7 @@ class RelayApp(App):
             with Vertical(id="middle"):
                 yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
                 yield Static("", id="preview", markup=False)
-            yield Static("", id="swarmview", markup=False)
+            yield Static("", id="swarmview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
 
@@ -294,7 +302,7 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "LOC", "UNIT", "ROLE", "TASK NOW",
+        table.add_columns("MODE", "STATUS", "↻", "UNIT", "ROLE", "TASK NOW",
                           "✓/⊘", "LAST DIRECTIVE")
         # Keep the Mac awake while open.
         if not os.environ.get("RELAY_NO_CAFFEINATE"):
@@ -353,7 +361,10 @@ class RelayApp(App):
                 label, color = "▲ STALE", "#ffb000"
             glyph, mlabel, mcolor = MODE_STYLE.get(info.mode, (" ", "MANUAL", DIM))
             arm = f"{glyph} {mlabel}" if glyph.strip() else f"  {mlabel}"
-            wt = f"{info.window_idx}.{info.tab_idx}"
+            # Heartbeat: age since the screen last changed (LOC's find-the-tab
+            # job is what `n` does better; freshness earns the column more).
+            hb_ts = getattr(info, "_screen_changed_ts", 0) or 0
+            wt = swarmlogic.fmt_age(time.time() - hb_ts) if hb_ts else "-"
             # ESCAPE terminal-derived text: a command/title containing '[' (e.g.
             # sed 's/[a-z]/x/', ls foo[1]) would otherwise be parsed as Textual
             # markup and either swallow text or raise MarkupError on render.
@@ -380,19 +391,34 @@ class RelayApp(App):
                 label = f"[{color}]{label}[/]"
                 counts = (f"[#41ffd0]{a}[/][{DIM}]/[/][#ff5555]{e}[/]"
                           if (a or e) else f"[{DIM}]-[/]")
+                if cmd and info.state == "prompting":
+                    # The held command is the one demanding your judgement.
+                    cmd = f"[#ff5555]{cmd}[/]"
                 cmd = cmd or f"[{DIM}]-[/]"
                 role = f"[#41ffd0]{role}[/]" if role else f"[{DIM}]-[/]"
                 task_now = task_now or f"[{DIM}]-[/]"
             table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
-        for info in shown:
-            add(info)
-        if hidden:
-            table.add_row("", f"[#1d5c38]▼▼▼[/]", "",
-                          f"[#1d5c38]── QUARANTINED ({len(hidden)}) ──[/]",
+        def divider(text, color):
+            table.add_row("", f"[{color}]▼▼▼[/]", "", f"[{color}]{text}[/]",
                           "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
+
+        # NEEDS ACTION first (full interactivity, just grouped), then OK.
+        attention = [i for i in shown
+                     if needs_action(i.state, getattr(i, "stale", False))]
+        calm = [i for i in shown if i not in attention]
+        if attention:
+            divider(f"── NEEDS ACTION ({len(attention)}) ──", "#ff5555")
+            for info in attention:
+                add(info)
+            if calm:
+                divider("── OK ──", "#2a7d4f")
+        for info in calm:
+            add(info)
+        if hidden:
+            divider(f"── QUARANTINED ({len(hidden)}) ──", "#1d5c38")
             for info in hidden:
                 add(info, dim=True)
 
@@ -430,11 +456,28 @@ class RelayApp(App):
             hint = "  [#ffb000]· nothing armed - SPACE to arm a session, then walk away[/]"
         else:
             hint = ""
+        # Attention counts: only the parts that are non-zero earn header space.
+        awaiting = sum(1 for i in sess if i.state == "prompting")
+        n_stale = sum(1 for i in sess if getattr(i, "stale", False))
+        queued_n = 0
+        try:
+            if self._swarm_db is None:
+                self._swarm_db = swarmdb.connect()
+            queued_n = len(swarmdb.undelivered(self._swarm_db))
+        except Exception:
+            pass
+        attn = ""
+        if awaiting:
+            attn += f" [#2a7d4f]·[/] [#ffb000]{awaiting} awaiting[/]"
+        if n_stale:
+            attn += f" [#2a7d4f]·[/] [#ff5555]{n_stale} stale[/]"
+        if queued_n:
+            attn += f" [#2a7d4f]·[/] [#41ffd0]{queued_n} msgs queued[/]"
         self.query_one("#subtitle", Static).update(
             f"[#2a7d4f]RELAY · SESSION CONTROL ·[/] "
             f"[#3aff7a]{len(sess)} units[/] [#2a7d4f]·[/] "
             f"[#ffb000]{armed} armed[/] [#2a7d4f]·[/] "
-            f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{dry}{hint}")
+            f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{attn}{dry}{hint}")
         self._update_preview()
         if self._swarm_visible:
             self._render_swarm_view()
@@ -502,10 +545,21 @@ class RelayApp(App):
         bar = "═" * w
         # markup=False on this pane (terminal content renders literally), so the
         # header is plain text - the phosphor-green comes from CSS.
+        # Why this session needs you, when it does (plain text, like the pane).
+        attn = ""
+        if info.state == "prompting":
+            why = info.last_command[:w - 14] if info.last_command \
+                else "a question / unreadable prompt"
+            attn = f" ‼ AWAITING: {why}\n"
+        elif getattr(info, "stale", False):
+            attn = " ⧗ STALE: no visible progress\n"
+        elif info.state == "blocked":
+            attn = " ⊘ LOCKED\n"
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{attn}"
                   f"╚{bar}╝\n")
         body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
         preview.update(header + body)
@@ -596,11 +650,25 @@ class RelayApp(App):
                 self._swarm_db = swarmdb.connect()
             sessions = [dict(r) for r in swarmdb.list_sessions(self._swarm_db)]
             tasks = [dict(r) for r in swarmdb.list_tasks(self._swarm_db)]
+            # 200 not 8: the interaction map aggregates history; the feed
+            # itself still shows only the last 8 lines.
             msgs = [dict(r) for r in swarmdb.message_history(self._swarm_db,
-                                                             limit=8)]
+                                                             limit=200)]
+            stale, activity = set(), {}
+            reg = (self.watcher.registry or {}) if self.watcher else {}
+            for sid, row in reg.items():
+                info = self.watcher.sessions.get(sid)
+                if info is None:
+                    continue
+                if getattr(info, "stale", False):
+                    stale.add(row["name"])
+                ts = getattr(info, "_screen_changed_ts", 0) or 0
+                if ts:
+                    activity[row["name"]] = ts
             w = max(60, self.query_one("#swarmview").size.width - 4)
             text = swarmlogic.render_swarm(sessions, tasks, msgs,
-                                           _time.time(), width=w)
+                                           _time.time(), width=w,
+                                           stale=stale, activity=activity)
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)

@@ -16,13 +16,15 @@ arm/disarm them with the arrow keys.
   ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝
   ██║  ██║███████╗███████╗██║  ██║   ██║
   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝
-  RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘
+  RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
-  MODE      STATUS      LOC  UNIT         ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
-▸ ◉ SAFE    ▸ ACTIVE    0.1  bff-worker   work   #14 doing    5/0  grep -rn "TODO" src/
-  ✦ INSANE  ⊘ LOCKED    0.2  api-worker   work   #17 ⊘ by 14  2/1  terraform apply -auto-…
-  ○ MANUAL  ◌ STANDBY   1.0  coord        coord  specs 3/3    -    -
+  MODE      STATUS      ↻    UNIT         ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
+  ── NEEDS ACTION (1) ──────────────────────────────────────────────────────────
+▸ ✦ INSANE  ‼ AWAITING  4s   api-worker   work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+  ── OK ────────────────────────────────────────────────────────────────────────
+  ◉ SAFE    ▸ ACTIVE    12s  bff-worker   work   #14 doing    5/0  grep -rn "TODO" src/
+  ○ MANUAL  ◌ STANDBY   3m   coord        coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
@@ -473,12 +475,26 @@ your call; Relay's job is just telling you in time.
 
 ### TAB: the swarm view
 
-`TAB` toggles a second, full-width view: a kanban board of tasks by state
-(TODO / DOING / BLOCKED / DONE), epic progress, and a recent-messages feed,
-filterable by project when more than one is active. The control view
-(arm/approve, unchanged) gains **ROLE** and **TASK NOW** columns so you can
-see swarm state without leaving it; `STALE` shows right in the STATUS
-column.
+`TAB` toggles a second, full-width view:
+
+- a **FLEET line** on top - unit counts by state (busy / blocked / idle),
+  armed counts by mode, stale count, queued messages;
+- the roster with a per-worker **heartbeat** (`↻ 12s` since its screen last
+  moved; a stale row renders red with `⧗`);
+- a kanban board of tasks by state (TODO / DOING / BLOCKED / DONE) and epic
+  **progress bars** (`▰▰▰▰▱▱▱▱  4/8`);
+- an **INTERACTIONS** map - who talks to whom: per-pair sent/received
+  counts, last message kind and age, `‼` when the pair's last word was
+  `blocked` or `escalation`;
+- the recent-messages feed, **colored by kind** (done green, blocked
+  yellow, escalation red, wake dim).
+
+The control view keeps **ROLE** and **TASK NOW** columns, groups sessions
+that need a human under a **NEEDS ACTION** divider at the top (prompting,
+blocked, or stale - rows stay fully interactive there), shows a per-tab
+heartbeat in the `↻` column, and its live-feed pane names WHY the selected
+session is being held (`‼ AWAITING: <command>`). The held command also
+renders red in LAST DIRECTIVE.
 
 ### relay spawn
 
