@@ -182,18 +182,57 @@ def reactor_pressure(sessions) -> float:
     return p
 
 
-def mascot_frame(tick: int, band: str, *, alarmed: bool,
-                 working: bool) -> str:
-    """The header core-creature, keyed to the 0.5s reactor tick. It reacts to
-    REAL state, in priority order: something awaits a human (alarmed) beats
-    a CRITICAL core beats recent activity (working) beats idle blinking."""
+def mascot_state(band: str, *, alarmed: bool, working: bool) -> str:
+    """The creature's mood, in priority order: something awaits a human
+    (alarmed) beats a CRITICAL core beats recent activity (working) beats
+    idle. One ladder, shared by every face size."""
     if alarmed:
-        return "(⊙_⊙)!" if tick % 2 == 0 else "(⊙_⊙) "
+        return "alarmed"
     if band == "☢ CRITICAL":
-        return "(x_x)"
+        return "critical"
     if working:
-        return "(◕‿◕)⌁" if tick % 2 == 0 else "(◕‿◕) "
-    return "(￣‿￣)" if tick % 8 == 0 else "(－‿－)"
+        return "working"
+    return "idle"
+
+
+def mascot_face_big(tick: int, band: str, *, alarmed: bool,
+                    working: bool) -> list:
+    """The banner creature: a 6-line face rendered beside the RELAY logo,
+    keyed to the 0.5s reactor tick. It reacts to REAL state (mascot_state).
+    Returns the face as a list of equal-height lines."""
+    state = mascot_state(band, alarmed=alarmed, working=working)
+    side = " "
+    if state == "alarmed":
+        eyes, mouth = "⊙  ⊙", " ▽  "
+        side = "‼" if tick % 2 == 0 else " "
+    elif state == "critical":
+        eyes, mouth, side = "x  x", " ▁  ", "☢"
+    elif state == "working":
+        eyes, mouth = "◕  ◕", " ‿  "
+        side = "⌁" if tick % 2 == 0 else " "
+    else:
+        eyes = "▂  ▂" if tick % 8 == 0 else "─  ─"
+        mouth = " ‿  "
+    return [
+        "  ╭────────╮",
+        f"  │        │ {side}",
+        f"  │  {eyes}  │",
+        "  │        │",
+        f"  │  {mouth}  │",
+        "  ╰────────╯",
+    ]
+
+
+def banner_with_face(tick: int, band: str, *, alarmed: bool,
+                     working: bool) -> str:
+    """The RELAY block logo with the creature on its right. Both are plain
+    text - the banner Static's CSS colors the whole thing."""
+    logo = BANNER.split("\n")
+    face = mascot_face_big(tick, band, alarmed=alarmed, working=working)
+    h = max(len(logo), len(face))
+    logo = logo + [""] * (h - len(logo))
+    face = face + [""] * (h - len(face))
+    return "\n".join(f"{l:<44}{f}" for l, f in zip(logo, face))
 
 
 # Reactor temperature bands -> (label, color, pulsing?).
@@ -413,7 +452,7 @@ class RelayApp(App):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(BANNER, id="banner")
+            yield Static(BANNER, id="banner", markup=False)
             yield Static("", id="subtitle")
             if not self.reactor_off:
                 yield Static("", id="reactor")
@@ -667,14 +706,14 @@ class RelayApp(App):
         alarmed = any(i.state == "prompting"
                       and i.session_id != self._own_sid
                       for i in self.watcher.sessions.values())
-        face = mascot_frame(
-            self._tick, label, alarmed=alarmed,
-            working=self._tick < getattr(self, "_mascot_active_until", 0))
-        fc = DANGER if alarmed else color
         try:
             self.query_one("#reactor", Static).update(
-                f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]"
-                f"   [{fc}]{face}[/]")
+                f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
+            # The big creature lives beside the logo; markup=False there, so
+            # the composed text renders literally (box glyphs and all).
+            self.query_one("#banner", Static).update(banner_with_face(
+                self._tick, label, alarmed=alarmed,
+                working=self._tick < getattr(self, "_mascot_active_until", 0)))
         except Exception:
             pass
 
