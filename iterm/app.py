@@ -416,15 +416,19 @@ class RelayApp(App):
         # below keeps its stable tab order ALWAYS. Rows must never teleport
         # between sections: the duplicate appears/disappears, the original
         # stays put (moving rows around cost the human their muscle memory).
+        # Relay's own panel tab can never need action (relay never acts on
+        # itself; its screen-state detection reads the TUI's own chrome).
         attention = [i for i in shown
-                     if needs_action(i.state, getattr(i, "stale", False))]
+                     if i.session_id != self._own_sid
+                     and needs_action(i.state, getattr(i, "stale", False))]
         if attention:
             divider(f"── NEEDS ACTION ({len(attention)}) ──", "#ff5555")
             for info in attention:
                 add(info, attention=True)
             divider("── SESSIONS ──", "#2a7d4f")
         for info in shown:
-            add(info)
+            # Own row greyed out: it is display-only by design.
+            add(info, dim=info.session_id == self._own_sid)
         if hidden:
             divider(f"── QUARANTINED ({len(hidden)}) ──", "#1d5c38")
             for info in hidden:
@@ -468,8 +472,10 @@ class RelayApp(App):
         else:
             hint = ""
         # Attention counts: only the parts that are non-zero earn header space.
-        awaiting = sum(1 for i in sess if i.state == "prompting")
-        n_stale = sum(1 for i in sess if getattr(i, "stale", False))
+        # Own panel row excluded - it can never legitimately await a human.
+        others = [i for i in sess if i.session_id != self._own_sid]
+        awaiting = sum(1 for i in others if i.state == "prompting")
+        n_stale = sum(1 for i in others if getattr(i, "stale", False))
         queued_n = 0
         try:
             if self._swarm_db is None:
@@ -500,7 +506,9 @@ class RelayApp(App):
         if self.reactor_off or not self.watcher:
             return
         self._tick += 1
-        target = reactor_pressure(self.watcher.sessions.values())
+        target = reactor_pressure(
+            i for i in self.watcher.sessions.values()
+            if i.session_id != self._own_sid)   # own chrome is not pressure
         # asymmetric easing: heat in fast, vent slow.
         rate = 0.35 if target > self._temp else 0.06
         self._temp += (target - self._temp) * rate

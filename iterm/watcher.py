@@ -156,6 +156,7 @@ class Watcher:
         self._title_err_noted: set = set() # sessions with a logged write error
         # --- swarm: closed-session marking ---
         self._own_named = False    # own tab renamed to OWN_TAB_NAME this run
+        self._own_tab = None       # own iTerm2 Tab (tab-bar title is separate)
         self._miss = {}            # session name -> consecutive missed ticks
         self.close_misses = 2      # misses before marking closed (debounce)
         self.orphan_count = 0      # closed sessions owning non-done work
@@ -286,6 +287,8 @@ class Watcher:
             for ti, tab in enumerate(w.tabs):
                 for s in tab.sessions:
                     sid = s.session_id
+                    if sid == self.own_sid:
+                        self._own_tab = tab   # tab-bar title needs the Tab
                     seen.add(sid)
                     info = self.sessions.get(sid)
                     title = await self._session_label(s, tab)
@@ -864,18 +867,24 @@ class Watcher:
             return
         try:
             await info._iterm_session.async_set_name(OWN_TAB_NAME)
+            # The TAB BAR title is a separate object from the session name -
+            # without this, the tab strip keeps showing the `caffeinate` job.
+            if self._own_tab is not None:
+                await self._own_tab.async_set_title(OWN_TAB_NAME)
             self._own_named = True
         except Exception:
             pass
 
     async def _restore_own_tab(self) -> None:
-        """On quit, hand the tab title back to iTerm2's auto-naming (empty
-        name = job-derived), so a closed relay doesn't leave a ghost console
-        label behind. Best-effort, mirror of _name_own_tab."""
+        """On quit, hand both titles back to iTerm2's auto-naming (empty =
+        job-derived), so a closed relay doesn't leave a ghost console label
+        behind. Best-effort, mirror of _name_own_tab."""
         if not self._own_named:
             return
         try:
             await self.sessions[self.own_sid]._iterm_session.async_set_name("")
+            if self._own_tab is not None:
+                await self._own_tab.async_set_title("")
         except Exception:
             pass
 

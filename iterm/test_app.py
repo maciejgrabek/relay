@@ -147,6 +147,23 @@ async def go():
         chk("attention cleared -> no dividers, same stable order",
             na._row_sids == ["s0", "s1"])
 
+    # relay's own panel row NEVER goes to NEEDS ACTION (nor the counts)
+    os.environ["ITERM_SESSION_ID"] = "w0t9p9:OWN-1"
+    own_sessions = {
+        "OWN-1": SessionInfo("OWN-1", title="RELAY CONSOLE", window_idx=0,
+                             tab_idx=0, last_screen=["x"]),
+    }
+    own_sessions["OWN-1"].state = "prompting"   # misdetected own screen
+    ao = _TestApp(own_sessions, dry_run=True)
+    async with ao.run_test() as pilot:
+        await pilot.pause()
+        ao._refresh()
+        await pilot.pause()
+        chk("own panel row never enters the attention strip",
+            ao._row_sids == ["OWN-1"])
+        sub = str(ao.query_one("#subtitle", appmod.Static).render())
+        chk("own panel row not counted as awaiting", "awaiting" not in sub)
+
     # --- quit guard: instant when idle, double-press when something's live ---
     import tempfile
     os.environ["RELAY_DB"] = os.path.join(tempfile.mkdtemp(), "relay.db")
