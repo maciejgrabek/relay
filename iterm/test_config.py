@@ -122,6 +122,18 @@ def run():
                 cfg.statusbar_enabled is False
                 and any("statusbar" in w for w in warns))
 
+    # danger preset: default 'default'; validated; bad value -> warn + default
+    ok &= check("danger preset default", cfg.danger_preset == "default")
+    p = _write("[danger]\npreset = paranoid\n")
+    cfg, warns = config.load(p)
+    ok &= check("danger preset paranoid read",
+                cfg.danger_preset == "paranoid" and warns == [])
+    p = _write("[danger]\npreset = yolo\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad preset -> default + warning",
+                cfg.danger_preset == "default"
+                and any("yolo" in w for w in warns))
+
     # RELAY_CONFIG env selects the path when load() gets None.
     p = _write("[titles]\nstyle = words\n")
     os.environ["RELAY_CONFIG"] = p

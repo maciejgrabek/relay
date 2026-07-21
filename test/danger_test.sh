@@ -164,6 +164,22 @@ expect_gap 'python3 evil.py'
 expect_gap 'node scripts/wipe-db.js'
 expect_gap 'cargo publish'
 
+# --- preset=paranoid: default-deny, only read-only leaders pass -------------
+export RELAY_DANGER_PRESET=paranoid
+expect_safe   'ls -la src/'
+expect_safe   'grep -rn TODO src'
+expect_safe   'git log --oneline -5'
+expect_safe   'cat README.md | head -20'
+expect_safe   'relay task list --mine'
+expect_danger 'make build'                    # leader gap CLOSED in paranoid
+expect_danger 'npm run deploy'
+expect_danger 'python3 evil.py'
+expect_danger 'touch x'                       # writes are not read-only
+expect_danger 'git commit -m x'               # not in the read-only git set
+expect_danger 'ls; rm -rf build'              # one bad segment poisons all
+unset RELAY_DANGER_PRESET
+expect_safe   'make build'                    # back to default: leader passes
+
 # --- summary ----------------------------------------------------------------
 printf '\n'
 printf "%b%d passed%b, " "$G" "$PASS" "$Z"

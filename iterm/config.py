@@ -29,6 +29,7 @@ from typing import List, Optional, Tuple
 
 TITLE_STYLES = ("off", "glyphs", "words", "hybrid")
 SPAWN_ARM_MODES = ("off", "safe", "wild", "insane")
+DANGER_PRESETS = ("default", "paranoid")
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class Config:
     notify_cooldown: float = 30.0
     spawn_arm: str = "off"
     statusbar_enabled: bool = False
+    danger_preset: str = "default"
 
 
 def default_path() -> str:
@@ -101,6 +103,13 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      "using false")
         statusbar = False
 
+    preset = cp.get("danger", "preset",
+                    fallback=d.danger_preset).strip().lower()
+    if preset not in DANGER_PRESETS:
+        warns.append(f"config: [danger] preset = {preset!r} is not one of "
+                     f"{'/'.join(DANGER_PRESETS)} - using 'default'")
+        preset = "default"
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -125,4 +134,5 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         notify_cooldown=cooldown,
         spawn_arm=arm,
         statusbar_enabled=statusbar,
+        danger_preset=preset,
     ), warns

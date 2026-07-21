@@ -29,9 +29,24 @@ RELAY_RM='\brm\s+-[a-z]*[rf][a-z]*\s'
 # since splitting on '|' below would otherwise hide it.
 RELAY_PIPE_SHELL='\|\s*(sudo\s+)?(ba|z)?sh\b'
 
+# Read-only leading commands - the allowlist for preset=paranoid, where the
+# posture flips to DEFAULT-DENY: only these classify safe, everything else
+# escalates (closing the make/npm/python leader gaps at the cost of far more
+# escalations). Selected via [danger] preset in ~/.relay/config; the watcher
+# exports it as RELAY_DANGER_PRESET.
+RELAY_READONLY='^[[:space:]]*(ls|cat|head|tail|less|grep|rg|egrep|fgrep|find|fd|wc|echo|printf|pwd|which|whoami|date|env|printenv|stat|file|du|df|tree|sort|uniq|cut|tr|jq|basename|dirname|realpath|shasum|md5|diff|git[[:space:]]+(status|log|diff|show|branch|remote|fetch)\b|sed[[:space:]]+-n\b|awk\b|relay[[:space:]]+(task[[:space:]]+list|msgs|inbox|status|doctor|version)\b)'
+
 # relay_is_dangerous "<command string>" -> exit 0 if dangerous, 1 if safe.
 relay_is_dangerous() {
   local cmd="$1" seg
+  if [ "${RELAY_DANGER_PRESET:-default}" = "paranoid" ]; then
+    # DEFAULT-DENY: every segment must lead with a read-only command.
+    while IFS= read -r seg; do
+      [ -z "${seg// /}" ] && continue
+      echo "$seg" | grep -iqE "$RELAY_READONLY" || return 0
+    done < <(echo "$cmd" | tr ';|&\n' '\n')
+    return 1
+  fi
   echo "$cmd" | grep -iqE "$RELAY_PIPE_SHELL" && return 0
   while IFS= read -r seg; do
     [ -z "${seg// /}" ] && continue
