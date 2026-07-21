@@ -74,7 +74,8 @@ KEYBAR = (
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("R×2", "restore"), ("W×2", "wipe"), ("q", "quit")]))
+             ("R×2", "restore"), ("W×2", "wipe"), ("?", "help"),
+             ("q", "quit")]))
 
 
 def relay_self_panel(width, *, units, armed, approvals, escalations, orphans,
@@ -173,6 +174,43 @@ def getting_started_panel(width: int) -> str:
         " Keys:  ↑↓ move · SPACE arm · TAB swarm view · q quit\n")
 
 
+def help_text() -> str:
+    """The `?` overlay: key map + arm-level cheat sheet. Pure so it's
+    testable; markup is static (no dynamic text to escape)."""
+    A, G, D = "#ffb000", "#3aff7a", "#2a7d4f"
+
+    def row(key, what):
+        return f"  [{A}]{key:<9}[/] [{G}]{what}[/]"
+
+    return "\n".join([
+        f"[{A}]RELAY KEYS[/]",
+        "",
+        row("↑↓ / j k", "move (continuous through NEEDS ACTION and list)"),
+        row("ENTER", "send Enter to the selected session (answer by hand)"),
+        row("1 2 3", "send that digit (pick a menu option by hand)"),
+        row("SPACE", "cycle arm: off -> safe -> wild -> insane -> off"),
+        row("a / d", "arm all (safe) / disarm all"),
+        row("n", "jump to the selected session's iTerm2 tab"),
+        row("x", "hide / show the selected session"),
+        row("v", "audit view: what relay approved for this session"),
+        row("TAB", "swarm view (kanban + interactions + feed)"),
+        row("R R", "restore dead task-owners (double-press confirms)"),
+        row("W W", "WIPE dead sessions' work (double-press confirms)"),
+        row("q", "quit (asks twice only when something is live)"),
+        row("?", "close this help"),
+        "",
+        f"[{A}]ARM LEVELS[/]  [{D}](what relay may auto-approve)[/]",
+        "",
+        row("○ MANUAL", "never acts - watch and notify only"),
+        row("◉ SAFE", "auto-approves commands classified safe; escalates rest"),
+        row("▲ WILD", "approves any 'Do you want to proceed?' unclassified"),
+        row("✦ INSANE", "approves ANY tool prompt, even fail-safe cases"),
+        "",
+        f"[{D}]A real question (multi-choice) is ALWAYS yours - no mode"
+        f" auto-answers decisions.[/]",
+    ])
+
+
 def needs_action(state: str, stale: bool) -> bool:
     """A session a human should look at NOW: it is holding a prompt relay
     escalated (or is not allowed to clear), it is blocked, or it went stale.
@@ -225,7 +263,7 @@ class RelayApp(App):
         height: 5; border-top: solid #1d5c38;
         background: #010602; color: #2a7d4f;
     }
-    #swarmview {
+    #swarmview, #helpview {
         display: none; height: 1fr; padding: 0 2;
         background: #010602; color: #2fc866;
     }
@@ -248,6 +286,7 @@ class RelayApp(App):
         Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("R", "restore", "Restore orphaned", show=True),
         Binding("W", "wipe", "Wipe orphaned", show=True),
+        Binding("question_mark", "help", "Help", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -262,6 +301,7 @@ class RelayApp(App):
         self._tick = 0            # frame counter for the CRITICAL pulse
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
         self._swarm_visible = False
+        self._help_visible = False
         self._swarm_db = None
         self._restore_armed = False
         self._wipe_armed = False
@@ -288,6 +328,7 @@ class RelayApp(App):
                 yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
                 yield Static("", id="preview", markup=False)
             yield Static("", id="swarmview")
+            yield Static(help_text(), id="helpview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
 
@@ -656,6 +697,8 @@ class RelayApp(App):
 
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
+        if self._help_visible:
+            self.action_help()            # close help first; TAB then flips
         self._swarm_visible = not self._swarm_visible
         on = self._swarm_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -663,6 +706,16 @@ class RelayApp(App):
         self.query_one("#swarmview").styles.display = "block" if on else "none"
         if on:
             self._render_swarm_view()
+
+    # --- help overlay (?) -----------------------------------------------------
+    def action_help(self) -> None:
+        if self._swarm_visible and not self._help_visible:
+            self.action_swarm_view()      # leave the swarm view first
+        self._help_visible = not self._help_visible
+        on = self._help_visible
+        self.query_one("#middle").styles.display = "none" if on else "block"
+        self.query_one("#log").styles.display = "none" if on else "block"
+        self.query_one("#helpview").styles.display = "block" if on else "none"
 
     def _render_swarm_view(self) -> None:
         import time as _time
@@ -917,7 +970,10 @@ def main() -> None:
             f"relay: unknown argument(s): {' '.join(unknown)}\n"
             f"Did you mean --dry-run? Refusing to start so a typo can't run live.\n")
         sys.exit(2)
-    RelayApp(dry_run=dry).run()
+    # mouse=False: relay is keyboard-first, and capturing the mouse steals
+    # iTerm2's own gestures (two-finger swipe between tabs, native scroll).
+    # The terminal keeps its input; relay keeps its keys.
+    RelayApp(dry_run=dry).run(mouse=False)
 
 
 if __name__ == "__main__":
