@@ -63,6 +63,20 @@ def run():
     chk("CRITICAL pulses", app.reactor_band(9.0)[2] is True)
     chk("WARM does not pulse", app.reactor_band(2.0)[2] is False)
 
+    # --- mascot: alarmed > critical > working > idle -------------------------
+    M = app.mascot_frame
+    chk("alarmed beats everything",
+        "⊙" in M(0, "☢ CRITICAL", alarmed=True, working=True))
+    chk("critical face", M(0, "☢ CRITICAL", alarmed=False, working=True)
+        == "(x_x)")
+    chk("working flickers",
+        M(0, "◷ WARM", alarmed=False, working=True)
+        != M(1, "◷ WARM", alarmed=False, working=True)
+        and "◕" in M(0, "◷ WARM", alarmed=False, working=True))
+    chk("idle mostly steady with a periodic blink",
+        M(1, "STABLE", alarmed=False, working=False) == "(－‿－)"
+        and M(8, "STABLE", alarmed=False, working=False) == "(￣‿￣)")
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

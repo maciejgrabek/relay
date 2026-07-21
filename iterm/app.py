@@ -137,6 +137,20 @@ def reactor_pressure(sessions) -> float:
     return p
 
 
+def mascot_frame(tick: int, band: str, *, alarmed: bool,
+                 working: bool) -> str:
+    """The header core-creature, keyed to the 0.5s reactor tick. It reacts to
+    REAL state, in priority order: something awaits a human (alarmed) beats
+    a CRITICAL core beats recent activity (working) beats idle blinking."""
+    if alarmed:
+        return "(⊙_⊙)!" if tick % 2 == 0 else "(⊙_⊙) "
+    if band == "☢ CRITICAL":
+        return "(x_x)"
+    if working:
+        return "(◕‿◕)⌁" if tick % 2 == 0 else "(◕‿◕) "
+    return "(￣‿￣)" if tick % 8 == 0 else "(－‿－)"
+
+
 # Reactor temperature bands -> (label, color, pulsing?).
 def reactor_band(temp: float):
     if temp >= 8.0:
@@ -565,9 +579,23 @@ class RelayApp(App):
         # CRITICAL pulses: dim the whole line every other half-second.
         dimmed = pulse and (self._tick % 2 == 0)
         c = "#7a1d1d" if dimmed else color
+        # Mascot inputs: recent log activity = "working" (~3s afterglow);
+        # any non-own session holding a prompt = alarmed.
+        total = getattr(self.watcher, "log_total", 0)
+        if total != getattr(self, "_mascot_seen_log", -1):
+            self._mascot_seen_log = total
+            self._mascot_active_until = self._tick + 6
+        alarmed = any(i.state == "prompting"
+                      and i.session_id != self._own_sid
+                      for i in self.watcher.sessions.values())
+        face = mascot_frame(
+            self._tick, label, alarmed=alarmed,
+            working=self._tick < getattr(self, "_mascot_active_until", 0))
+        fc = "#ff5555" if alarmed else color
         try:
             self.query_one("#reactor", Static).update(
-                f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
+                f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]"
+                f"   [{fc}]{face}[/]")
         except Exception:
             pass
 
