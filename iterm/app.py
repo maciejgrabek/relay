@@ -182,17 +182,19 @@ def reactor_pressure(sessions) -> float:
     return p
 
 
-def mascot_state(band: str, *, alarmed: bool, working: bool) -> str:
+def mascot_state(band: str, *, alarmed: bool, working: bool,
+                 armed: int = 0) -> str:
     """The creature's mood, in priority order: something awaits a human
     (alarmed) beats a CRITICAL core beats recent activity (working) beats
-    idle. One ladder, shared by every face size."""
+    standing guard (armed sessions, nothing happening) beats off-duty
+    (nothing armed - relay is just watching). One ladder, one truth."""
     if alarmed:
         return "alarmed"
     if band == "☢ CRITICAL":
         return "critical"
     if working:
         return "working"
-    return "idle"
+    return "guarding" if armed else "idle"
 
 
 # The creature's working vocabulary - rotates every ~8s while relay acts.
@@ -202,10 +204,16 @@ MASCOT_WORKING_PHRASES = (
     "clearing", "ferrying", "shepherding", "babysitting", "reticulating",
     "wrangling", "unblocking", "conducting", "expediting", "herding",
 )
-# Idle small talk - rotates slowly (~24s); calm, watchful.
-MASCOT_IDLE_PHRASES = (
-    "all quiet.", "watching the fleet.", "standing by.",
-    "nothing needs you.", "sipping electrons.", "keeping watch.",
+# On guard (armed sessions, nothing happening right now) - rotates ~24s.
+# {n} is the armed count: the creature says what it is actually covering.
+MASCOT_GUARD_PHRASES = (
+    "guarding {n}.", "on watch.", "eyes on {n}.", "covering {n}.",
+    "nothing needs you.", "all quiet on {n}.",
+)
+# Off duty (nothing armed) - relay only watches; the last line teaches.
+MASCOT_OFF_PHRASES = (
+    "nothing armed.", "off duty.", "just watching.",
+    "SPACE arms a session.",
 )
 
 
@@ -221,15 +229,16 @@ def _speech_bubble(text: str) -> list:
 
 
 def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
-                    working: bool = False) -> list:
+                    working: bool = False, armed: int = 0) -> list:
     """The banner creature: a tiny CRT monitor (antenna, screen, feet) that
     watches the fleet from beside the RELAY logo, keyed to the 0.5s reactor
     tick. Its speech bubble says the one thing that matters right now; its
     motion budget is spent by meaning - idle barely moves, only ALARMED
     shakes. Returns equal-height lines (ragged right edges are fine)."""
-    state = mascot_state(band, alarmed=awaiting > 0, working=working)
+    state = mascot_state(band, alarmed=awaiting > 0, working=working,
+                         armed=armed)
     beacon, mid = " ", "      "
-    say = MASCOT_IDLE_PHRASES[tick // 48 % len(MASCOT_IDLE_PHRASES)]
+    say = MASCOT_OFF_PHRASES[tick // 48 % len(MASCOT_OFF_PHRASES)]
     shake = False
     if state == "alarmed":
         eyes, mouth = " ⊙  ⊙ ", "  ▽   "
@@ -251,7 +260,7 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
         beacon = "⌁" if tick % 2 == 0 else " "
         verb = MASCOT_WORKING_PHRASES[tick // 16 % len(MASCOT_WORKING_PHRASES)]
         say = verb + "." * (tick % 4)
-    else:
+    elif state == "guarding":
         t = tick % 24
         if t == 0:
             eyes = " ▂  ▂ "          # blink, one frame every 12s
@@ -263,6 +272,12 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
             eyes = " •  • "
         mouth = "  ‿   "
         beacon = "⌖"
+        say = MASCOT_GUARD_PHRASES[
+            tick // 48 % len(MASCOT_GUARD_PHRASES)].format(n=armed)
+    else:
+        # Off duty: relaxed lids, antenna dark, the occasional full blink.
+        eyes = " ▂  ▂ " if tick % 24 == 0 else " ─  ─ "
+        mouth = "  ‿   "
     lead = " " if shake else "  "
     bub = _speech_bubble(say)
     return [
@@ -279,18 +294,20 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
 # (amber = a session awaits you, exactly like the ‼ AWAITING row; red =
 # CRITICAL, like the reactor).
 _MASCOT_COLOR = {"alarmed": WARN, "critical": DANGER,
-                 "working": BRIGHT, "idle": ACCENT}
+                 "working": BRIGHT, "guarding": ACCENT, "idle": DIM}
 
 
 def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
-                     working: bool = False) -> str:
+                     working: bool = False, armed: int = 0) -> str:
     """The RELAY block logo (theme-colored by CSS) with the creature on its
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
-    state = mascot_state(band, alarmed=awaiting > 0, working=working)
+    state = mascot_state(band, alarmed=awaiting > 0, working=working,
+                         armed=armed)
     color = _MASCOT_COLOR[state]
     logo = BANNER.split("\n")
-    face = mascot_face_big(tick, band, awaiting=awaiting, working=working)
+    face = mascot_face_big(tick, band, awaiting=awaiting, working=working,
+                           armed=armed)
     h = max(len(logo), len(face))
     logo = logo + [""] * (h - len(logo))
     face = face + [""] * (h - len(face))
@@ -782,7 +799,9 @@ class RelayApp(App):
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
             self.query_one("#banner", Static).update(banner_with_face(
                 self._tick, label, awaiting=awaiting,
-                working=self._tick < getattr(self, "_mascot_active_until", 0)))
+                working=self._tick < getattr(self, "_mascot_active_until", 0),
+                armed=sum(1 for i in self.watcher.sessions.values()
+                          if i.active and i.session_id != self._own_sid)))
         except Exception:
             pass
 
