@@ -138,6 +138,12 @@ class Watcher:
             cfg_warnings = []
         self.cfg = cfg
         self._cfg_warnings = cfg_warnings
+        # [danger] preset flows to lib/danger.sh through the environment the
+        # classifier subshell inherits. Precedence: an env var already set by
+        # the user wins over the config file, same as every other knob.
+        if "RELAY_DANGER_PRESET" not in os.environ:
+            os.environ["RELAY_DANGER_PRESET"] = getattr(
+                cfg, "danger_preset", "default")
         self.alert_sound = alert_sound or cfg.alert_sound
         self.done_sound = done_sound or cfg.done_sound
         self.on_change = on_change or (lambda: None)
