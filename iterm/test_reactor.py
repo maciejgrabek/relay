@@ -64,18 +64,34 @@ def run():
     chk("WARM does not pulse", app.reactor_band(2.0)[2] is False)
 
     # --- mascot: alarmed > critical > working > idle -------------------------
-    M = app.mascot_frame
+    S = app.mascot_state
     chk("alarmed beats everything",
-        "⊙" in M(0, "☢ CRITICAL", alarmed=True, working=True))
-    chk("critical face", M(0, "☢ CRITICAL", alarmed=False, working=True)
-        == "(x_x)")
-    chk("working flickers",
-        M(0, "◷ WARM", alarmed=False, working=True)
-        != M(1, "◷ WARM", alarmed=False, working=True)
-        and "◕" in M(0, "◷ WARM", alarmed=False, working=True))
-    chk("idle mostly steady with a periodic blink",
-        M(1, "STABLE", alarmed=False, working=False) == "(－‿－)"
-        and M(8, "STABLE", alarmed=False, working=False) == "(￣‿￣)")
+        S("☢ CRITICAL", alarmed=True, working=True) == "alarmed")
+    chk("critical beats working",
+        S("☢ CRITICAL", alarmed=False, working=True) == "critical")
+    chk("working beats idle", S("◷ WARM", alarmed=False, working=True)
+        == "working")
+    chk("idle otherwise", S("STABLE", alarmed=False, working=False) == "idle")
+
+    F = app.mascot_face_big
+    f_alarm = F(0, "☢ CRITICAL", alarmed=True, working=True)
+    chk("alarmed face has wide eyes + alert",
+        any("⊙" in l for l in f_alarm) and any("‼" in l for l in f_alarm))
+    chk("critical face has x eyes",
+        any("x  x" in l for l in F(0, "☢ CRITICAL", alarmed=False,
+                                   working=False)))
+    chk("working face flickers between ticks",
+        F(0, "◷ WARM", alarmed=False, working=True)
+        != F(1, "◷ WARM", alarmed=False, working=True))
+    chk("idle blinks periodically",
+        F(8, "STABLE", alarmed=False, working=False)
+        != F(1, "STABLE", alarmed=False, working=False))
+    chk("face is banner-height", len(f_alarm) == 6)
+
+    comp = app.banner_with_face(0, "STABLE", alarmed=False, working=False)
+    chk("banner keeps the logo and gains the face",
+        "██████╗" in comp and "╭" in comp
+        and len(comp.splitlines()) == len(app.BANNER.splitlines()))
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
