@@ -115,7 +115,8 @@ def _keys(pairs) -> str:
 
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("ENTER", "answer"),
-           ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide")])
+           ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"),
+           ("v", "audit")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("R×2", "restore"), ("W×2", "wipe"), ("?", "help"),
