@@ -22,12 +22,16 @@ class FakeSession:
     def __init__(self):
         self.sent = []
         self.names = []
+        self.profiles = []
 
     async def async_send_text(self, t):
         self.sent.append(t)
 
     async def async_set_name(self, n):
         self.names.append(n)
+
+    async def async_set_profile_properties(self, p):
+        self.profiles.append(p)
 
 
 def _danger():
@@ -601,12 +605,19 @@ async def own_tab_name_tests():
     chk("own tab named by design", fs.names == [W.OWN_TAB_NAME])
     chk("TAB BAR title set too (session name alone leaves 'caffeinate')",
         ft.titles == [W.OWN_TAB_NAME])
+    chk("tab colored relay-green",
+        len(fs.profiles) == 1
+        and fs.profiles[0].values.get("Use Tab Color") == "true"
+        and "Tab Color" in fs.profiles[0].values)
     await w._name_own_tab()
     chk("named only once", fs.names == [W.OWN_TAB_NAME]
-        and ft.titles == [W.OWN_TAB_NAME])
+        and ft.titles == [W.OWN_TAB_NAME] and len(fs.profiles) == 1)
     await w._restore_own_tab()
     chk("restore clears back to auto-name", fs.names[-1] == ""
         and ft.titles[-1] == "")
+    chk("restore turns the tab color off",
+        len(fs.profiles) == 2
+        and fs.profiles[1].values.get("Use Tab Color") == "false")
 
     fd = FakeSession()
     wd = Watcher(connection=None, dry_run=True, own_sid="ME")
