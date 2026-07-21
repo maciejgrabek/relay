@@ -44,11 +44,9 @@ def _own_tab_profile(on: bool):
         p.set_tab_color(iterm2.Color(58, 255, 122))   # #3aff7a
     return p
 
-# The always-on status-bar provider (see statusbar_autolaunch.py). When this
-# symlink exists, the provider serves the badge and relay only publishes state.
-AUTOLAUNCH_PROVIDER = os.path.expanduser(
-    "~/Library/Application Support/iTerm2/Scripts/AutoLaunch/"
-    "relay_statusbar.py")
+# The always-on status-bar provider is statusbar_autolaunch.py; its liveness
+# is proven by a heartbeat file (statusbar.provider_alive), not by the
+# AutoLaunch symlink existing.
 
 
 @dataclass
@@ -158,6 +156,7 @@ class Watcher:
         self._db = None                        # lazy sqlite conn (same loop)
         self._dryrun_delivered: set = set()    # msg ids noted in dry-run
         self._escalation_pinged: set = set()   # msg ids already pinged
+        self._esc_ping_ts = 0.0    # last escalation sound (rate limit)
         self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
         self._arm_seen: dict = {}          # sid -> time first seen registered
@@ -634,12 +633,29 @@ class Watcher:
         notify is the zero-blast-radius half, same as prompt alerts."""
         try:
             msgs = swarmdb.undelivered(self._swarm_conn())
-            for m in swarm.escalation_pings(msgs, self._escalation_pinged):
+            fresh = swarm.escalation_pings(msgs, self._escalation_pinged)
+            if not fresh:
+                return
+            for m in fresh:
                 self._escalation_pinged.add(m["id"])
                 self._note(f"ESCALATION from {m['from_name']} -> "
                            f"{m['to_name']}: {m['body'][:80]}")
-                notify_mac(f"Relay - escalation from {m['from_name']}",
-                           m["body"][:120], self.alert_sound)
+            # Rate limit: at most one SOUND per notify_cooldown window - a
+            # looping worker must not turn the escalation channel into a
+            # siren. Every message is still logged above.
+            now = time.time()
+            if now - self._esc_ping_ts < self.notify_cooldown:
+                return
+            self._esc_ping_ts = now
+            first = fresh[0]
+            if len(fresh) == 1:
+                notify_mac(f"Relay - escalation from {first['from_name']}",
+                           first["body"][:120], self.alert_sound)
+            else:
+                notify_mac("Relay - escalations",
+                           f"{len(fresh)} pending, first from "
+                           f"{first['from_name']}: {first['body'][:80]}",
+                           self.alert_sound)
         except Exception as e:
             # Never let a bad row escape into start()'s tick loop (it has no
             # per-tick except; an escape would kill the watcher outright).
@@ -825,7 +841,11 @@ class Watcher:
         providers on one identifier."""
         if not getattr(self.cfg, "statusbar_enabled", False):
             return
-        if os.path.exists(AUTOLAUNCH_PROVIDER):
+        if statusbar_mod.provider_alive():
+            # A fresh heartbeat proves the provider is actually RUNNING -
+            # the symlink merely existing is not enough (install.sh links it,
+            # but iTerm2 must still start it; without this check a linked-
+            # but-unstarted provider left the badge slot erroring).
             self._note("statusbar served by AutoLaunch provider "
                        "(relay_statusbar.py)")
             return
