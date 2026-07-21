@@ -15,6 +15,10 @@ Design (validated by spikes/statusbar_spike.py):
 """
 from __future__ import annotations
 
+import json
+import os
+import time
+
 # Colored circle per arm mode. The emoji carry their own color regardless of
 # the status bar's text-color setting - green/amber/red by mode.
 MODE_CIRCLE = {
@@ -43,3 +47,124 @@ def label(mode, *, own_panel=False, name=None, role=None) -> str:
         r = _ROLE_SHORT.get(role, role) if role else None
         text += f" · {name}" + (f" ({r})" if r else "")
     return text
+
+
+# --- published state: relay writes, the AutoLaunch provider reads ------------
+#
+# iTerm2 keeps a configured status-bar component in the profile even when the
+# script providing it is gone, and renders a missing provider as an ERROR. So
+# the provider must outlive relay: an AutoLaunch script serves the badge
+# always, reading the state relay publishes each tick. Stale or missing state
+# means relay is off - the badge says so instead of erroring.
+
+STATE_STALE_S = 5.0                     # > watcher tick (2s), < human patience
+OFFLINE_LABEL = "⚫ RELAY: off"          # black circle: relay itself not running
+
+
+def state_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_STATUSBAR_STATE", "~/.relay/statusbar.json"))
+
+
+def clicks_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_STATUSBAR_CLICKS",
+                       "~/.relay/statusbar-clicks.jsonl"))
+
+
+def write_state(labels: dict, now=None, path=None) -> None:
+    """Atomically publish {session_id: label}. tmp + os.replace so the
+    provider never reads a torn file."""
+    p = path or state_path()
+    d = os.path.dirname(p)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"ts": time.time() if now is None else now,
+                   "labels": labels}, f)
+    os.replace(tmp, p)
+
+
+def clear_state(path=None) -> None:
+    """Best-effort removal on relay quit, so the badge flips to OFFLINE_LABEL
+    immediately instead of waiting out the staleness window."""
+    try:
+        os.remove(path or state_path())
+    except OSError:
+        pass
+
+
+def state_fresh(now=None, path=None) -> bool:
+    """True while relay is live (published within STATE_STALE_S). Never
+    raises."""
+    try:
+        with open(path or state_path()) as f:
+            ts = float(json.load(f).get("ts", 0))
+    except Exception:
+        return False
+    t = time.time() if now is None else now
+    return (t - ts) <= STATE_STALE_S
+
+
+def read_state_label(session_id: str, now=None, path=None) -> str:
+    """The provider's badge text for one tab: the published label while relay
+    is live, label('off') for a live-but-unknown tab, OFFLINE_LABEL when relay
+    is off (missing/stale/garbled state). Never raises."""
+    try:
+        with open(path or state_path()) as f:
+            d = json.load(f)
+        ts = float(d.get("ts", 0))
+        t = time.time() if now is None else now
+        if (t - ts) > STATE_STALE_S:
+            return OFFLINE_LABEL
+        return d.get("labels", {}).get(session_id) or label("off")
+    except Exception:
+        return OFFLINE_LABEL
+
+
+# --- click queue: the AutoLaunch provider writes, relay consumes -------------
+
+def append_click(session_id: str, now=None, path=None) -> None:
+    """Queue one badge click for the running relay to apply (with its usual
+    guards). One JSON line per click."""
+    p = path or clicks_path()
+    d = os.path.dirname(p)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(p, "a") as f:
+        f.write(json.dumps({"ts": time.time() if now is None else now,
+                            "session_id": session_id}) + "\n")
+
+
+def consume_clicks(now=None, path=None, max_age=STATE_STALE_S) -> list:
+    """Read and clear queued clicks, oldest first, dropping stale or garbled
+    lines. The file is renamed away before reading, so each click is applied
+    at most once even if relay crashes mid-consume. Never raises."""
+    p = path or clicks_path()
+    if not os.path.exists(p):
+        return []
+    work = p + ".consuming"
+    try:
+        os.replace(p, work)
+    except OSError:
+        return []
+    out = []
+    t = time.time() if now is None else now
+    try:
+        with open(work) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                    sid = d.get("session_id")
+                    if sid and (t - float(d.get("ts", 0))) <= max_age:
+                        out.append(sid)
+                except Exception:
+                    continue
+    except OSError:
+        pass
+    try:
+        os.remove(work)
+    except OSError:
+        pass
+    return out

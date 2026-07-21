@@ -115,4 +115,32 @@ else
   esac
 fi
 
+# --- iTerm2 status-bar provider (AutoLaunch) --------------------------------
+# iTerm2 keeps a configured status-bar component in the profile even when the
+# script providing it is gone, and renders that as an ERROR. So the badge
+# needs an always-on provider that iTerm2 itself launches; with relay off it
+# just shows "RELAY: off". Symlinked, so `relay update` updates it too.
+AL_SRC="$REPO/iterm/statusbar_autolaunch.py"
+AL_DST="$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch"
+echo
+echo "The status-bar badge ([statusbar] enabled) needs an always-on iTerm2"
+echo "AutoLaunch provider - without it the badge slot ERRORS while relay is off."
+if [ "$CHECK_ONLY" = 1 ]; then
+  echo "To symlink it, run ./install.sh (without --check) and answer yes."
+else
+  read -r -p "Symlink it into your iTerm2 AutoLaunch scripts? [y/N] " al_ans
+  case "$al_ans" in
+    y|Y|yes|YES)
+      mkdir -p "$AL_DST"
+      ln -sfn "$AL_SRC" "$AL_DST/relay_statusbar.py"
+      echo "  linked $AL_DST/relay_statusbar.py"
+      echo "  start it once: iTerm2 menu Scripts > AutoLaunch >"
+      echo "  relay_statusbar.py (or just restart iTerm2)."
+      ;;
+    *)
+      echo "Skipped. (Fine if you don't use the status-bar badge.)"
+      ;;
+  esac
+fi
+
 exit 0
