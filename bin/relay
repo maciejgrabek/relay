@@ -7,6 +7,7 @@
 #   relay --dry-run  watch + notify but NEVER inject (safe first run)
 #   relay register|send|status|task|inbox|msgs|spawn|doctor|clean|restore|wipe ...
 #                    swarm CLI verbs (see: relay register -h etc.)
+#   relay demo       guided 60s tour: spawns a demo worker, you watch the loop
 #   relay doctor     print swarm health from outside the TUI (debugging)
 #   relay update     fetch + fast-forward to the latest relay version
 #                    (the TUI also self-updates at start, at most once a day;
@@ -21,8 +22,8 @@
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
-  -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  register|send|status|task|inbox|msgs|spawn|doctor|version|update|clean|restore|wipe)
+  -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  register|send|status|task|inbox|msgs|spawn|doctor|demo|version|update|clean|restore|wipe)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 # TUI start: quiet self-update BEFORE the app boots, so the code that runs is
