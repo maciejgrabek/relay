@@ -242,7 +242,7 @@ def help_text() -> str:
         return f"  [{A}]{key:<9}[/] [{G}]{what}[/]"
 
     return "\n".join([
-        f"[{A}]RELAY KEYS[/]",
+        f"[{A}]RELAY KEYS[/]   [{D}]press ? or ESC to close this help[/]",
         "",
         row("↑↓ / j k", "move (continuous through NEEDS ACTION and list)"),
         row("ENTER", "send Enter to the selected session (answer by hand)"),
@@ -280,7 +280,8 @@ def audit_view_text(entries, title: str, width: int, now=None) -> str:
     bar = "═" * w
     head = (f"╔{bar}╗\n"
             f" ▓ AUDIT // {title[:w - 12]}\n"
-            f" what relay decided unattended · v returns to the live feed\n"
+            f" what relay decided unattended · press v or ESC to return to "
+            f"the live feed\n"
             f"╚{bar}╝\n")
     mine = [e for e in entries if e.get("session") == title]
     if not mine:
@@ -377,6 +378,7 @@ class RelayApp(App):
         Binding("R", "restore", "Restore orphaned", show=True),
         Binding("W", "wipe", "Wipe orphaned", show=True),
         Binding("question_mark", "help", "Help", show=False),
+        Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -820,6 +822,15 @@ class RelayApp(App):
     def action_audit_view(self) -> None:
         self._audit_visible = not self._audit_visible
         self._update_preview()
+
+    # --- ESC: universal "take me back" for every overlay ----------------------
+    def action_dismiss_view(self) -> None:
+        if self._help_visible:
+            self.action_help()
+        elif self._audit_visible:
+            self.action_audit_view()
+        elif self._swarm_visible:
+            self.action_swarm_view()
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:
