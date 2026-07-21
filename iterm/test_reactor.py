@@ -71,7 +71,10 @@ def run():
         MS("☢ CRITICAL", alarmed=False, working=True) == "critical")
     chk("working beats idle", MS("◷ WARM", alarmed=False, working=True)
         == "working")
-    chk("idle otherwise", MS("STABLE", alarmed=False, working=False) == "idle")
+    chk("armed + quiet = guarding",
+        MS("STABLE", alarmed=False, working=False, armed=2) == "guarding")
+    chk("nothing armed = off-duty idle",
+        MS("STABLE", alarmed=False, working=False) == "idle")
 
     F = app.mascot_face_big
     f_alarm = F(0, "☢ CRITICAL", awaiting=2, working=True)
@@ -104,12 +107,17 @@ def run():
          if any(v in l for l in F(16, "◷ WARM", working=True))]
         != [v for v in app.MASCOT_WORKING_PHRASES
             if any(v in l for l in F(0, "◷ WARM", working=True))])
-    chk("idle blinks periodically and makes small talk",
-        F(0, "STABLE") != F(1, "STABLE")
+    chk("guarding face names its armed count",
+        any("guarding 2." in l for l in F(1, "STABLE", armed=2)))
+    chk("guarding glances around",
+        F(8, "STABLE", armed=1) != F(1, "STABLE", armed=1))
+    chk("off-duty face: relaxed lids, dark antenna, honest phrase",
+        any(" ─  ─ " in l for l in F(1, "STABLE"))
+        and not any("⌖" in l for l in F(1, "STABLE"))
         and any(p in l for l in F(1, "STABLE")
-                for p in app.MASCOT_IDLE_PHRASES))
-    chk("idle small talk rotates",
-        any("watching the fleet" in l for l in F(48, "STABLE")))
+                for p in app.MASCOT_OFF_PHRASES))
+    chk("off-duty teaches SPACE eventually",
+        any("SPACE arms a session." in l for l in F(144, "STABLE")))
     chk("face is banner-height", len(f_alarm) == 6)
 
     comp = app.banner_with_face(1, "STABLE")
