@@ -38,6 +38,17 @@ def run():
     chk("blocked dominates",
         P([S(mode="safe", state="blocked")]) > P([S(mode="insane", state="working")]))
 
+    # A held prompt is the same "human is the bottleneck" state as blocked.
+    chk("prompting weighs like blocked",
+        P([S(mode="safe", state="prompting")])
+        == P([S(mode="safe", state="blocked")]))
+
+    # A stale armed session is unaccounted risk, not calm.
+    st = S(mode="wild", state="working")
+    st.stale = True
+    chk("stale adds heat",
+        P([st]) > P([S(mode="wild", state="working")]))
+
     # Pressure scales with fleet size.
     one = P([S(mode="insane", state="working")])
     three = P([S(mode="insane", state="working") for _ in range(3)])
