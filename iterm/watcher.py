@@ -12,6 +12,7 @@ optional callbacks. The Textual TUI subscribes to it; a headless mode can too.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -26,6 +27,12 @@ import statusbar as statusbar_mod
 import config as relay_config
 import titles
 from gates import classify, Action, Decision, reconstruct_lines, detect_state
+
+# The always-on status-bar provider (see statusbar_autolaunch.py). When this
+# symlink exists, the provider serves the badge and relay only publishes state.
+AUTOLAUNCH_PROVIDER = os.path.expanduser(
+    "~/Library/Application Support/iTerm2/Scripts/AutoLaunch/"
+    "relay_statusbar.py")
 
 
 @dataclass
@@ -180,6 +187,7 @@ class Watcher:
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
                 self._check_escalations()
+                self._statusbar_publish()
                 if self._roster_ok:
                     self._mark_closed_sessions()
                 self._check_gone()
@@ -219,6 +227,10 @@ class Watcher:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            if not self.dry_run:
+                # Flip the AutoLaunch badge to RELAY: off immediately on quit
+                # (otherwise it waits out the staleness window).
+                statusbar_mod.clear_state()
             await self._restore_titles()
             await self._close_connection()
 
@@ -781,8 +793,19 @@ class Watcher:
         render() reads this process's real arm state; on_click toggles it - the
         same state the TUI shows, so bar and panel stay in sync. A click is an
         un-spoofable human action, which is why arm-from-the-tab is safe. Best
-        effort: a failure here must never stop the watcher starting."""
+        effort: a failure here must never stop the watcher starting.
+
+        Skipped when the AutoLaunch provider is installed: iTerm2 keeps the
+        component configured in the profile even with relay off (rendering a
+        missing provider as an ERROR), so the durable fix is the provider
+        script - it serves the badge always, from the state this watcher
+        publishes (_statusbar_publish). Registering here too would put two
+        providers on one identifier."""
         if not getattr(self.cfg, "statusbar_enabled", False):
+            return
+        if os.path.exists(AUTOLAUNCH_PROVIDER):
+            self._note("statusbar served by AutoLaunch provider "
+                       "(relay_statusbar.py)")
             return
         try:
             component = iterm2.StatusBarComponent(
@@ -822,6 +845,24 @@ class Watcher:
                                        role=reg.get("role"))
         except Exception:
             return statusbar_mod.label("off")
+
+    def _statusbar_publish(self) -> None:
+        """Feed the AutoLaunch provider: apply any queued badge clicks (same
+        guards as a direct click), then publish every tab's current label.
+        Best-effort - the status bar must never break the watcher. Skipped in
+        dry-run (publishing/consuming are writes; dry-run mutates nothing) -
+        the badge simply shows RELAY: off during a dry run, which is honest."""
+        if not getattr(self.cfg, "statusbar_enabled", False) or self.dry_run:
+            return
+        try:
+            for sid in statusbar_mod.consume_clicks():
+                self._statusbar_click(sid)
+            labels = {sid: self._statusbar_label(sid) for sid in self.sessions}
+            if self.own_sid:
+                labels[self.own_sid] = self._statusbar_label(self.own_sid)
+            statusbar_mod.write_state(labels)
+        except Exception as e:
+            self._note(f"statusbar publish error: {e}")
 
     def _statusbar_click(self, session_id: str) -> None:
         """A status-bar click cycles that tab's arm level - same as Space in the

@@ -1,11 +1,14 @@
-"""Tests for the pure status-bar label. No iTerm2 (the live half is in watcher).
+"""Tests for the pure status-bar logic. No iTerm2 (the live halves are the
+watcher and the AutoLaunch provider; both lean on these helpers).
 
 Run: python3 iterm/test_statusbar.py    or    ./test/run.sh
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
+import statusbar  # noqa: E402
 from statusbar import label, MODE_CIRCLE  # noqa: E402
 
 
@@ -46,6 +49,56 @@ def run():
                 label("safe", name="w1") == f"{MODE_CIRCLE['safe']} RELAY:safe · w1")
     ok &= check("no name -> bare mode",
                 label("off") == f"{MODE_CIRCLE['off']} RELAY:off")
+
+    # --- published state (the AutoLaunch provider's view) --------------------
+    tmp = tempfile.mkdtemp()
+    state = os.path.join(tmp, "statusbar.json")
+    clicks = os.path.join(tmp, "clicks.jsonl")
+
+    ok &= check("missing state -> offline badge",
+                statusbar.read_state_label("S1", path=state)
+                == statusbar.OFFLINE_LABEL)
+    ok &= check("missing state -> not fresh",
+                not statusbar.state_fresh(path=state))
+
+    statusbar.write_state({"S1": label("wild")}, now=1000.0, path=state)
+    ok &= check("fresh state -> published label",
+                statusbar.read_state_label("S1", now=1001.0, path=state)
+                == label("wild"))
+    ok &= check("fresh state, unknown tab -> off label",
+                statusbar.read_state_label("S9", now=1001.0, path=state)
+                == label("off"))
+    ok &= check("fresh state -> state_fresh true",
+                statusbar.state_fresh(now=1001.0, path=state))
+    ok &= check("stale state -> offline badge",
+                statusbar.read_state_label(
+                    "S1", now=1000.0 + statusbar.STATE_STALE_S + 1,
+                    path=state) == statusbar.OFFLINE_LABEL)
+
+    with open(state, "w") as f:
+        f.write("{not json")
+    ok &= check("garbled state -> offline badge, no raise",
+                statusbar.read_state_label("S1", path=state)
+                == statusbar.OFFLINE_LABEL)
+
+    statusbar.write_state({"S1": label("safe")}, now=1000.0, path=state)
+    statusbar.clear_state(path=state)
+    ok &= check("clear_state removes the file", not os.path.exists(state))
+    statusbar.clear_state(path=state)   # second call must not raise
+    ok &= check("clear_state idempotent", True)
+
+    # --- click queue ---------------------------------------------------------
+    ok &= check("no click file -> no clicks",
+                statusbar.consume_clicks(path=clicks) == [])
+    statusbar.append_click("S1", now=1000.0, path=clicks)
+    statusbar.append_click("S2", now=1000.0, path=clicks)
+    statusbar.append_click("S3", now=10.0, path=clicks)   # ancient -> dropped
+    with open(clicks, "a") as f:
+        f.write("garbage line\n")
+    got = statusbar.consume_clicks(now=1001.0, path=clicks)
+    ok &= check("consume returns fresh clicks in order", got == ["S1", "S2"])
+    ok &= check("consume drains the queue (at-most-once)",
+                statusbar.consume_clicks(now=1001.0, path=clicks) == [])
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
