@@ -71,6 +71,17 @@ def run():
                      if l.strip().startswith("{")]
     check("entry without ts is kept", "noTs" in kept_sessions)
 
+    # --- read_tail (the audit viewer's reader) -------------------------------
+    tail = audit.read_tail()
+    check("read_tail returns dict entries, garbled lines skipped",
+          tail and all(isinstance(e, dict) and "verdict" in e for e in tail))
+    check("read_tail keeps order (newest last)",
+          tail[-1].get("session") == "noTs")
+    check("read_tail respects limit", len(audit.read_tail(limit=1)) == 1)
+    os.environ["RELAY_AUDIT_LOG"] = os.path.join(tmp, "missing.jsonl")
+    importlib.reload(audit)
+    check("read_tail on missing log -> []", audit.read_tail() == [])
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

@@ -225,6 +225,36 @@ def help_text() -> str:
     ])
 
 
+def audit_view_text(entries, title: str, width: int, now=None) -> str:
+    """The `v` view: what relay decided for ONE session while you weren't
+    looking - approvals, escalations, deliveries, newest last. Plain text
+    (the preview pane renders markup-free). Filters by the audit log's
+    session field, which stores the session title."""
+    import time as _t
+    w = max(40, width)
+    bar = "═" * w
+    head = (f"╔{bar}╗\n"
+            f" ▓ AUDIT // {title[:w - 12]}\n"
+            f" what relay decided unattended · v returns to the live feed\n"
+            f"╚{bar}╝\n")
+    mine = [e for e in entries if e.get("session") == title]
+    if not mine:
+        return head + (
+            "\n no recorded decisions for this session yet.\n\n"
+            " every unattended approval, escalation, and delivery is\n"
+            " written to ~/.relay/audit.jsonl (kept 7 days) BEFORE relay\n"
+            " acts - this view is that record, per session.")
+    mark = {"auto-approved": "✓", "escalated": "⊘", "delivered": "→",
+            "would-approve": "≈", "would-deliver": "≈"}
+    lines = []
+    for e in mine[-200:]:
+        t = _t.strftime("%m-%d %H:%M:%S", _t.localtime(e.get("ts", 0)))
+        m = mark.get(e.get("verdict", ""), "?")
+        lines.append(f" {t}  {m} {str(e.get('verdict', '?')):<13} "
+                     f"{str(e.get('command', ''))[:max(10, w - 38)]}")
+    return head + "\n".join(lines)
+
+
 def needs_action(state: str, stale: bool) -> bool:
     """A session a human should look at NOW: it is holding a prompt relay
     escalated (or is not allowed to clear), it is blocked, or it went stale.
@@ -297,6 +327,7 @@ class RelayApp(App):
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
+        Binding("v", "audit_view", "Audit view", show=False),
         Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("R", "restore", "Restore orphaned", show=True),
         Binding("W", "wipe", "Wipe orphaned", show=True),
@@ -316,6 +347,7 @@ class RelayApp(App):
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
         self._swarm_visible = False
         self._help_visible = False
+        self._audit_visible = False
         self._swarm_db = None
         self._restore_armed = False
         self._wipe_armed = False
@@ -613,6 +645,10 @@ class RelayApp(App):
         if not info:
             preview.update("")
             return
+        if self._audit_visible and sid != self._own_sid:
+            preview.update(audit_view_text(
+                audit.read_tail(), info.title, preview.size.width - 2))
+            return
         if sid == self._own_sid:
             # Previewing relay's own tab would mirror the whole UI into itself
             # (an infinite RELAY-inside-RELAY), and relay never acts on its own
@@ -734,6 +770,11 @@ class RelayApp(App):
         self.query_one("#swarmview").styles.display = "block" if on else "none"
         if on:
             self._render_swarm_view()
+
+    # --- audit view (v): the preview pane shows this session's decisions -----
+    def action_audit_view(self) -> None:
+        self._audit_visible = not self._audit_visible
+        self._update_preview()
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:

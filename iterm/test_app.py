@@ -173,6 +173,30 @@ async def go():
         chk("TAB from help lands in swarm view, help closed",
             not ah._help_visible and ah._swarm_visible)
 
+    # --- audit view (pure formatter + v toggle) -------------------------------
+    ents = [{"ts": 1000.0, "verdict": "auto-approved", "session": "t0",
+             "command": "grep -rn TODO"},
+            {"ts": 1001.0, "verdict": "escalated", "session": "other",
+             "command": "rm -rf /"}]
+    av = appmod.audit_view_text(ents, "t0", 80)
+    chk("audit view filters by session + marks verdicts",
+        "AUDIT // t0" in av and "grep -rn TODO" in av
+        and "rm -rf /" not in av and "✓" in av)
+    chk("audit view empty state teaches",
+        "no recorded decisions" in appmod.audit_view_text([], "t0", 80))
+
+    aa = _TestApp(_one(), dry_run=True)
+    async with aa.run_test() as pilot:
+        await pilot.pause()
+        aa._refresh()
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        chk("v toggles audit mode on", aa._audit_visible)
+        await pilot.press("v")
+        await pilot.pause()
+        chk("v toggles audit mode off", not aa._audit_visible)
+
     # relay's own panel row NEVER goes to NEEDS ACTION (nor the counts)
     os.environ["ITERM_SESSION_ID"] = "w0t9p9:OWN-1"
     own_sessions = {
