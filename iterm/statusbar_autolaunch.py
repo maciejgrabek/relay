@@ -24,6 +24,7 @@ provider, no identifier conflicts.
 """
 import os
 import sys
+import time
 
 import iterm2
 
@@ -44,8 +45,17 @@ async def main(connection):
         identifier="com.relay.arm",
     )
 
+    last_touch = 0.0
+
     @iterm2.StatusBarRPC
     async def render(knobs, session_id=iterm2.Reference("id")):
+        # Heartbeat: proves to relay this provider is RUNNING (throttled -
+        # render fires per second per visible tab).
+        nonlocal last_touch
+        now = time.time()
+        if now - last_touch >= 2.0:
+            last_touch = now
+            statusbar.touch_provider_alive()
         return statusbar.read_state_label(session_id)
 
     async def on_click(session_id):
@@ -53,6 +63,7 @@ async def main(connection):
         if statusbar.state_fresh():
             statusbar.append_click(session_id)
 
+    statusbar.touch_provider_alive()   # announce liveness immediately
     await component.async_register(connection, render, onclick=on_click)
 
 

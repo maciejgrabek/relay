@@ -28,8 +28,15 @@ esac
 # TUI start: quiet self-update BEFORE the app boots, so the code that runs is
 # current and any DB migration applies on this same launch. Throttled to once
 # a day, silent when offline/dirty/current, never blocks a launch on failure.
-# Skipped for --dry-run (dry-run mutates nothing, including the checkout).
-if [ "${1:-}" != "--dry-run" ]; then
+# Skipped for dry-run in EVERY spelling app.py accepts (--dry-run/--dryrun/-n,
+# any position) - dry-run mutates nothing, including the checkout.
+DRY=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run|--dryrun|-n) DRY=1 ;;
+  esac
+done
+if [ "$DRY" = 0 ]; then
   python3 "$HERE/../iterm/cli.py" update --auto || true
 fi
 exec python3 "$HERE/../iterm/app.py" "$@"

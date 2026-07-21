@@ -123,6 +123,47 @@ def read_state_label(session_id: str, now=None, path=None) -> str:
         return OFFLINE_LABEL
 
 
+# --- provider heartbeat ------------------------------------------------------
+#
+# The AutoLaunch symlink existing does NOT mean the provider script is
+# running (install.sh links it, but iTerm2 must still start it). The provider
+# touches this file from its render callback; relay registers its own
+# in-process component unless the heartbeat is FRESH - so a linked-but-not-
+# started provider never leaves the badge slot erroring.
+
+PROVIDER_ALIVE_MAX_AGE_S = 15.0
+
+
+def provider_alive_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_STATUSBAR_ALIVE",
+                       "~/.relay/statusbar-provider.alive"))
+
+
+def touch_provider_alive(path=None) -> None:
+    """Heartbeat write (the provider calls this, throttled). Never raises."""
+    p = path or provider_alive_path()
+    try:
+        d = os.path.dirname(p)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(p, "w") as f:
+            f.write(str(time.time()))
+    except OSError:
+        pass
+
+
+def provider_alive(now=None, path=None,
+                   max_age=PROVIDER_ALIVE_MAX_AGE_S) -> bool:
+    """True when the AutoLaunch provider heartbeat is fresh. Never raises."""
+    try:
+        ts = os.path.getmtime(path or provider_alive_path())
+    except OSError:
+        return False
+    t = time.time() if now is None else now
+    return (t - ts) <= max_age
+
+
 # --- click queue: the AutoLaunch provider writes, relay consumes -------------
 
 def append_click(session_id: str, now=None, path=None) -> None:

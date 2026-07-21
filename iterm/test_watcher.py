@@ -632,6 +632,49 @@ async def own_tab_name_tests():
     return ok
 
 
+def escalation_ratelimit_tests():
+    """A burst of escalations = ONE sound (naming the count), not a siren."""
+    from watcher import Watcher
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    pings = []
+    real_notify = W.notify_mac
+    real_undeliv = W.swarmdb.undelivered
+    rows = [{"id": i, "kind": "escalation", "from_name": f"w{i}",
+             "to_name": "c", "body": f"b{i}"} for i in range(3)]
+    try:
+        W.notify_mac = lambda t, m, s: pings.append(m)
+        W.swarmdb.undelivered = lambda conn: rows
+        w = Watcher(connection=None, dry_run=False)
+        w._swarm_conn = lambda: None
+        w._check_escalations()
+        chk("burst of 3 -> one sound naming the count",
+            len(pings) == 1 and "3 pending" in pings[0])
+        chk("all burst ids marked pinged",
+            w._escalation_pinged == {0, 1, 2})
+        rows.append({"id": 9, "kind": "escalation", "from_name": "w9",
+                     "to_name": "c", "body": "late"})
+        w._check_escalations()
+        chk("within cooldown -> logged + marked, NO extra sound",
+            len(pings) == 1 and 9 in w._escalation_pinged)
+        w._esc_ping_ts = 0.0     # cooldown elapsed
+        rows.append({"id": 10, "kind": "escalation", "from_name": "wA",
+                     "to_name": "c", "body": "later"})
+        w._check_escalations()
+        chk("after cooldown -> pings again", len(pings) == 2)
+    finally:
+        W.notify_mac = real_notify
+        W.swarmdb.undelivered = real_undeliv
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -639,4 +682,5 @@ if __name__ == "__main__":
     r4 = arm_request_tests()
     r5 = closed_tests()
     r6 = asyncio.run(own_tab_name_tests())
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6) else 1)
+    r7 = escalation_ratelimit_tests()
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7) else 1)

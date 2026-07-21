@@ -457,50 +457,56 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def _run_git(cwd: str, *a, timeout=8):
+    """Run git in an ARBITRARY repo (unlike _git, which is pinned to relay's
+    own checkout): returns (rc, stdout, stderr); (None, '', msg) on hang or
+    missing git. Never raises - same hardening contract as _git."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", cwd, *a],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+    except Exception as e:
+        return None, "", str(e)
+
+
 def _worktree_add(repo: str, name: str):
     """Create branch relay/<name> and a sibling worktree <repo>-<name> from
     the repo's current HEAD. Returns (worktree_path, None) on success or
     (None, error). The worktree lives NEXT TO the repo, never under ~/.relay -
     relay is a tech the session uses, not a place that owns the work."""
-    import subprocess
-    r = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
+    rc, _, _ = _run_git(repo, "rev-parse", "--git-dir")
+    if rc != 0:
         return None, f"not a git repository: {repo}"
     path = os.path.join(os.path.dirname(repo),
                         f"{os.path.basename(repo)}-{name}")
     if os.path.exists(path):
         return None, (f"worktree path already exists: {path} - pick another "
                       f"--name, or remove it (git -C {repo} worktree remove)")
-    r = subprocess.run(["git", "-C", repo, "worktree", "add", path,
-                        "-b", f"relay/{name}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return None, (r.stderr.strip() or "git worktree add failed")
+    rc, _, err = _run_git(repo, "worktree", "add", path,
+                          "-b", f"relay/{name}", timeout=30)
+    if rc != 0:
+        return None, (err or "git worktree add failed (git hung or missing?)")
     return path, None
 
 
 def _worktree_dirty(workdir: str) -> bool:
     """True when the worktree has uncommitted/untracked changes - or can't be
-    read at all (unreadable counts as dirty: never delete blind)."""
-    import subprocess
-    r = subprocess.run(["git", "-C", workdir, "status", "--porcelain"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
+    read at all (unreadable, hung, or missing git counts as dirty: never
+    delete blind)."""
+    rc, out, _ = _run_git(workdir, "status", "--porcelain")
+    if rc != 0:
         return True
-    return bool(r.stdout.strip())
+    return bool(out)
 
 
 def _worktree_remove(repo: str, workdir: str, name: str):
     """Remove a relay-created worktree + its relay/<name> branch. Branch
     deletion is best-effort (already merged-and-deleted is not an error)."""
-    import subprocess
-    r = subprocess.run(["git", "-C", repo, "worktree", "remove", workdir],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return False, (r.stderr.strip() or "git worktree remove failed")
-    subprocess.run(["git", "-C", repo, "branch", "-D", f"relay/{name}"],
-                   capture_output=True, text=True)
+    rc, _, err = _run_git(repo, "worktree", "remove", workdir, timeout=30)
+    if rc != 0:
+        return False, (err or "git worktree remove failed")
+    _run_git(repo, "branch", "-D", f"relay/{name}")
     return True, ""
 
 
@@ -527,9 +533,18 @@ def cmd_spawn(args) -> int:
         print(f"worktree {workdir} (branch relay/{args.name})")
     # --arm beats config [swarm] spawn_arm beats "off".
     arm = args.arm if args.arm is not None else relay_config.load()[0].spawn_arm
-    sid = asyncio.run(spawnmod.spawn_worker(
-        args.name, args.project or "", args.prompt, workdir, args.role,
-        arm=arm))
+    try:
+        sid = asyncio.run(spawnmod.spawn_worker(
+            args.name, args.project or "", args.prompt, workdir, args.role,
+            arm=arm))
+    except Exception as e:
+        if repo:
+            # Undo the worktree we just created: with no session row, no
+            # relay verb could ever find or clean it (untracked git state).
+            ok_rm, _ = _worktree_remove(repo, workdir, args.name)
+            if ok_rm:
+                print(f"cleaned up worktree {workdir} after failed spawn")
+        return _err(f"spawn failed: {e}")
     if repo:
         db.set_worktree_repo(db.connect(), args.name, repo)
     armed = f", arm={arm}" if arm != "off" else ""

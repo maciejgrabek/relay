@@ -87,6 +87,16 @@ def run():
     statusbar.clear_state(path=state)   # second call must not raise
     ok &= check("clear_state idempotent", True)
 
+    # --- provider heartbeat (symlink existing != provider running) -----------
+    alive = os.path.join(tmp, "provider.alive")
+    ok &= check("no heartbeat file -> provider not alive",
+                not statusbar.provider_alive(path=alive))
+    statusbar.touch_provider_alive(path=alive)
+    ok &= check("touched -> alive", statusbar.provider_alive(path=alive))
+    os.utime(alive, (1000.0, 1000.0))   # backdate far into the past
+    ok &= check("stale heartbeat -> not alive",
+                not statusbar.provider_alive(path=alive))
+
     # --- click queue ---------------------------------------------------------
     ok &= check("no click file -> no clicks",
                 statusbar.consume_clicks(path=clicks) == [])

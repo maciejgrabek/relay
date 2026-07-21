@@ -452,6 +452,23 @@ def run():
                            "--dir", repo, iterm_id="w0t0p0:CO-ID")
     ok &= check("existing worktree path refused", code == 1)
 
+    # spawn failure AFTER worktree creation cleans the worktree back up
+    real_fake = spawnmod.spawn_worker
+
+    async def _boom(*a, **k):
+        raise RuntimeError("iterm2 exploded")
+
+    spawnmod.spawn_worker = _boom
+    code, out, err = run_cli("spawn", "go", "--name", "wtfail", "--project",
+                             "webshop", "--worktree", "--dir", repo,
+                             iterm_id="w0t0p0:CO-ID")
+    wtf = os.path.join(os.path.dirname(repo), "webshop-wtfail")
+    ok &= check("failed spawn -> error surfaced", code == 1
+                and "spawn failed" in err)
+    ok &= check("failed spawn -> worktree cleaned up",
+                not os.path.exists(wtf))
+    spawnmod.spawn_worker = real_fake
+
     # --- wipe removes clean worktrees, keeps dirty ones -----------------------
     # second worktree worker, made dirty
     run_cli("spawn", "go", "--name", "wt2", "--project", "webshop",

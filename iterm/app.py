@@ -447,9 +447,9 @@ class RelayApp(App):
         # attention strip appears TWICE - keep the occurrence nearest to where
         # the cursor was, so it doesn't teleport between strip and main list.
         if self._row_sids:
-            occ = [i for i, s in enumerate(self._row_sids) if s == prev_sid]
-            target = min(occ, key=lambda i: abs(i - prev_row)) if occ else 0
-            target = self._nearest_selectable(target)
+            target = self._row_index_near(prev_sid, prev_row)
+            target = self._nearest_selectable(target if target is not None
+                                              else 0)
             if target is not None:
                 table.move_cursor(row=target)
         # Status line: live armed-count + total approvals.
@@ -474,7 +474,9 @@ class RelayApp(App):
         # Attention counts: only the parts that are non-zero earn header space.
         # Own panel row excluded - it can never legitimately await a human.
         others = [i for i in sess if i.session_id != self._own_sid]
-        awaiting = sum(1 for i in others if i.state == "prompting")
+        # prompting AND blocked: the header must never contradict the strip.
+        awaiting = sum(1 for i in others
+                       if i.state in ("prompting", "blocked"))
         n_stale = sum(1 for i in others if getattr(i, "stale", False))
         queued_n = 0
         try:
@@ -696,11 +698,14 @@ class RelayApp(App):
     def action_hide(self) -> None:
         sid = self._selected_sid()
         if sid and self.watcher:
+            prev_row = self.query_one(DataTable).cursor_row
             self.watcher.toggle_hidden(sid)
             self._refresh()
-            # Keep the cursor on the row we just acted on (it moved sections).
-            if sid in self._row_sids:
-                self.query_one(DataTable).move_cursor(row=self._row_sids.index(sid))
+            # Keep the cursor on the row we just acted on (it moved sections)
+            # - nearest occurrence, same rule as _refresh (duplicate rows).
+            target = self._row_index_near(sid, prev_row)
+            if target is not None:
+                self.query_one(DataTable).move_cursor(row=target)
                 self._update_preview()
 
     def action_unhide_all(self) -> None:
@@ -725,6 +730,17 @@ class RelayApp(App):
             r += step
         if 0 <= r < n:
             table.move_cursor(row=r)
+
+    def _row_index_near(self, sid, near_row: int):
+        """Row index of `sid` nearest to `near_row` - a session in the
+        NEEDS ACTION strip appears twice, and the cursor must never teleport
+        to the other occurrence. None for divider sids (None) or absent."""
+        if sid is None:
+            return None
+        occ = [i for i, s in enumerate(self._row_sids) if s == sid]
+        if not occ:
+            return None
+        return min(occ, key=lambda i: abs(i - near_row))
 
     def _nearest_selectable(self, row: int):
         """Return the nearest row index whose sid is not the divider (None),
