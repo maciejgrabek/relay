@@ -38,23 +38,67 @@ BANNER = r"""
  ██║  ██║███████╗███████╗██║  ██║   ██║
  ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝""".strip("\n")
 
+# --- themes -------------------------------------------------------------------
+# Three shipped palettes; picked via [theme] name in ~/.relay/config. Every
+# color in the app resolves through the active palette - no stray hex
+# literals - so a theme swap recolors everything, CSS included.
+THEMES = {
+    "phosphor": {"bright": "#3aff7a", "accent": "#2fc866", "dim": "#2a7d4f",
+                 "dimmer": "#1d5c38", "warn": "#ffb000", "danger": "#ff5555",
+                 "cyan": "#41ffd0", "hot": "#6effa0", "ember": "#7a1d1d",
+                 "bg": "#020a04", "bg_alt": "#04120a", "bg_deep": "#010602",
+                 "bg_head": "#061a0e", "bg_cursor": "#0d3a22"},
+    "amber":    {"bright": "#ffb347", "accent": "#e09a2b", "dim": "#8a5a18",
+                 "dimmer": "#5c3d10", "warn": "#ffd700", "danger": "#ff5555",
+                 "cyan": "#ffe8b0", "hot": "#ffd28a", "ember": "#7a1d1d",
+                 "bg": "#0a0602", "bg_alt": "#120a04", "bg_deep": "#060301",
+                 "bg_head": "#1a0f06", "bg_cursor": "#3a2a0d"},
+    "ice":      {"bright": "#7ad7ff", "accent": "#4fb3d9", "dim": "#2a5d7d",
+                 "dimmer": "#1d3f5c", "warn": "#ffb000", "danger": "#ff6a7a",
+                 "cyan": "#b0ffe8", "hot": "#a8e8ff", "ember": "#7a1d2a",
+                 "bg": "#02060a", "bg_alt": "#040a12", "bg_deep": "#010306",
+                 "bg_head": "#06101a", "bg_cursor": "#0d2a3a"},
+}
+
+
+def _active_theme() -> dict:
+    import config as _config
+    name = getattr(_config.load()[0], "theme", "phosphor")
+    return THEMES.get(name, THEMES["phosphor"])
+
+
+TH = _active_theme()
+# Short aliases for the markup call sites.
+BRIGHT, ACCENT, DIM, DIMMER = (TH["bright"], TH["accent"], TH["dim"],
+                               TH["dimmer"])
+WARN, DANGER, CYAN, EMBER = TH["warn"], TH["danger"], TH["cyan"], TH["ember"]
+
+
+def _theme_css(tpl: str) -> str:
+    """Resolve $token color placeholders in the CSS template. Longest token
+    first, so $dim never eats the front of $dimmer (nor $bg of $bg_cursor)."""
+    for k in sorted(TH, key=len, reverse=True):
+        tpl = tpl.replace("$" + k, TH[k])
+    return tpl
+
+
 # Retro-terminal state labels - meaning kept obvious, dressed for the CRT theme.
 STATE_STYLE = {
-    "idle":      ("◌ STANDBY",  "#2a7d4f"),   # dim phosphor
-    "working":   ("▸ ACTIVE",   "#3aff7a"),   # bright phosphor
-    "prompting": ("‼ AWAITING", "#ffb000"),   # amber alert
-    "blocked":   ("⊘ LOCKED",   "#ff5555"),   # red lockdown
-    "cleared":   ("✓ CLEARED",  "#41ffd0"),   # cyan-green ok
+    "idle":      ("◌ STANDBY",  DIM),   # dim phosphor
+    "working":   ("▸ ACTIVE",   BRIGHT),   # bright phosphor
+    "prompting": ("‼ AWAITING", WARN),   # amber alert
+    "blocked":   ("⊘ LOCKED",   DANGER),   # red lockdown
+    "cleared":   ("✓ CLEARED",  CYAN),   # cyan-green ok
 }
 
 # Per-mode arm chrome: glyph + label + color. Glyphs must be SINGLE-WIDTH -
 # emoji (🔥/⚡) render double-width and shift the column out of alignment. These
 # box/geometric symbols are all 1 cell wide.
 MODE_STYLE = {
-    "off":    ("○", "MANUAL",  "#2a7d4f"),
-    "safe":   ("◉", "SAFE",    "#3aff7a"),
-    "wild":   ("▲", "WILD",    "#ffb000"),
-    "insane": ("✦", "INSANE",  "#ff5555"),
+    "off":    ("○", "MANUAL",  DIM),
+    "safe":   ("◉", "SAFE",    BRIGHT),
+    "wild":   ("▲", "WILD",    WARN),
+    "insane": ("✦", "INSANE",  DANGER),
 }
 
 
@@ -65,8 +109,8 @@ MODE_STYLE = {
 # (it is display only). Key glyphs amber, labels green, separators dim - the CRT
 # palette. Built once at import; keys don't change at runtime.
 def _keys(pairs) -> str:
-    return " [#2a7d4f]·[/] ".join(
-        f"[#ffb000 bold]{k}[/] [#3aff7a]{label}[/]" for k, label in pairs)
+    return f" [{DIM}]·[/] ".join(
+        f"[{WARN} bold]{k}[/] [{BRIGHT}]{label}[/]" for k, label in pairs)
 
 
 KEYBAR = (
@@ -154,12 +198,12 @@ def mascot_frame(tick: int, band: str, *, alarmed: bool,
 # Reactor temperature bands -> (label, color, pulsing?).
 def reactor_band(temp: float):
     if temp >= 8.0:
-        return ("☢ CRITICAL", "#ff5555", True)
+        return ("☢ CRITICAL", DANGER, True)
     if temp >= 4.0:
-        return ("⚠ ELEVATED", "#ffb000", False)
+        return ("⚠ ELEVATED", WARN, False)
     if temp >= 1.0:
-        return ("◷ WARM", "#3aff7a", False)
-    return ("STABLE", "#2a7d4f", False)
+        return ("◷ WARM", BRIGHT, False)
+    return ("STABLE", DIM, False)
 
 
 def getting_started_panel(width: int) -> str:
@@ -191,7 +235,7 @@ def getting_started_panel(width: int) -> str:
 def help_text() -> str:
     """The `?` overlay: key map + arm-level cheat sheet. Pure so it's
     testable; markup is static (no dynamic text to escape)."""
-    A, G, D = "#ffb000", "#3aff7a", "#2a7d4f"
+    A, G, D = WARN, BRIGHT, DIM
 
     def row(key, what):
         return f"  [{A}]{key:<9}[/] [{G}]{what}[/]"
@@ -278,41 +322,41 @@ def quit_stakes_text(n_armed: int, n_queued: int, n_doing: int) -> str:
 
 
 class RelayApp(App):
-    CSS = """
+    CSS = _theme_css("""
     /* phosphor-green CRT terminal */
-    Screen { background: #020a04; color: #3aff7a; }
-    #banner { color: #3aff7a; text-style: bold; height: auto; padding: 1 2 0 2; }
-    #subtitle { color: #2a7d4f; height: 1; padding: 0 2; }
+    Screen { background: $bg; color: $bright; }
+    #banner { color: $bright; text-style: bold; height: auto; padding: 1 2 0 2; }
+    #subtitle { color: $dim; height: 1; padding: 0 2; }
     #reactor { height: 1; padding: 0 2; }
     /* Stacked layout: the list on top, the live terminal feed below - both
        full width so the 8-column list and 80-col terminal output each get the
        room they need (side-by-side left the preview too narrow to read). */
     #middle { height: 1fr; }
     DataTable {
-        width: 1fr; height: 2fr; background: #020a04; color: #3aff7a;
-        border-bottom: solid #1d5c38;
+        width: 1fr; height: 2fr; background: $bg; color: $bright;
+        border-bottom: solid $dimmer;
     }
-    DataTable > .datatable--cursor { background: #0d3a22; color: #6effa0; text-style: bold; }
+    DataTable > .datatable--cursor { background: $bg_cursor; color: $hot; text-style: bold; }
     DataTable > .datatable--header {
-        background: #061a0e; color: #ffb000; text-style: bold;
+        background: $bg_head; color: $warn; text-style: bold;
     }
-    DataTable > .datatable--odd-row { background: #04120a; }
-    DataTable > .datatable--even-row { background: #020a04; }
+    DataTable > .datatable--odd-row { background: $bg_alt; }
+    DataTable > .datatable--even-row { background: $bg; }
     #preview {
         width: 1fr; height: 3fr;
-        background: #010602; color: #2fc866;
+        background: $bg_deep; color: $accent;
         padding: 0 1;
     }
     #log {
-        height: 5; border-top: solid #1d5c38;
-        background: #010602; color: #2a7d4f;
+        height: 5; border-top: solid $dimmer;
+        background: $bg_deep; color: $dim;
     }
     #swarmview, #helpview {
         display: none; height: 1fr; padding: 0 2;
-        background: #010602; color: #2fc866;
+        background: $bg_deep; color: $accent;
     }
-    #keybar { height: 2; background: #061a0e; padding: 0 2; }
-    """
+    #keybar { height: 2; background: $bg_head; padding: 0 2; }
+    """)
     BINDINGS = [
         Binding("up,k", "cursor_up", "Up", show=False),
         Binding("down,j", "cursor_down", "Down", show=False),
@@ -444,12 +488,12 @@ class RelayApp(App):
         shown = sorted((i for i in self.watcher.sessions.values() if not i.hidden), key=by_pos)
         hidden = sorted((i for i in self.watcher.sessions.values() if i.hidden), key=by_pos)
 
-        DIM = "#1d5c38"   # dimmed phosphor for hidden rows
+        DIM = DIMMER   # dimmed phosphor for hidden rows
 
         def add(info, dim=False, attention=False):
-            label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", "#3aff7a"))
+            label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", BRIGHT))
             if getattr(info, "stale", False):
-                label, color = "▲ STALE", "#ffb000"
+                label, color = "▲ STALE", WARN
             glyph, mlabel, mcolor = MODE_STYLE.get(info.mode, (" ", "MANUAL", DIM))
             arm = f"{glyph} {mlabel}" if glyph.strip() else f"  {mlabel}"
             # Heartbeat: age since the screen last changed (LOC's find-the-tab
@@ -463,7 +507,7 @@ class RelayApp(App):
             cmd = escape(raw_cmd) if raw_cmd else ""
             title = escape(info.title[:26])
             if info.session_id == self._own_sid:
-                title = f"{title} [#1d5c38](this panel)[/]"
+                title = f"{title} [{DIMMER}](this panel)[/]"
             reg = (self.watcher.registry or {}).get(info.session_id)
             role = {"coordinator": "coord", "worker": "work"}.get(
                 reg["role"], "") if reg else ""
@@ -480,17 +524,17 @@ class RelayApp(App):
             else:
                 arm = f"[{mcolor}]{arm}[/]"
                 label = f"[{color}]{label}[/]"
-                counts = (f"[#41ffd0]{a}[/][{DIM}]/[/][#ff5555]{e}[/]"
+                counts = (f"[{CYAN}]{a}[/][{DIM}]/[/][{DANGER}]{e}[/]"
                           if (a or e) else f"[{DIM}]-[/]")
                 if cmd and info.state == "prompting":
                     # The held command is the one demanding your judgement.
-                    cmd = f"[#ff5555]{cmd}[/]"
+                    cmd = f"[{DANGER}]{cmd}[/]"
                 cmd = cmd or f"[{DIM}]-[/]"
-                role = f"[#41ffd0]{role}[/]" if role else f"[{DIM}]-[/]"
+                role = f"[{CYAN}]{role}[/]" if role else f"[{DIM}]-[/]"
                 task_now = task_now or f"[{DIM}]-[/]"
             if attention:
                 # The duplicate strip row: same data, unmissable name.
-                title = f"[bold #ff5555]‼ {title}[/]"
+                title = f"[bold {DANGER}]‼ {title}[/]"
             table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
@@ -509,15 +553,15 @@ class RelayApp(App):
                      if i.session_id != self._own_sid
                      and needs_action(i.state, getattr(i, "stale", False))]
         if attention:
-            divider(f"── NEEDS ACTION ({len(attention)}) ──", "#ff5555")
+            divider(f"── NEEDS ACTION ({len(attention)}) ──", DANGER)
             for info in attention:
                 add(info, attention=True)
-            divider("── SESSIONS ──", "#2a7d4f")
+            divider("── SESSIONS ──", DIM)
         for info in shown:
             # Own row greyed out: it is display-only by design.
             add(info, dim=info.session_id == self._own_sid)
         if hidden:
-            divider(f"── QUARANTINED ({len(hidden)}) ──", "#1d5c38")
+            divider(f"── QUARANTINED ({len(hidden)}) ──", DIMMER)
             for info in hidden:
                 add(info, dim=True)
 
@@ -544,18 +588,18 @@ class RelayApp(App):
         armed = sum(1 for i in sess if i.active)
         appr = sum(i.n_approved for i in sess)
         esc = sum(i.n_escalated for i in sess)
-        dry = " [bold #ffb000]◆ SIMULATION (dry-run)[/]" if self.dry_run else ""
+        dry = f" [bold {WARN}]◆ SIMULATION (dry-run)[/]" if self.dry_run else ""
         # Onboarding hints, in priority order: nothing to control -> point at
         # the preview panel; sessions present but none armed -> tell them Space.
         n_ctrl = len(self._controllable())
         orphans = getattr(self.watcher, "orphan_count", 0)
         if orphans:
-            hint = (f"  [#ff5555]· {orphans} task-owner(s) dead - press R twice "
+            hint = (f"  [{DANGER}]· {orphans} task-owner(s) dead - press R twice "
                     f"to restore, W twice to wipe[/]")
         elif n_ctrl == 0:
-            hint = "  [#2a7d4f]· open another session to control (see panel ->)[/]"
+            hint = f"  [{DIM}]· open another session to control (see panel ->)[/]"
         elif armed == 0:
-            hint = "  [#ffb000]· nothing armed - SPACE to arm a session, then walk away[/]"
+            hint = f"  [{WARN}]· nothing armed - SPACE to arm a session, then walk away[/]"
         else:
             hint = ""
         # Attention counts: only the parts that are non-zero earn header space.
@@ -574,16 +618,16 @@ class RelayApp(App):
             pass
         attn = ""
         if awaiting:
-            attn += f" [#2a7d4f]·[/] [#ffb000]{awaiting} awaiting[/]"
+            attn += f" [{DIM}]·[/] [{WARN}]{awaiting} awaiting[/]"
         if n_stale:
-            attn += f" [#2a7d4f]·[/] [#ff5555]{n_stale} stale[/]"
+            attn += f" [{DIM}]·[/] [{DANGER}]{n_stale} stale[/]"
         if queued_n:
-            attn += f" [#2a7d4f]·[/] [#41ffd0]{queued_n} msgs queued[/]"
+            attn += f" [{DIM}]·[/] [{CYAN}]{queued_n} msgs queued[/]"
         self.query_one("#subtitle", Static).update(
-            f"[#2a7d4f]RELAY · SESSION CONTROL ·[/] "
-            f"[#3aff7a]{len(sess)} units[/] [#2a7d4f]·[/] "
-            f"[#ffb000]{armed} armed[/] [#2a7d4f]·[/] "
-            f"[#41ffd0]{appr}✓[/] [#ff5555]{esc}⊘[/]{attn}{dry}{hint}")
+            f"[{DIM}]RELAY · SESSION CONTROL ·[/] "
+            f"[{BRIGHT}]{len(sess)} units[/] [{DIM}]·[/] "
+            f"[{WARN}]{armed} armed[/] [{DIM}]·[/] "
+            f"[{CYAN}]{appr}✓[/] [{DANGER}]{esc}⊘[/]{attn}{dry}{hint}")
         self._update_preview()
         if self._swarm_visible:
             self._render_swarm_view()
@@ -610,7 +654,7 @@ class RelayApp(App):
         bar = "▰" * filled + "▱" * (10 - filled)
         # CRITICAL pulses: dim the whole line every other half-second.
         dimmed = pulse and (self._tick % 2 == 0)
-        c = "#7a1d1d" if dimmed else color
+        c = EMBER if dimmed else color
         # Mascot inputs: recent log activity = "working" (~3s afterglow);
         # any non-own session holding a prompt = alarmed.
         total = getattr(self.watcher, "log_total", 0)
@@ -623,7 +667,7 @@ class RelayApp(App):
         face = mascot_frame(
             self._tick, label, alarmed=alarmed,
             working=self._tick < getattr(self, "_mascot_active_until", 0))
-        fc = "#ff5555" if alarmed else color
+        fc = DANGER if alarmed else color
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]"

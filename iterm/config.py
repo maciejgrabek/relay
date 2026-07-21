@@ -30,6 +30,7 @@ from typing import List, Optional, Tuple
 TITLE_STYLES = ("off", "glyphs", "words", "hybrid")
 SPAWN_ARM_MODES = ("off", "safe", "wild", "insane")
 DANGER_PRESETS = ("default", "paranoid")
+THEME_NAMES = ("phosphor", "amber", "ice")
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class Config:
     spawn_arm: str = "off"
     statusbar_enabled: bool = False
     danger_preset: str = "default"
+    theme: str = "phosphor"
 
 
 def default_path() -> str:
@@ -110,6 +112,12 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(DANGER_PRESETS)} - using 'default'")
         preset = "default"
 
+    theme = cp.get("theme", "name", fallback=d.theme).strip().lower()
+    if theme not in THEME_NAMES:
+        warns.append(f"config: [theme] name = {theme!r} is not one of "
+                     f"{'/'.join(THEME_NAMES)} - using 'phosphor'")
+        theme = "phosphor"
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -135,4 +143,5 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         spawn_arm=arm,
         statusbar_enabled=statusbar,
         danger_preset=preset,
+        theme=theme,
     ), warns
