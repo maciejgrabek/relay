@@ -32,11 +32,15 @@ Static to markup=True).
 
 ## Control view
 
-5. NEEDS ACTION section: sessions awaiting a prompt decision, stale, or
-   blocked group under a `NEEDS ACTION` divider at the top of the table;
-   everything else under `OK`. Same mechanics as the existing hidden-section
-   divider: cursor skips dividers, rows keep every interaction (navigate,
-   send keys, arm, hide). No attention rows -> no dividers at all.
+5. NEEDS ACTION strip (revised after first hands-on feedback): sessions
+   awaiting a prompt decision, stale, or blocked appear as DUPLICATE rows in
+   a strip at the top; the main list below keeps its stable tab order ALWAYS
+   (rows moving between sections broke spatial memory - explicitly rejected).
+   The duplicate disappears once actioned; the original row never moves.
+   Arrow keys walk continuously (strip rows, then the whole list; dividers
+   skipped) in both directions; cursor restore prefers the occurrence
+   nearest to where the cursor was. Strip rows keep every interaction.
+   No attention rows -> no dividers at all.
 6. Header attention counts: `· N awaiting · N stale · N msgs queued` appended
    to the existing units/armed/approvals header (each part only when > 0).
 7. Feed context line: first line of the live-feed pane names the selected

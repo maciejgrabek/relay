@@ -28,6 +28,10 @@ import config as relay_config
 import titles
 from gates import classify, Action, Decision, reconstruct_lines, detect_state
 
+# Relay's own tab title, set by design. Without this iTerm2 job-derives the
+# title from relay's `caffeinate` child - accurate, but not what the panel IS.
+OWN_TAB_NAME = "⟿ RELAY CONSOLE"
+
 # The always-on status-bar provider (see statusbar_autolaunch.py). When this
 # symlink exists, the provider serves the badge and relay only publishes state.
 AUTOLAUNCH_PROVIDER = os.path.expanduser(
@@ -151,6 +155,7 @@ class Watcher:
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
         # --- swarm: closed-session marking ---
+        self._own_named = False    # own tab renamed to OWN_TAB_NAME this run
         self._miss = {}            # session name -> consecutive missed ticks
         self.close_misses = 2      # misses before marking closed (debounce)
         self.orphan_count = 0      # closed sessions owning non-done work
@@ -186,6 +191,7 @@ class Watcher:
                     self._roster_ok = False
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
+                await self._name_own_tab()
                 self._check_escalations()
                 self._statusbar_publish()
                 if self._roster_ok:
@@ -231,6 +237,7 @@ class Watcher:
                 # Flip the AutoLaunch badge to RELAY: off immediately on quit
                 # (otherwise it waits out the staleness window).
                 statusbar_mod.clear_state()
+            await self._restore_own_tab()
             await self._restore_titles()
             await self._close_connection()
 
@@ -845,6 +852,32 @@ class Watcher:
                                        role=reg.get("role"))
         except Exception:
             return statusbar_mod.label("off")
+
+    async def _name_own_tab(self) -> None:
+        """Name relay's OWN tab by design (once per run, live only - dry-run
+        mutates nothing). Best-effort: a rename failure must never touch the
+        watcher loop."""
+        if self.dry_run or self._own_named or not self.own_sid:
+            return
+        info = self.sessions.get(self.own_sid)
+        if info is None:
+            return
+        try:
+            await info._iterm_session.async_set_name(OWN_TAB_NAME)
+            self._own_named = True
+        except Exception:
+            pass
+
+    async def _restore_own_tab(self) -> None:
+        """On quit, hand the tab title back to iTerm2's auto-naming (empty
+        name = job-derived), so a closed relay doesn't leave a ghost console
+        label behind. Best-effort, mirror of _name_own_tab."""
+        if not self._own_named:
+            return
+        try:
+            await self.sessions[self.own_sid]._iterm_session.async_set_name("")
+        except Exception:
+            pass
 
     def _statusbar_publish(self) -> None:
         """Feed the AutoLaunch provider: apply any queued badge clicks (same

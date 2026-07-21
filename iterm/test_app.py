@@ -115,13 +115,37 @@ async def go():
         await pilot.pause()
         na._refresh()
         await pilot.pause()
-        chk("attention row first + divider rows unselectable",
+        chk("attention DUPLICATE on top, main list stable and complete",
             na._row_sids[0] is None and na._row_sids[1] == "s1"
-            and na._row_sids[2] is None and na._row_sids[3] == "s0")
+            and na._row_sids[2] is None
+            and na._row_sids[3] == "s0" and na._row_sids[4] == "s1")
         chk("cursor lands on a real row, not a divider",
             na._selected_sid() in ("s0", "s1"))
         sub = str(na.query_one("#subtitle", appmod.Static).render())
         chk("header counts awaiting", "1 awaiting" in sub)
+        # continuous navigation: strip rows first, then the full main list -
+        # down walks dup(s1) -> s0 -> s1, up walks it back, skipping dividers.
+        t = na.query_one(appmod.DataTable)
+        t.move_cursor(row=1)                       # the s1 duplicate on top
+        await pilot.pause()
+        walked = [na._selected_sid()]
+        for _ in range(2):
+            na._move_cursor(+1)
+            walked.append(na._selected_sid())
+        chk("down: strip dup -> main list in order",
+            walked == ["s1", "s0", "s1"])
+        for _ in range(2):
+            na._move_cursor(-1)
+            walked.append(na._selected_sid())
+        chk("up: walks back through the strip",
+            walked[-2:] == ["s0", "s1"])
+
+        # actioned -> the duplicate disappears, the main rows DON'T move
+        na.watcher.sessions["s1"].state = "working"
+        na._refresh()
+        await pilot.pause()
+        chk("attention cleared -> no dividers, same stable order",
+            na._row_sids == ["s0", "s1"])
 
     # --- quit guard: instant when idle, double-press when something's live ---
     import tempfile

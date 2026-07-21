@@ -19,12 +19,13 @@ arm/disarm them with the arrow keys.
   RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
-  MODE      STATUS      ↻    UNIT         ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
+  MODE      STATUS      ↻    UNIT          ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
   ── NEEDS ACTION (1) ──────────────────────────────────────────────────────────
-▸ ✦ INSANE  ‼ AWAITING  4s   api-worker   work   #17 ⊘ by 14  2/1  terraform apply -auto-…
-  ── OK ────────────────────────────────────────────────────────────────────────
-  ◉ SAFE    ▸ ACTIVE    12s  bff-worker   work   #14 doing    5/0  grep -rn "TODO" src/
-  ○ MANUAL  ◌ STANDBY   3m   coord        coord  specs 3/3    -    -
+▸ ✦ INSANE  ‼ AWAITING  4s   ‼ api-worker  work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+  ── SESSIONS ──────────────────────────────────────────────────────────────────
+  ◉ SAFE    ▸ ACTIVE    12s  bff-worker    work   #14 doing    5/0  grep -rn "TODO" src/
+  ✦ INSANE  ‼ AWAITING  4s   api-worker    work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+  ○ MANUAL  ◌ STANDBY   3m   coord         coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
@@ -201,7 +202,9 @@ prompt before you answer it.
 
 The **UNIT** column is each session's name: the iTerm2 tab/session name you've
 set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's
-auto, job-derived name.
+auto, job-derived name. Relay's own tab is named **`⟿ RELAY CONSOLE`** while
+the panel runs (otherwise it would show its `caffeinate` child); the name is
+handed back to iTerm2's auto-naming on quit, and never touched in `--dry-run`.
 
 **Manual send vs arming are different things.** *Arming* (`Space`) lets Relay
 auto-clear *safe* prompts for you. *Manual send* (`Enter` / `1` / `2` / `3`) is
@@ -489,12 +492,16 @@ your call; Relay's job is just telling you in time.
 - the recent-messages feed, **colored by kind** (done green, blocked
   yellow, escalation red, wake dim).
 
-The control view keeps **ROLE** and **TASK NOW** columns, groups sessions
-that need a human under a **NEEDS ACTION** divider at the top (prompting,
-blocked, or stale - rows stay fully interactive there), shows a per-tab
-heartbeat in the `↻` column, and its live-feed pane names WHY the selected
-session is being held (`‼ AWAITING: <command>`). The held command also
-renders red in LAST DIRECTIVE.
+The control view keeps **ROLE** and **TASK NOW** columns and shows sessions
+that need a human (prompting, blocked, or stale) as **duplicate rows in a
+NEEDS ACTION strip** on top - the main list below **never reorders**, so
+your muscle memory holds; the duplicate simply disappears once you act, and
+the original row stays exactly where it was. Arrow keys walk continuously:
+down goes through the strip, then the full list (dividers are skipped), up
+walks it back. Strip rows are fully interactive (navigate, answer, arm).
+The view also shows a per-tab heartbeat in the `↻` column, and the
+live-feed pane names WHY the selected session is being held
+(`‼ AWAITING: <command>`); the held command renders red in LAST DIRECTIVE.
 
 ### relay spawn
 
