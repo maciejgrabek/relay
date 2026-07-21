@@ -64,14 +64,14 @@ def run():
     chk("WARM does not pulse", app.reactor_band(2.0)[2] is False)
 
     # --- mascot: alarmed > critical > working > idle -------------------------
-    S = app.mascot_state
+    MS = app.mascot_state
     chk("alarmed beats everything",
-        S("☢ CRITICAL", alarmed=True, working=True) == "alarmed")
+        MS("☢ CRITICAL", alarmed=True, working=True) == "alarmed")
     chk("critical beats working",
-        S("☢ CRITICAL", alarmed=False, working=True) == "critical")
-    chk("working beats idle", S("◷ WARM", alarmed=False, working=True)
+        MS("☢ CRITICAL", alarmed=False, working=True) == "critical")
+    chk("working beats idle", MS("◷ WARM", alarmed=False, working=True)
         == "working")
-    chk("idle otherwise", S("STABLE", alarmed=False, working=False) == "idle")
+    chk("idle otherwise", MS("STABLE", alarmed=False, working=False) == "idle")
 
     F = app.mascot_face_big
     f_alarm = F(0, "☢ CRITICAL", alarmed=True, working=True)
