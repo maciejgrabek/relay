@@ -102,6 +102,26 @@ async def go():
     chk("needs_action: working idle no", not appmod.needs_action("working", False)
         and not appmod.needs_action("idle", False))
 
+    # the mascot's alarm must agree with the strip: blocked and stale count
+    att = {
+        "p": SessionInfo("p", title="p", window_idx=0, tab_idx=0,
+                         last_screen=["x"]),
+        "b": SessionInfo("b", title="b", window_idx=0, tab_idx=1,
+                         last_screen=["x"]),
+        "st": SessionInfo("st", title="st", window_idx=0, tab_idx=2,
+                          last_screen=["x"]),
+        "ok": SessionInfo("ok", title="ok", window_idx=0, tab_idx=3,
+                          last_screen=["x"]),
+        "OWN": SessionInfo("OWN", title="panel", window_idx=0, tab_idx=4,
+                           last_screen=["x"]),
+    }
+    att["p"].state = "prompting"
+    att["b"].state = "blocked"
+    att["st"].stale = True
+    att["OWN"].state = "prompting"
+    chk("attention_count = prompting + blocked + stale, own excluded",
+        appmod.attention_count(att.values(), "OWN") == 3)
+
     na_sessions = {
         "s0": SessionInfo("s0", title="calm", window_idx=0, tab_idx=0,
                           last_screen=["x"]),
