@@ -95,6 +95,26 @@ def record(verdict: str, session: str, command: str, reason: str,
         return False
 
 
+def read_tail(limit: int = 500) -> list:
+    """The last `limit` audit entries, oldest first - the audit viewer's
+    reader. Garbled lines are skipped, a missing log is just []. Never
+    raises."""
+    try:
+        with open(AUDIT_PATH) as f:
+            lines = f.readlines()[-limit:]
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        if isinstance(d, dict) and "verdict" in d:
+            out.append(d)
+    return out
+
+
 def prune_old(now: Optional[float] = None) -> int:
     """Drop entries older than RETENTION_DAYS. Returns how many were removed.
     Unparseable / non-JSON lines are KEPT (corruption is evidence). Entries
