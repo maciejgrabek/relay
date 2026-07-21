@@ -115,8 +115,9 @@ def reactor_pressure(sessions) -> float:
     engage / sessions go idle, temp falls. Pure function for testing.
 
       + armed tabs running unattended (more for hotter modes)
-      + sessions waiting on the human (unacknowledged escalations)
+      + sessions waiting on the human (held prompts, blocked - unhandled)
       + recent auto-approval activity
+      + stale armed sessions (supposedly working unattended, visibly dead)
     """
     p = 0.0
     for i in sessions:
@@ -126,10 +127,12 @@ def reactor_pressure(sessions) -> float:
             p += 0.6
         elif i.mode == "safe":
             p += 0.3
-        if i.state == "blocked":      # something needs a human, unhandled
-            p += 1.2
+        if i.state in ("blocked", "prompting"):
+            p += 1.2                  # a human is the bottleneck, unhandled
         elif i.state == "working" and i.active:
             p += 0.4
+        if getattr(i, "stale", False):
+            p += 0.6                  # quiet-dead is risk, not calm
     return p
 
 
