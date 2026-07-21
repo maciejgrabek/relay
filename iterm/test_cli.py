@@ -497,6 +497,27 @@ def run():
                                "relay/wt1"], capture_output=True, text=True)
     ok &= check("branch relay/wt1 deleted", "relay/wt1" not in branches.stdout)
 
+    # --- relay demo (guided 60s tour of the whole loop) -----------------------
+    # Hermetic lock: never read the developer's real ~/.relay/relay.lock.
+    os.environ["RELAY_LOCK"] = os.path.join(tempfile.mkdtemp(), "relay.lock")
+    code, out, _ = run_cli("demo", iterm_id="w0t7p0:DEMO-ID")
+    ok &= check("demo registers coordinator + spawns worker", code == 0
+                and db.get_session(conn, "demo-coord") is not None
+                and db.get_session(conn, "demo-w1") is not None
+                and spawn_calls[-1]["name"] == "demo-w1"
+                and spawn_calls[-1]["arm"] == "wild")
+    demo_tasks = db.list_tasks(conn, project="demo")
+    ok &= check("demo assigns the haiku task to the worker",
+                len(demo_tasks) == 1 and demo_tasks[0]["owner"] == "demo-w1"
+                and "haiku" in demo_tasks[0]["title"])
+    ok &= check("demo queues the worker's wake-up",
+                any(m["kind"] == "wake"
+                    for m in db.undelivered(conn, "demo-w1")))
+    ok &= check("demo warns when the panel is not running",
+                "panel is not running" in out)
+    ok &= check("demo prints the cleanup line",
+                "relay wipe --project demo --all --yes" in out)
+
     # --- update --auto (quiet start-up self-update) ---------------------------
     origin = os.path.join(tempfile.mkdtemp(), "origin")
     subprocess.run(["git", "init", "-q", origin], check=True)
