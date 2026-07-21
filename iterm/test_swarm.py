@@ -298,6 +298,76 @@ def run():
     ok &= check("wipe plan keeps dirty worktree",
                 "uncommitted" in wipe_plan_text(wc))
 
+    # --- TUI visuals: ages, fleet line, interactions, bars, markup -----------
+    ok &= check("fmt_age seconds/minutes/hours",
+                (swarm.fmt_age(8), swarm.fmt_age(250), swarm.fmt_age(7300))
+                == ("8s", "4m", "2h"))
+
+    FS = [{"name": "coord", "role": "coordinator", "project": "p",
+           "status_text": "", "mode": "safe"},
+          {"name": "bff", "role": "worker", "project": "p",
+           "status_text": "", "mode": "wild"},
+          {"name": "api", "role": "worker", "project": "p",
+           "status_text": "", "mode": ""},
+          {"name": "etl", "role": "worker", "project": "p",
+           "status_text": "", "mode": ""}]
+    FT = [{"id": 1, "owner": "bff", "state": "doing", "project": "p",
+           "parent_id": None, "title": "x", "blocked_by": ""},
+          {"id": 2, "owner": "api", "state": "blocked", "project": "p",
+           "parent_id": None, "title": "y", "blocked_by": ""}]
+    fl = swarm.fleet_line(FS, FT, stale={"etl"}, queued=3)
+    ok &= check("fleet line counts busy/blocked/idle",
+                "4 units" in fl and "1 busy" in fl and "1 blocked" in fl
+                and "2 idle" in fl)
+    ok &= check("fleet line armed glyph counts", "◉1" in fl and "▲1" in fl)
+    ok &= check("fleet line stale + queued", "1 STALE" in fl
+                and "msgs 3 queued" in fl)
+
+    IM = [{"from_name": "coord", "to_name": "bff", "created_at": 100.0,
+           "kind": "info", "delivered_at": 1},
+          {"from_name": "bff", "to_name": "coord", "created_at": 200.0,
+           "kind": "done", "delivered_at": 1},
+          {"from_name": "coord", "to_name": "api", "created_at": 300.0,
+           "kind": "blocked", "delivered_at": 1},
+          {"from_name": "relay", "to_name": "api", "created_at": 400.0,
+           "kind": "wake", "delivered_at": 1}]
+    rows = swarm.interaction_rows(IM, coordinators={"coord"}, now=400.0)
+    ok &= check("interactions: relay wake-ups excluded, 2 pairs",
+                len(rows) == 2)
+    ok &= check("interactions: coordinator listed first",
+                all(r["a"] == "coord" for r in rows))
+    cb = next(r for r in rows if r["b"] == "bff")
+    ok &= check("interactions: direction counts", cb["sent"] == 1
+                and cb["recv"] == 1)
+    ca = next(r for r in rows if r["b"] == "api")
+    ok &= check("interactions: blocked pair flagged, fresh first",
+                ca["flag"] and rows[0]["b"] == "api")
+    many = [{"from_name": f"w{i}", "to_name": "coord", "created_at": float(i),
+             "kind": "info", "delivered_at": 1} for i in range(9)]
+    ok &= check("interactions capped at 6",
+                len(swarm.interaction_rows(many, now=10.0)) == 6)
+
+    ok &= check("progress bar halves", swarm.progress_bar(4, 8)
+                == "▰▰▰▰▰▱▱▱▱▱")
+    ok &= check("progress bar zero total", swarm.progress_bar(0, 0)
+                == "▱▱▱▱▱▱▱▱▱▱")
+
+    vs = swarm.render_swarm(
+        FS, FT,
+        [{"from_name": "bff", "to_name": "coord", "created_at": 390.0,
+          "kind": "escalation", "delivered_at": None,
+          "body": "[red]hostile[/red] help"}],
+        now=400.0, stale={"etl"}, activity={"bff": 388.0})
+    ok &= check("render: fleet line on top", vs.splitlines()[0]
+                .startswith("FLEET"))
+    ok &= check("render: interactions section", "INTERACTIONS" in vs)
+    ok &= check("render: heartbeat age on roster", "12s" in vs)
+    ok &= check("render: stale roster row marked", "⧗" in vs)
+    ok &= check("render: escalation feed line colored",
+                "[red]" in vs and "escalation" in vs)
+    ok &= check("render: hostile body escaped, not executed as markup",
+                "\\[red]hostile" in vs)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
