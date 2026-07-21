@@ -672,6 +672,8 @@ Environment variables (set before launching `relay`):
 | `RELAY_NO_AUTOUPDATE`        | unset                      | Set to `1` to skip the TUI's start-up self-update |
 | `RELAY_STATUSBAR_STATE`      | `~/.relay/statusbar.json`  | Badge state relay publishes for the AutoLaunch provider |
 | `RELAY_STATUSBAR_CLICKS`     | `~/.relay/statusbar-clicks.jsonl` | Badge-click queue the provider writes, relay consumes |
+| `RELAY_STATUSBAR_ALIVE`      | `~/.relay/statusbar-provider.alive` | Provider heartbeat (relay registers its own badge unless fresh) |
+| `RELAY_DANGER_PRESET`        | from `[danger] preset`     | `default`/`paranoid` - env wins over the config file |
 
 > **Keep `~/.relay/` on a local disk, not a synced folder** (iCloud Drive,
 > Dropbox, a network mount). Relay's SQLite DB uses WAL mode; a background

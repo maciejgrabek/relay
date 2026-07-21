@@ -31,3 +31,24 @@ bar itself - glanceable without the TUI. Notes:
   clobber the user's actual name. Probably: store the bare name, render
   "[MODE][STATE] bare-name", and strip the bracket prefix when reading.
 - Opt-in flag (env var) at first; restore original titles on quit.
+
+## Open follow-ups (2026-07-21 review sweep)
+
+- `wipe --project X --all` does not remove relay-created worktrees (only the
+  per-session wipe path does) - bulk-wiping a worktree-heavy project orphans
+  them on disk.
+- Header `msgs queued` and the quit-guard stakes count across the WHOLE DB,
+  not scoped to live sessions' projects - stale projects can cry wolf.
+- Efficiency pass: `_check_escalations` and `_check_gone` each scan
+  undelivered per tick (fetch once, share); `_statusbar_publish` writes the
+  state file every tick even when unchanged; `_render_swarm_view` queries
+  every 1s while the data changes at 2s; the launcher pays a python startup
+  per launch just to read the update-check stamp.
+- Cleanup pass: `kind_of` vs `_get` duplication in swarm.py; a third
+  mode-glyph table (swarm._MODE_GLYPH vs app.MODE_STYLE vs
+  statusbar.MODE_CIRCLE); progress-bar math in both swarm.py and
+  `_tick_reactor`; `cmd_update`'s repeated `auto` ternaries; own-sid
+  special-casing sprinkled across app.py (consider one filtered view).
+- Adoption ideas parked: Homebrew tap / one-line install; first-run
+  prerequisite diagnosis in the getting-started panel; tmux support (the
+  big strategic fork - decide deliberately).
