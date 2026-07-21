@@ -584,16 +584,29 @@ async def own_tab_name_tests():
         print(("PASS" if cond else "FAIL"), name)
         ok = ok and cond
 
+    class FakeTab:
+        def __init__(self):
+            self.titles = []
+
+        async def async_set_title(self, t):
+            self.titles.append(t)
+
     fs = FakeSession()
+    ft = FakeTab()
     w = Watcher(connection=None, dry_run=False, own_sid="ME")
     w.sessions["ME"] = SessionInfo("ME", title="caffeinate",
                                    _iterm_session=fs)
+    w._own_tab = ft
     await w._name_own_tab()
     chk("own tab named by design", fs.names == [W.OWN_TAB_NAME])
+    chk("TAB BAR title set too (session name alone leaves 'caffeinate')",
+        ft.titles == [W.OWN_TAB_NAME])
     await w._name_own_tab()
-    chk("named only once", fs.names == [W.OWN_TAB_NAME])
+    chk("named only once", fs.names == [W.OWN_TAB_NAME]
+        and ft.titles == [W.OWN_TAB_NAME])
     await w._restore_own_tab()
-    chk("restore clears back to auto-name", fs.names[-1] == "")
+    chk("restore clears back to auto-name", fs.names[-1] == ""
+        and ft.titles[-1] == "")
 
     fd = FakeSession()
     wd = Watcher(connection=None, dry_run=True, own_sid="ME")
