@@ -173,6 +173,14 @@ async def go():
         chk("TAB from help lands in swarm view, help closed",
             not ah._help_visible and ah._swarm_visible)
 
+    # --- themes: complete palettes, resolved CSS ------------------------------
+    keys = set(appmod.THEMES["phosphor"])
+    chk("all themes carry the full palette",
+        all(set(p) == keys for p in appmod.THEMES.values()))
+    chk("CSS fully resolved (no dangling $tokens)",
+        "$" not in appmod.RelayApp.CSS)
+    chk("CSS uses the active theme", appmod.TH["bright"] in appmod.RelayApp.CSS)
+
     # --- audit view (pure formatter + v toggle) -------------------------------
     ents = [{"ts": 1000.0, "verdict": "auto-approved", "session": "t0",
              "command": "grep -rn TODO"},

@@ -134,6 +134,16 @@ def run():
                 cfg.danger_preset == "default"
                 and any("yolo" in w for w in warns))
 
+    # theme: default phosphor; validated; bad value -> warn + phosphor
+    ok &= check("theme default phosphor", cfg.theme == "phosphor")
+    p = _write("[theme]\nname = amber\n")
+    cfg, warns = config.load(p)
+    ok &= check("theme amber read", cfg.theme == "amber" and warns == [])
+    p = _write("[theme]\nname = hotdog\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad theme -> phosphor + warning", cfg.theme == "phosphor"
+                and any("hotdog" in w for w in warns))
+
     # RELAY_CONFIG env selects the path when load() gets None.
     p = _write("[titles]\nstyle = words\n")
     os.environ["RELAY_CONFIG"] = p
