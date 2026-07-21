@@ -410,6 +410,15 @@ def needs_action(state: str, stale: bool) -> bool:
     return bool(stale) or state in ("prompting", "blocked")
 
 
+def attention_count(infos, own_sid) -> int:
+    """How many sessions need a human RIGHT NOW - the single source of truth
+    shared by the NEEDS ACTION strip and the mascot's alarm, so the creature
+    can never say 'all quiet' while the strip shows a row."""
+    return sum(1 for i in infos
+               if i.session_id != own_sid
+               and needs_action(i.state, getattr(i, "stale", False)))
+
+
 def quit_stakes_text(n_armed: int, n_queued: int, n_doing: int) -> str:
     """What quitting would walk away from, as the confirm hint - or '' when
     nothing is at stake and q should quit instantly. Quitting stops
@@ -766,9 +775,8 @@ class RelayApp(App):
         if total != getattr(self, "_mascot_seen_log", -1):
             self._mascot_seen_log = total
             self._mascot_active_until = self._tick + 6
-        awaiting = sum(1 for i in self.watcher.sessions.values()
-                       if i.state == "prompting"
-                       and i.session_id != self._own_sid)
+        awaiting = attention_count(self.watcher.sessions.values(),
+                                   self._own_sid)
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
