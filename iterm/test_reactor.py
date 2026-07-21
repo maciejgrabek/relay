@@ -74,24 +74,52 @@ def run():
     chk("idle otherwise", MS("STABLE", alarmed=False, working=False) == "idle")
 
     F = app.mascot_face_big
-    f_alarm = F(0, "☢ CRITICAL", alarmed=True, working=True)
-    chk("alarmed face has wide eyes + alert",
-        any("⊙" in l for l in f_alarm) and any("‼" in l for l in f_alarm))
-    chk("critical face has x eyes",
-        any("x  x" in l for l in F(0, "☢ CRITICAL", alarmed=False,
-                                   working=False)))
-    chk("working face flickers between ticks",
-        F(0, "◷ WARM", alarmed=False, working=True)
-        != F(1, "◷ WARM", alarmed=False, working=True))
-    chk("idle blinks periodically",
-        F(8, "STABLE", alarmed=False, working=False)
-        != F(1, "STABLE", alarmed=False, working=False))
+    f_alarm = F(0, "☢ CRITICAL", awaiting=2, working=True)
+    chk("alarmed face: wide eyes, beacon, and the COUNT in its bubble",
+        any("⊙" in l for l in f_alarm) and any("‼" in l for l in f_alarm)
+        and any("2 need you" in l for l in f_alarm))
+    chk("alarmed singular grammar",
+        any("1 needs you" in l
+            for l in F(0, "STABLE", awaiting=1)))
+    chk("alarmed shakes on odd ticks",
+        F(1, "STABLE", awaiting=1)[1].startswith(" ╭")
+        and F(0, "STABLE", awaiting=1)[1].startswith("  ╭"))
+    f_crit = F(0, "☢ CRITICAL")
+    chk("critical face: x eyes, static screen, radioactive beacon",
+        any("x  x" in l for l in f_crit) and any("░" in l for l in f_crit)
+        and any("☢" in l for l in f_crit)
+        and any("CRITICAL" in l for l in f_crit))
+    chk("critical static rolls between ticks",
+        F(0, "☢ CRITICAL") != F(1, "☢ CRITICAL"))
+    f_work = F(0, "◷ WARM", working=True)
+    chk("working face: focused eyes, screen dot, spark, verb bubble",
+        any("◕" in l for l in f_work) and any("·" in l for l in f_work)
+        and any("⌁" in l for l in f_work)
+        and any(v in l for l in f_work
+                for v in app.MASCOT_WORKING_PHRASES))
+    chk("working screen dot marches",
+        F(0, "◷ WARM", working=True) != F(1, "◷ WARM", working=True))
+    chk("working verb rotates over time",
+        [v for v in app.MASCOT_WORKING_PHRASES
+         if any(v in l for l in F(16, "◷ WARM", working=True))]
+        != [v for v in app.MASCOT_WORKING_PHRASES
+            if any(v in l for l in F(0, "◷ WARM", working=True))])
+    chk("idle blinks periodically and makes small talk",
+        F(0, "STABLE") != F(1, "STABLE")
+        and any(p in l for l in F(1, "STABLE")
+                for p in app.MASCOT_IDLE_PHRASES))
+    chk("idle small talk rotates",
+        any("watching the fleet" in l for l in F(48, "STABLE")))
     chk("face is banner-height", len(f_alarm) == 6)
 
-    comp = app.banner_with_face(0, "STABLE", alarmed=False, working=False)
-    chk("banner keeps the logo and gains the face",
+    comp = app.banner_with_face(1, "STABLE")
+    chk("banner keeps the logo and gains the colored face",
         "██████╗" in comp and "╭" in comp
+        and app._MASCOT_COLOR["idle"] in comp
         and len(comp.splitlines()) == len(app.BANNER.splitlines()))
+    chk("alarmed banner wears the awaiting amber",
+        app._MASCOT_COLOR["alarmed"]
+        in app.banner_with_face(0, "STABLE", awaiting=1))
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
