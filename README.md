@@ -184,7 +184,7 @@ can't silently auto-approve.)
 | `TAB` | Toggle the **swarm view** (kanban board + message feed) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
-| `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`) |
+| `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
 
 `R` and `W` only act when a worker's tab has closed while it still owned tasks;
 the panel shows a red hint and the count when that happens. The double-press is

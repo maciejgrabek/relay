@@ -169,6 +169,21 @@ def getting_started_panel(width: int) -> str:
         " Keys:  ↑↓ move · SPACE arm · TAB swarm view · q quit\n")
 
 
+def quit_stakes_text(n_armed: int, n_queued: int, n_doing: int) -> str:
+    """What quitting would walk away from, as the confirm hint - or '' when
+    nothing is at stake and q should quit instantly. Quitting stops
+    auto-approval (armed sessions), message delivery (queued), and the stall
+    watchdog (doing tasks); an idle panel loses nothing."""
+    bits = []
+    if n_armed:
+        bits.append(f"{n_armed} armed")
+    if n_queued:
+        bits.append(f"{n_queued} msg(s) queued")
+    if n_doing:
+        bits.append(f"{n_doing} task(s) doing")
+    return ", ".join(bits)
+
+
 class RelayApp(App):
     CSS = """
     /* phosphor-green CRT terminal */
@@ -239,6 +254,7 @@ class RelayApp(App):
         self._swarm_db = None
         self._restore_armed = False
         self._wipe_armed = False
+        self._quit_armed = False
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
@@ -688,7 +704,41 @@ class RelayApp(App):
         except Exception as e:
             self.query_one(Log).write_line(f"{verb} failed: {e}")
 
+    def _quit_stakes(self) -> str:
+        """Counts for quit_stakes_text, best-effort (a DB hiccup must never
+        block quitting - unknown counts as zero, which only makes quitting
+        EASIER, the safe direction for a quit guard)."""
+        n_armed = 0
+        try:
+            if self.watcher:
+                n_armed = sum(1 for i in self.watcher.sessions.values()
+                              if i.active)
+        except Exception:
+            pass
+        n_queued = n_doing = 0
+        try:
+            if self._swarm_db is None:
+                self._swarm_db = swarmdb.connect()
+            n_queued = len(swarmdb.undelivered(self._swarm_db))
+            n_doing = sum(1 for t in swarmdb.list_tasks(self._swarm_db)
+                          if t["state"] == "doing")
+        except Exception:
+            pass
+        return quit_stakes_text(n_armed, n_queued, n_doing)
+
     async def action_quit(self) -> None:
+        # Double-press guard, but ONLY when quitting abandons something live
+        # (same confirm pattern as R/W). An idle panel quits on a single q.
+        stakes = self._quit_stakes()
+        if stakes and not self._quit_armed:
+            self._quit_armed = True
+            self.set_timer(self._CONFIRM_WINDOW,
+                           lambda: setattr(self, "_quit_armed", False))
+            self.query_one(Log).write_line(
+                f"quit ARMED ({stakes}): auto-approval and delivery stop on "
+                f"quit - press q again to confirm "
+                f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
+            return
         # Signal the poll loop (interruptible - wakes immediately), then WAIT
         # for the connection worker to actually finish its teardown (restore
         # every title, close the iTerm2 connection) before we exit(). A blind

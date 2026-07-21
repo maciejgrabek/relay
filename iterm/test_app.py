@@ -95,6 +95,38 @@ async def go():
         await pilot.pause()
         chk("single Enter -> exactly one send", a.watcher.sent == [("s1", "\r")])
 
+    # --- quit guard: instant when idle, double-press when something's live ---
+    import tempfile
+    os.environ["RELAY_DB"] = os.path.join(tempfile.mkdtemp(), "relay.db")
+
+    chk("stakes text empty when idle", appmod.quit_stakes_text(0, 0, 0) == "")
+    chk("stakes text lists counts",
+        appmod.quit_stakes_text(2, 1, 3)
+        == "2 armed, 1 msg(s) queued, 3 task(s) doing")
+
+    def _one():
+        return {"s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                                  last_screen=["x"])}
+
+    aq = _TestApp(_one(), dry_run=True)
+    async with aq.run_test() as pilot:
+        await pilot.pause()
+        aq.watcher.sessions["s0"].mode = "safe"       # something at stake
+        await pilot.press("q")
+        await pilot.pause()
+        chk("q with armed session arms the guard, app stays up",
+            aq._quit_armed and aq.is_running)
+        await pilot.press("q")
+        await pilot.pause()
+    chk("second q quits (run_test context closed)", True)
+
+    ai = _TestApp(_one(), dry_run=True)
+    async with ai.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+    chk("idle q quits instantly (guard never armed)", not ai._quit_armed)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
