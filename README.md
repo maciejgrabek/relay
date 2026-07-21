@@ -202,7 +202,7 @@ prompt before you answer it.
 
 The **UNIT** column is each session's name: the iTerm2 tab/session name you've
 set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's
-auto, job-derived name. Relay's own tab is named **`⟿ RELAY CONSOLE`** and
+auto, job-derived name. Relay's own tab is named **`RELAY CONSOLE`** and
 **colored relay-green** in the tab bar while the panel runs (otherwise it
 would show its `caffeinate` child); name and color are handed back to
 iTerm2's defaults on quit (session-scoped - your profile is never modified),

@@ -30,7 +30,7 @@ from gates import classify, Action, Decision, reconstruct_lines, detect_state
 
 # Relay's own tab title, set by design. Without this iTerm2 job-derives the
 # title from relay's `caffeinate` child - accurate, but not what the panel IS.
-OWN_TAB_NAME = "⟿ RELAY CONSOLE"
+OWN_TAB_NAME = "RELAY CONSOLE"
 
 
 def _own_tab_profile(on: bool):
