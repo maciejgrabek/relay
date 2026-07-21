@@ -147,6 +147,32 @@ async def go():
         chk("attention cleared -> no dividers, same stable order",
             na._row_sids == ["s0", "s1"])
 
+    # --- help overlay ---------------------------------------------------------
+    def _one():
+        return {"s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                                  last_screen=["x"])}
+
+    chk("help text covers keys + arm levels",
+        "ARM LEVELS" in appmod.help_text() and "SPACE" in appmod.help_text())
+    ah = _TestApp(_one(), dry_run=True)
+    async with ah.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        chk("? opens the help overlay",
+            ah._help_visible
+            and str(ah.query_one("#helpview").styles.display) == "block")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        chk("? again closes it", not ah._help_visible
+            and str(ah.query_one("#helpview").styles.display) == "none")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB from help lands in swarm view, help closed",
+            not ah._help_visible and ah._swarm_visible)
+
     # relay's own panel row NEVER goes to NEEDS ACTION (nor the counts)
     os.environ["ITERM_SESSION_ID"] = "w0t9p9:OWN-1"
     own_sessions = {
