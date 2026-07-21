@@ -574,10 +574,45 @@ def closed_tests():
     return ok
 
 
+async def own_tab_name_tests():
+    """Relay names its OWN tab by design (else it shows 'caffeinate')."""
+    from watcher import Watcher, SessionInfo
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    fs = FakeSession()
+    w = Watcher(connection=None, dry_run=False, own_sid="ME")
+    w.sessions["ME"] = SessionInfo("ME", title="caffeinate",
+                                   _iterm_session=fs)
+    await w._name_own_tab()
+    chk("own tab named by design", fs.names == [W.OWN_TAB_NAME])
+    await w._name_own_tab()
+    chk("named only once", fs.names == [W.OWN_TAB_NAME])
+    await w._restore_own_tab()
+    chk("restore clears back to auto-name", fs.names[-1] == "")
+
+    fd = FakeSession()
+    wd = Watcher(connection=None, dry_run=True, own_sid="ME")
+    wd.sessions["ME"] = SessionInfo("ME", title="caffeinate",
+                                    _iterm_session=fd)
+    await wd._name_own_tab()
+    chk("dry-run never names", fd.names == [])
+    await wd._restore_own_tab()
+    chk("dry-run restore is a no-op", fd.names == [])
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
     r3 = asyncio.run(title_tests())
     r4 = arm_request_tests()
     r5 = closed_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5) else 1)
+    r6 = asyncio.run(own_tab_name_tests())
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6) else 1)

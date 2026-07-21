@@ -347,6 +347,7 @@ class RelayApp(App):
             return
         table = self.query_one(DataTable)
         prev_sid = self._selected_sid()   # track by IDENTITY, not row index
+        prev_row = table.cursor_row       # ...nearest occurrence wins (dups)
         table.clear()
         self._row_sids = []           # sid per row; None marks the divider row
         by_pos = lambda i: (i.window_idx, i.tab_idx)
@@ -355,7 +356,7 @@ class RelayApp(App):
 
         DIM = "#1d5c38"   # dimmed phosphor for hidden rows
 
-        def add(info, dim=False):
+        def add(info, dim=False, attention=False):
             label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", "#3aff7a"))
             if getattr(info, "stale", False):
                 label, color = "▲ STALE", "#ffb000"
@@ -397,6 +398,9 @@ class RelayApp(App):
                 cmd = cmd or f"[{DIM}]-[/]"
                 role = f"[#41ffd0]{role}[/]" if role else f"[{DIM}]-[/]"
                 task_now = task_now or f"[{DIM}]-[/]"
+            if attention:
+                # The duplicate strip row: same data, unmissable name.
+                title = f"[bold #ff5555]‼ {title}[/]"
             table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
@@ -405,17 +409,18 @@ class RelayApp(App):
                           "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
 
-        # NEEDS ACTION first (full interactivity, just grouped), then OK.
+        # NEEDS ACTION is a strip of DUPLICATE rows on top - the main list
+        # below keeps its stable tab order ALWAYS. Rows must never teleport
+        # between sections: the duplicate appears/disappears, the original
+        # stays put (moving rows around cost the human their muscle memory).
         attention = [i for i in shown
                      if needs_action(i.state, getattr(i, "stale", False))]
-        calm = [i for i in shown if i not in attention]
         if attention:
             divider(f"── NEEDS ACTION ({len(attention)}) ──", "#ff5555")
             for info in attention:
-                add(info)
-            if calm:
-                divider("── OK ──", "#2a7d4f")
-        for info in calm:
+                add(info, attention=True)
+            divider("── SESSIONS ──", "#2a7d4f")
+        for info in shown:
             add(info)
         if hidden:
             divider(f"── QUARANTINED ({len(hidden)}) ──", "#1d5c38")
@@ -431,9 +436,12 @@ class RelayApp(App):
         for line in new:
             log.write_line(line)
         self._log_shown = total
-        # Restore cursor to the SAME session (by sid), skipping the divider.
+        # Restore cursor to the SAME session (by sid). A session in the
+        # attention strip appears TWICE - keep the occurrence nearest to where
+        # the cursor was, so it doesn't teleport between strip and main list.
         if self._row_sids:
-            target = self._row_sids.index(prev_sid) if prev_sid in self._row_sids else 0
+            occ = [i for i, s in enumerate(self._row_sids) if s == prev_sid]
+            target = min(occ, key=lambda i: abs(i - prev_row)) if occ else 0
             target = self._nearest_selectable(target)
             if target is not None:
                 table.move_cursor(row=target)
