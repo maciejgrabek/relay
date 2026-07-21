@@ -129,7 +129,10 @@ Two limits you must accept:
    `npm run deploy`, or `python3 evil.py` classify SAFE. These "Track 2" gaps are
    tracked as warnings in [`test/danger_test.sh`](test/danger_test.sh) so a
    future change that closes one nags you to promote it. Use manual mode for tabs
-   where that matters.
+   where that matters - or set **`[danger] preset = paranoid`**, which flips
+   `safe` mode to default-deny: only read-only leading commands auto-approve,
+   everything else (including all the leader gaps above) escalates. More
+   pings, much smaller blast radius.
 
 ## Requirements
 
@@ -153,6 +156,13 @@ source ~/.zshrc                     # only if it added the PATH line
 bin/relay --dry-run           # SAFE FIRST RUN: watch + log, never inject
 bin/relay                     # for real
 ```
+
+**See the whole loop in 60 seconds:** with the panel running, open another
+tab and run `relay demo` - it registers that session as a demo coordinator,
+spawns one armed worker in a temp dir, assigns it a haiku task, and tells
+you exactly what to watch (the worker arming itself, the task moving on the
+board, the haiku typed back into your prompt). Clean up with
+`relay wipe --project demo --all --yes`.
 
 > **Relay controls OTHER sessions.** It is a panel for the terminal sessions
 > running *around* it - long jobs, Claude Code sessions - not for itself.
@@ -184,6 +194,8 @@ can't silently auto-approve.)
 | `a` / `d` | Arm all (safe) / disarm all |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |
+| `v` | **Audit view**: the selected session's record of unattended decisions (approvals, escalations, deliveries) in the feed pane; `v` again returns to the live feed |
+| `?` | Help overlay: key map + arm-level cheat sheet |
 | `TAB` | Toggle the **swarm view** (kanban board + message feed) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
@@ -707,6 +719,16 @@ spawn_arm       = off  ; arm level for spawned workers: off | safe | wild | insa
 
 [statusbar]
 enabled = true         ; register a per-tab arm badge in iTerm2's status bar
+
+[danger]
+preset = default       ; default | paranoid. paranoid flips 'safe' mode to
+                       ; DEFAULT-DENY: only read-only leading commands
+                       ; (ls/cat/grep/git log/...) auto-approve - closes the
+                       ; make/npm/python leader gaps at the cost of far more
+                       ; escalations
+
+[theme]
+name = phosphor        ; phosphor | amber | ice - recolors the whole TUI
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
