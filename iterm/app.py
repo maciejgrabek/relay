@@ -551,6 +551,7 @@ class RelayApp(App):
         Binding("n", "focus", "Go to tab"),
         Binding("space", "toggle", "Arm: off/safe/wild/insane"),
         Binding("p", "pause", "Pause/resume acting"),
+        Binding("s", "shadow", "Shadow-arm (dry-run this tab)"),
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
@@ -921,10 +922,13 @@ class RelayApp(App):
         elif info.state == "blocked":
             attn = " ⊘ LOCKED\n"
         why = why_line(info.last_decision, info.last_command, w)
+        shadow = " ◌ SHADOW - previewing, relay is NOT acting on this tab\n" \
+            if info.mode == "shadow" else ""
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{shadow}"
                   f"{why}"
                   f"{attn}"
                   f"╚{bar}╝\n")
@@ -994,6 +998,17 @@ class RelayApp(App):
         if self.watcher:
             self.watcher.toggle_pause()
             self._refresh()
+
+    def action_shadow(self) -> None:
+        sid = self._selected_sid()
+        if not (sid and self.watcher):
+            return
+        if sid == self._own_sid:
+            self.query_one(Log).write_line(
+                "shadow: relay never acts on its own panel tab")
+            return
+        self.watcher.toggle_shadow(sid)
+        self._refresh()
 
     def action_all(self) -> None:
         if self.watcher:
