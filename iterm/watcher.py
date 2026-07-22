@@ -400,6 +400,26 @@ class Watcher:
         elif decision.action == Action.INJECT:
             info.state = "prompting" if not info.active else info.state
 
+        # Shadow: a per-tab dry-run of the SAFE pipeline. Record what relay
+        # WOULD do (would-approve on a safe prompt, would-escalate otherwise)
+        # but never inject and never alarm - nothing real happened, you are
+        # watching. Reuses safe's predicate (INJECT == would-approve).
+        if info.mode == "shadow" and info.session_id != self.own_sid:
+            if decision.prompt_id is not None and \
+                    decision.prompt_id == info._last_prompt_id:
+                return
+            info._last_prompt_id = decision.prompt_id
+            if decision.action == Action.INJECT:
+                info.state = "cleared"
+                audit.record("would-approve", info.title,
+                             decision.command or "",
+                             f"shadow ({decision.reason})")
+            else:
+                info.state = "blocked"
+                audit.record("would-escalate", info.title,
+                             decision.command or "", decision.reason)
+            return
+
         if not info.active:
             return  # unarmed: display only, no alert / no audit / no inject
         if info.session_id == self.own_sid:
@@ -558,7 +578,7 @@ class Watcher:
                 elif (sid in self.sessions and sid not in self._mode_restored):
                     stored = d.get("mode") or ""
                     self._mode_restored.add(sid)
-                    if stored in ("safe", "wild", "insane") and \
+                    if stored in ("safe", "wild", "insane", "shadow") and \
                             self.sessions[sid].mode == "off":
                         self.sessions[sid].mode = stored
                         self.sessions[sid]._last_prompt_id = None
@@ -883,8 +903,9 @@ class Watcher:
             self._note(f"focus failed {info.title}: {e}")
             return False
 
-    _MODE_CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
-    MODES = ("off", "safe", "wild", "insane")
+    _MODE_CYCLE = {"off": "safe", "safe": "wild", "wild": "insane",
+                   "insane": "off", "shadow": "safe"}
+    MODES = ("off", "safe", "wild", "insane", "shadow")
 
     # --- iTerm2 status-bar component (opt-in) ---------------------------------
 
@@ -1039,6 +1060,16 @@ class Watcher:
             info = self.sessions[sid]
             info.mode = self._MODE_CYCLE.get(info.mode, "safe")
             info._last_prompt_id = None   # re-evaluate current prompt under new mode
+            self._persist_mode(sid, info.mode)
+
+    def toggle_shadow(self, sid: str) -> None:
+        """Toggle a tab between shadow (per-tab dry-run) and off. Shadow is a
+        deliberate calibration mode, so it is its own key, not in the Space
+        cycle (Space promotes shadow -> safe)."""
+        if self._armable(sid):
+            info = self.sessions[sid]
+            info.mode = "off" if info.mode == "shadow" else "shadow"
+            info._last_prompt_id = None
             self._persist_mode(sid, info.mode)
 
     def set_mode(self, sid: str, mode: str) -> None:

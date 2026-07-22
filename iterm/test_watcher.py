@@ -920,6 +920,75 @@ async def pause_tests():
     return ok
 
 
+async def shadow_tests():
+    """Shadow tab records what safe WOULD do, never injects, never notifies."""
+    from watcher import Watcher, SessionInfo
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    notify = {"n": 0}
+    rows = []
+    real_notify = W.notify_mac
+    real_record = W.audit.record
+    W.notify_mac = lambda *a, **k: notify.__setitem__("n", notify["n"] + 1)
+    W.audit.record = lambda *a, **k: (rows.append(a), True)[1]
+    try:
+        w = Watcher(connection=None, dry_run=False)
+
+        # Shadow + safe prompt -> would-approve, no inject, no notify.
+        fs = FakeSession()
+        s = SessionInfo("s", title="x", _iterm_session=fs, mode="shadow")
+        w.sessions["s"] = s
+        chk("shadow is not active", s.active is False)
+        sraw, shard = _safe()
+        await w._handle(s, sraw, shard)
+        chk("shadow safe: would-approve recorded",
+            rows and rows[-1][0] == "would-approve")
+        chk("shadow safe: never injected", fs.sent == [])
+        chk("shadow safe: never notified", notify["n"] == 0)
+        chk("shadow safe: shows cleared", s.state == "cleared")
+        # Debounce: same prompt does not re-record.
+        n_before = len(rows)
+        await w._handle(s, sraw, shard)
+        chk("shadow: debounced (no re-record)", len(rows) == n_before)
+
+        # Shadow + dangerous prompt -> would-escalate, still silent.
+        rows.clear()
+        notify["n"] = 0
+        fd = FakeSession()
+        d = SessionInfo("d", title="d", _iterm_session=fd, mode="shadow")
+        w.sessions["d"] = d
+        draw, dhard = _danger()
+        await w._handle(d, draw, dhard)
+        chk("shadow danger: would-escalate recorded",
+            rows and rows[-1][0] == "would-escalate")
+        chk("shadow danger: never notified", notify["n"] == 0)
+        chk("shadow danger: never injected", fd.sent == [])
+
+        # toggle_shadow flips shadow <-> off; Space from shadow -> safe.
+        fz = FakeSession()
+        z = SessionInfo("z", title="z", _iterm_session=fz, mode="off")
+        w.sessions["z"] = z
+        w.toggle_shadow("z")
+        chk("toggle_shadow: off -> shadow", z.mode == "shadow")
+        w.toggle("z")
+        chk("Space from shadow -> safe", z.mode == "safe")
+        w.toggle_shadow("z")
+        chk("toggle_shadow: from any -> shadow", z.mode == "shadow")
+        w.toggle_shadow("z")
+        chk("toggle_shadow: shadow -> off", z.mode == "off")
+    finally:
+        W.notify_mac = real_notify
+        W.audit.record = real_record
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -931,5 +1000,6 @@ if __name__ == "__main__":
     r8 = asyncio.run(statusbar_registration_tests())
     r9 = legible_spine_tests()
     r10 = asyncio.run(pause_tests())
+    r11 = asyncio.run(shadow_tests())
     sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10) else 1)
+                   and r9 and r10 and r11) else 1)
