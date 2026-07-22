@@ -23,7 +23,7 @@ set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
   -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  register|send|status|task|inbox|msgs|spawn|doctor|demo|version|update|clean|restore|wipe)
+  register|send|status|task|inbox|msgs|spawn|doctor|demo|recap|version|update|clean|restore|wipe)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 # TUI start: quiet self-update BEFORE the app boots, so the code that runs is
