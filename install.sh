@@ -146,8 +146,14 @@ else
       mkdir -p "$AL_DST"
       ln -sfn "$AL_SRC" "$AL_DST/relay_statusbar.py"
       echo "  linked $AL_DST/relay_statusbar.py"
-      echo "  start it once: iTerm2 menu Scripts > AutoLaunch >"
-      echo "  relay_statusbar.py (or just restart iTerm2)."
+      echo
+      echo "  Two manual steps remain (iTerm2 gives no API for either):"
+      echo "   1. START the provider: restart iTerm2, or run it once via"
+      echo "      menu Scripts > AutoLaunch > relay_statusbar.py"
+      echo "   2. ADD the badge to your bar: Settings > Profiles >"
+      echo "      <profile> > Session > Configure Status Bar > drag 'Relay'"
+      echo "      in (and tick 'Status bar enabled')."
+      echo "  Check anytime with:  relay doctor"
       ;;
     *)
       echo "Skipped. (Fine if you don't use the status-bar badge.)"

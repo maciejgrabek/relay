@@ -675,6 +675,92 @@ def escalation_ratelimit_tests():
     return ok
 
 
+async def statusbar_registration_tests():
+    """The badge has ONE owner. relay registers in-process ONLY when the
+    AutoLaunch provider is not installed; when the provider symlink exists,
+    relay defers to it (never a second registration -> no DUPLICATE freeze)."""
+    from watcher import Watcher
+    import config as C
+    import statusbar as SB
+    import tempfile
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    # Fake the iTerm2 component so the in-process branch needs no real
+    # connection - we only care WHETHER relay tries to register.
+    registered = {"n": 0}
+
+    class FakeComponent:
+        def __init__(self, **kw):
+            pass
+
+        async def async_register(self, conn, render, onclick=None):
+            registered["n"] += 1
+
+    real_component = W.iterm2.StatusBarComponent
+    real_rpc = W.iterm2.StatusBarRPC
+    W.iterm2.StatusBarComponent = FakeComponent
+    W.iterm2.StatusBarRPC = lambda fn: fn      # identity: no live connection
+
+    tmp = tempfile.mkdtemp()
+    link = os.path.join(tmp, "relay_statusbar.py")
+    alive = os.path.join(tmp, "provider.alive")
+    saved = {k: os.environ.get(k) for k in
+             ("RELAY_STATUSBAR_AUTOLAUNCH", "RELAY_STATUSBAR_ALIVE")}
+    os.environ["RELAY_STATUSBAR_AUTOLAUNCH"] = link
+    os.environ["RELAY_STATUSBAR_ALIVE"] = alive
+    cfg = C.Config(statusbar_enabled=True)
+    try:
+        # (a) provider NOT installed -> relay renders in-process.
+        w = Watcher(connection=None, dry_run=False, cfg=cfg)
+        registered["n"] = 0
+        await w._register_statusbar()
+        chk("no provider -> relay registers in-process", registered["n"] == 1)
+
+        # (b) provider installed, not running -> relay must NOT register.
+        open(link, "w").close()
+        w2 = Watcher(connection=None, dry_run=False, cfg=cfg)
+        registered["n"] = 0
+        await w2._register_statusbar()
+        chk("provider installed -> relay does NOT register (no collision)",
+            registered["n"] == 0)
+        chk("provider installed but idle -> actionable note",
+            any("not running" in l for l in w2.log))
+
+        # (c) provider installed AND alive -> defer, say so.
+        SB.touch_provider_alive(path=alive)
+        w3 = Watcher(connection=None, dry_run=False, cfg=cfg)
+        registered["n"] = 0
+        await w3._register_statusbar()
+        chk("provider alive -> relay does NOT register", registered["n"] == 0)
+        chk("provider alive -> served-by note",
+            any("served by AutoLaunch" in l for l in w3.log))
+
+        # (d) statusbar disabled -> inert (no registration, no note).
+        w4 = Watcher(connection=None, dry_run=False,
+                     cfg=C.Config(statusbar_enabled=False))
+        registered["n"] = 0
+        await w4._register_statusbar()
+        chk("statusbar disabled -> nothing",
+            registered["n"] == 0 and not w4.log)
+    finally:
+        W.iterm2.StatusBarComponent = real_component
+        W.iterm2.StatusBarRPC = real_rpc
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -683,4 +769,6 @@ if __name__ == "__main__":
     r5 = closed_tests()
     r6 = asyncio.run(own_tab_name_tests())
     r7 = escalation_ratelimit_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7) else 1)
+    r8 = asyncio.run(statusbar_registration_tests())
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8)
+             else 1)

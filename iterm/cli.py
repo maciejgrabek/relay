@@ -454,7 +454,42 @@ def cmd_doctor(args) -> int:
               f"- 'relay restore' to revive, 'relay clean' to reset")
         for s in orphans:
             print(f"    {s['name']} (workdir: {s['workdir'] or 'unknown'})")
+
+    _doctor_statusbar(cfg)
     return 0
+
+
+def _doctor_statusbar(cfg) -> None:
+    """Report the three independent steps the status-bar badge needs, so a
+    fresh laptop can see exactly which one is missing. iTerm2's Python API
+    cannot add the component to the bar for you (step 3 is a manual drag), and
+    the badge silently no-ops if any step is skipped - hence this checklist."""
+    import statusbar as sb
+    enabled = getattr(cfg, "statusbar_enabled", False)
+    print("  statusbar:")
+    if not enabled:
+        print("    disabled in config. To use the badge, set [statusbar] "
+              "enabled = true in ~/.relay/config")
+        return
+    installed = sb.provider_installed()
+    running = sb.provider_alive()
+    ok = "\033[32m✓\033[0m"
+    no = "\033[31m✗\033[0m"
+    print(f"    {ok if enabled else no} enabled in config")
+    print(f"    {ok if installed else no} AutoLaunch provider installed "
+          f"({sb.autolaunch_link_path()})")
+    if not installed:
+        print("        -> run ./install.sh (answer yes to the iTerm2 provider "
+              "step); without it the badge slot ERRORS while relay is off")
+    print(f"    {ok if running else no} provider running")
+    if installed and not running:
+        print("        -> start it: iTerm2 menu Scripts > AutoLaunch > "
+              "relay_statusbar.py, or just restart iTerm2")
+    # Step 3 can't be detected via the API - always remind.
+    print("    ? component in your bar (can't be auto-detected): iTerm2 "
+          "Settings > Profiles > <profile> > Session >")
+    print("        Configure Status Bar > drag 'Relay' into the bar (also "
+          "tick 'Status bar enabled')")
 
 
 def _run_git(cwd: str, *a, timeout=8):
