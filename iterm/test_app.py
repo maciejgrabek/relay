@@ -6,9 +6,19 @@ Uses Textual's headless run_test() with a stub watcher (no iTerm2 needed).
 import asyncio
 import os
 import sys
+import tempfile
+
+# Must be set before any cfgmod.save()/load() call the config-editor pilot
+# test below triggers - otherwise it writes straight to the developer's real
+# ~/.relay/config (see test_watcher.py, which guards RELAY_CONFIG the same
+# way, though only for load()). A real (writable, throwaway) path here so
+# auto-save is actually exercised, not just swallowed by a failed mkdir.
+os.environ["RELAY_CONFIG"] = os.path.join(
+    tempfile.mkdtemp(prefix="relay-test-config-"), "config")
 
 sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
+import config as cfgmod  # noqa: E402
 from watcher import SessionInfo  # noqa: E402
 
 
@@ -19,6 +29,13 @@ class StubWatcher:
         self.log_total = 0
         self.sent = []
         self.registry = {}
+        # config editor: a real Config plus the four live-editable sound
+        # attributes, mirroring the real Watcher's shape.
+        self.cfg = cfgmod.Config()
+        self.alert_sound = self.cfg.alert_sound
+        self.done_sound = self.cfg.done_sound
+        self.danger_sound = self.cfg.danger_sound
+        self.message_sound = self.cfg.message_sound
 
     _CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
 
@@ -51,6 +68,8 @@ class _TestApp(appmod.RelayApp):
 
     async def _connect(self):
         self.watcher = StubWatcher(self._stub)
+        self._running_cfg = self.watcher.cfg
+        self._working_cfg = self.watcher.cfg
 
 
 async def go():
@@ -279,6 +298,30 @@ async def go():
         await pilot.press("escape")
         await pilot.pause()
         chk("ESC also leaves the swarm view", not aa._swarm_visible)
+
+    # --- config editor overlay -------------------------------------------
+    ce = _TestApp(_one(), dry_run=True)
+    async with ce.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("comma")
+        await pilot.pause()
+        chk("comma opens settings",
+            ce._settings_visible
+            and str(ce.query_one("#settingsview").styles.display) == "block")
+        # move to the first sound row (cursor starts at 0 = alert_sound), change
+        before = ce.watcher.alert_sound
+        await pilot.press("right")
+        await pilot.pause()
+        chk("right on a sound row changes the live watcher sound",
+            ce.watcher.alert_sound != before)
+        chk("the change was auto-saved to disk",
+            cfgmod.load()[0].alert_sound == ce.watcher.alert_sound)
+        await pilot.press("comma")
+        await pilot.pause()
+        chk("comma closes settings", not ce._settings_visible)
+    chk("KEYBAR advertises settings", "," in appmod.KEYBAR
+        and "settings" in appmod.KEYBAR.lower())
+    chk("help covers settings", "settings" in appmod.help_text().lower())
 
     # relay's own panel row NEVER goes to NEEDS ACTION (nor the counts)
     os.environ["ITERM_SESSION_ID"] = "w0t9p9:OWN-1"
