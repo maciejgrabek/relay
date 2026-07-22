@@ -102,6 +102,18 @@ async def go():
     chk("needs_action: working idle no", not appmod.needs_action("working", False)
         and not appmod.needs_action("idle", False))
 
+    # --- why_line: the live-feed's inline decision reason ---------------------
+    chk("why_line shows reason + command",
+        appmod.why_line("safe permission prompt", "grep foo", 80)
+        == " WHY: safe permission prompt: grep foo\n")
+    chk("why_line empty when no decision",
+        appmod.why_line("", "grep foo", 80) == "")
+    chk("why_line reason only when no command",
+        appmod.why_line("dangerous command", "", 80)
+        == " WHY: dangerous command\n")
+    chk("why_line clamps to width",
+        len(appmod.why_line("x" * 200, "y" * 200, 40)) <= 40)
+
     # the mascot's alarm must agree with the strip: blocked and stale count
     att = {
         "p": SessionInfo("p", title="p", window_idx=0, tab_idx=0,
