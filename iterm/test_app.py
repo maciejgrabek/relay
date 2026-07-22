@@ -332,6 +332,13 @@ async def go():
     chk("face is always 6 lines",
         len(mascot_face_big(0, "ok", armed=3, reaction="done")) == 6)
 
+    # Screen interior must be exactly 6 chars (eyes/mid/mouth) or the CRT
+    # frame's box-drawing edges silently misalign.
+    for r in ("done", "danger", None):
+        f = mascot_face_big(0, "ok", armed=3, approvals=5, reaction=r)
+        chk(f"frame {r}: 6-char screen interior (rows aligned)",
+            all(f[i][11] == "│" for i in (2, 3, 4)))
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
