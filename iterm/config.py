@@ -152,3 +152,40 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         danger_preset=preset,
         theme=theme,
     ), warns
+
+
+def dump(cfg: Config) -> str:
+    """Render a complete ~/.relay/config from a Config. Round-trips: load() of
+    this text yields an equal Config for every field the editor manages."""
+    return (
+        "; Written by relay's config editor. Edit here or in the panel (,).\n\n"
+        "[titles]\n"
+        f"style = {cfg.title_style}\n\n"
+        "[sounds]\n"
+        f"alert   = {cfg.alert_sound}\n"
+        f"done    = {cfg.done_sound}\n"
+        f"danger  = {cfg.danger_sound}\n"
+        f"message = {cfg.message_sound}\n\n"
+        "[swarm]\n"
+        f"stale_minutes   = {cfg.stale_minutes:g}\n"
+        f"notify_cooldown = {cfg.notify_cooldown:g}\n"
+        f"spawn_arm       = {cfg.spawn_arm}\n\n"
+        "[statusbar]\n"
+        f"enabled = {'true' if cfg.statusbar_enabled else 'false'}\n\n"
+        "[danger]\n"
+        f"preset = {cfg.danger_preset}\n\n"
+        "[theme]\n"
+        f"name = {cfg.theme}\n"
+    )
+
+
+def save(cfg: Config, path: Optional[str] = None) -> None:
+    """Atomically write dump(cfg) to path (default default_path())."""
+    p = path or default_path()
+    d = os.path.dirname(p)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(dump(cfg))
+    os.replace(tmp, p)
