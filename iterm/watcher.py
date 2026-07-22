@@ -186,6 +186,7 @@ class Watcher:
         self._arm_seen: dict = {}          # sid -> time first seen registered
         self.arm_grace = 20.0              # spawn pre-arm window (s), > boot delay
         self._mode_restored: set = set()   # sids whose persisted mode was restored
+        self.paused = False                # frozen hands (approvals+deliveries)
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
@@ -445,6 +446,13 @@ class Watcher:
             return
 
         # --- approve path ---
+        # Paused: relay's hands are frozen - do not inject or audit an approval
+        # (nothing happened). The NOTIFY branch above already ran, so danger is
+        # never silenced by a pause; the PAUSED banner explains the stillness.
+        if self.paused:
+            info.state = "prompting"
+            return
+
         # Churn vs distinct-prompts is handled by the prompt_id debounce above
         # (line ~233): prompt_id is now STABLE across a single prompt's redraws
         # (it normalizes the option text) and DIFFERENT for a genuinely new
@@ -612,6 +620,8 @@ class Watcher:
         approvals. One per tick keeps the injected turns observable."""
         if info.session_id == self.own_sid:
             return  # never type a swarm message into relay's own panel tab
+        if self.paused:
+            return  # hands frozen: the message stays queued, retries on resume
         reg = self.registry.get(info.session_id)
         if not reg:
             return
@@ -1057,6 +1067,17 @@ class Watcher:
             self._mode_restored.add(sid)
         except Exception as e:
             self._note(f"swarm db error: {e}")
+
+    def toggle_pause(self) -> bool:
+        """Freeze/unfreeze relay's HANDS (auto-approvals + swarm deliveries)
+        while its eyes stay open (still watches + warns). Holds until toggled
+        again - never auto-resumes. Records the transition. Returns new state."""
+        self.paused = not self.paused
+        audit.record("paused" if self.paused else "resumed", "relay", "", "")
+        self._note("PAUSED - relay is NOT acting (approvals + deliveries frozen)"
+                   if self.paused
+                   else "resumed - relay is acting again")
+        return self.paused
 
     def toggle_hidden(self, sid: str) -> None:
         if sid in self.sessions:

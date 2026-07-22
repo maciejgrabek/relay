@@ -857,6 +857,69 @@ def legible_spine_tests():
     return ok
 
 
+async def pause_tests():
+    """Paused relay freezes the hands (no inject, no delivery) but keeps the
+    eyes (still classifies + notifies danger). Resume restores acting."""
+    from watcher import Watcher, SessionInfo
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    notify = {"n": 0}
+    rows = []
+    real_notify = W.notify_mac
+    real_record = W.audit.record
+    W.notify_mac = lambda *a, **k: notify.__setitem__("n", notify["n"] + 1)
+    W.audit.record = lambda *a, **k: (rows.append(a), True)[1]
+    try:
+        w = Watcher(connection=None, dry_run=False)
+
+        # PAUSED: an armed-safe tab with a safe prompt is NOT injected.
+        w.paused = True
+        fs = FakeSession()
+        s = SessionInfo("s", title="x", _iterm_session=fs, mode="safe")
+        w.sessions["s"] = s
+        sraw, shard = _safe()
+        await w._handle(s, sraw, shard)
+        chk("paused: safe prompt not injected", fs.sent == [])
+        chk("paused: not counted approved", s.n_approved == 0)
+
+        # PAUSED: a dangerous prompt STILL notifies (eyes stay open).
+        notify["n"] = 0
+        fd = FakeSession()
+        d = SessionInfo("d", title="d", _iterm_session=fd, mode="safe")
+        w.sessions["d"] = d
+        draw, dhard = _danger()
+        await w._handle(d, draw, dhard)
+        chk("paused: danger still notifies", notify["n"] == 1)
+        chk("paused: danger never injects", fd.sent == [])
+
+        # RESUME: the same safe prompt now injects.
+        w.paused = False
+        fs2 = FakeSession()
+        s2 = SessionInfo("s2", title="x2", _iterm_session=fs2, mode="safe")
+        w.sessions["s2"] = s2
+        await w._handle(s2, sraw, shard)
+        chk("resumed: safe prompt injected", fs2.sent == ["\r"])
+
+        # toggle_pause flips state and records the transition.
+        rows.clear()
+        was = w.toggle_pause()
+        chk("toggle_pause returns new state (paused)", was is True and w.paused)
+        chk("pause audited", rows and rows[-1][0] == "paused")
+        w.toggle_pause()
+        chk("resume audited", rows[-1][0] == "resumed" and not w.paused)
+    finally:
+        W.notify_mac = real_notify
+        W.audit.record = real_record
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -867,5 +930,6 @@ if __name__ == "__main__":
     r7 = escalation_ratelimit_tests()
     r8 = asyncio.run(statusbar_registration_tests())
     r9 = legible_spine_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8 and r9)
-             else 1)
+    r10 = asyncio.run(pause_tests())
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
+                   and r9 and r10) else 1)
