@@ -29,8 +29,13 @@ def run():
     ok &= check("unknown mode falls back to off circle",
                 label("bogus").startswith(MODE_CIRCLE["off"]))
 
-    # the four circles are distinct (so color-by-mode is real)
-    ok &= check("four distinct circles", len(set(MODE_CIRCLE.values())) == 4)
+    # the five circles are distinct (so color-by-mode is real)
+    ok &= check("five distinct circles", len(set(MODE_CIRCLE.values())) == 5)
+
+    ok &= check("shadow badge uses its own circle",
+                statusbar.MODE_CIRCLE.get("shadow") == "\U0001f535"
+                and statusbar.label("shadow")
+                == f"{statusbar.MODE_CIRCLE['shadow']} RELAY:shadow")
 
     # own panel tab: neutral, non-mode badge
     ok &= check("own panel badge", label("safe", own_panel=True) == "⬛ RELAY: panel")

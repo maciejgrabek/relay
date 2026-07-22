@@ -6,6 +6,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
+import titles  # noqa: E402
 from titles import render, strip_prefix  # noqa: E402
 
 
@@ -65,6 +66,13 @@ def run():
     ok &= check("user '? help' title preserved", strip_prefix("? help") == "? help")
     ok &= check("stale glyph round-trip",
                 strip_prefix(render("glyphs", "off", "idle", True, "api")) == "api")
+
+    # --- shadow mode ------------------------------------------------------
+    ok &= check("shadow renders its glyph prefix",
+                titles.MODE_GLYPH.get("shadow") == "◌"
+                and "◌" in titles.render("glyphs", "shadow", "idle", False, "api"))
+    ok &= check("shadow prefix is strippable (crash-safety)",
+                titles.strip_prefix("◌ api") == "api")
 
     # --- round-trip property over the full input space ------------------------
     rt = True

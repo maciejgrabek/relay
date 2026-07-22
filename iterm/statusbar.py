@@ -26,6 +26,7 @@ MODE_CIRCLE = {
     "safe":   "\U0001f7e2",   # green circle
     "wild":   "\U0001f7e1",   # yellow circle
     "insane": "\U0001f534",   # red circle
+    "shadow": "\U0001f535",   # blue circle - observing, not acting
 }
 
 _ROLE_SHORT = {"coordinator": "coord", "worker": "work"}
