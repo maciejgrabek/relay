@@ -154,6 +154,11 @@ else
       echo "      <profile> > Session > Configure Status Bar > drag 'Relay'"
       echo "      in (and tick 'Status bar enabled'). 'Relay' only appears"
       echo "      in that list once step 1's provider is running."
+      if [ "$(uname -m)" = "arm64" ]; then
+        echo "   NOTE (Apple Silicon): iTerm2's Python runtime is x86_64, so"
+        echo "        the provider needs Rosetta 2 or it will not start:"
+        echo "        softwareupdate --install-rosetta --agree-to-license"
+      fi
       echo "  Check anytime with:  relay doctor"
       ;;
     *)
