@@ -92,6 +92,19 @@ you - NO mode auto-answers your decisions.**
 Use `safe` where a wrong Enter would hurt; `wild`/`insane` in scratch/throwaway
 workspaces where you just want the friction gone.
 
+### Pause and shadow (reversible controls)
+
+- **Pause (`p`)** freezes relay's *hands* - it stops auto-approving and stops
+  delivering swarm messages - while keeping its *eyes*: it still watches, shows
+  live state, and pings you on danger. It holds until you press `p` again (no
+  auto-resume), and the panel shows a loud `PAUSED` banner plus a frozen mascot
+  so you can never mistake a paused relay for an armed one.
+- **Shadow-arm (`s`)** is a per-tab dry-run: relay classifies the tab's prompts
+  with the *safe* rules and records what it *would* do (`WOULD CLEAR` /
+  `WOULD ESCALATE`) without ever acting - so you can trust-test one new tab
+  while your other armed tabs keep running. A shadow tab shows a hollow `◌`
+  badge (blue circle in the status bar).
+
 ### The two gates (safe mode)
 
 For each session armed **safe**, on every screen update:
@@ -192,6 +205,9 @@ can't silently auto-approve.)
 | `1` `2` `3` | **Send that digit** to the selected session |
 | `Space` | Cycle arm: off -> `◉` safe -> `▲` wild -> `✦` insane -> off |
 | `a` / `d` | Arm all (safe) / disarm all |
+| `s` | **Shadow-arm** the selected tab: dry-run only, never acts (see below) |
+| `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
+| `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |
 | `v` | **Audit view**: the selected session's record of unattended decisions (approvals, escalations, deliveries) in the feed pane; `v` again returns to the live feed |
@@ -350,6 +366,21 @@ relay doctor
 `relay doctor` reads the database only - it never changes anything - and
 flags the two things that silently trap people: messages piling up
 undelivered (the panel is not running) and tasks stuck in `doing`.
+
+### See what relay did
+
+```bash
+relay recap
+# relay recap (today)
+#   cleared 12 · woke you 1x · delivered 3
+#   tasks: 4 done · 1 doing · 0 blocked · 2 todo
+```
+
+`relay recap` prints a one-line summary of today's activity (commands
+cleared, how many times it woke you, tasks done); `relay recap --all` covers
+all time instead of just today. It only reads the audit log and task board -
+same read-only contract as `relay doctor`. The panel also prints this line
+for you automatically when you quit.
 
 ### Update to the latest version
 
@@ -738,6 +769,26 @@ Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
 `RELAY_NO_REACTOR`, `--dry-run`), the spawn boot delay, `lib/danger.sh`'s
 rules (own home), and the title glyph/word vocabulary (it doubles as the
 strip-parser - a configurable vocabulary would double the bug surface).
+
+### Sounds and the settings editor
+
+Relay uses four distinct sounds so your ear can triage without looking, all set
+in `[sounds]` (any can be set empty to silence it):
+
+| Key | Fires on | Default |
+| --- | -------- | ------- |
+| `danger` | a session about to run a dangerous command | Basso |
+| `alert` | needs a look (real question, stale session, error) | Sosumi |
+| `message` | a swarm worker messaged / escalated to you | Tink |
+| `done` | a task or epic completed | Glass |
+
+Press **`,`** in the panel to open the **settings editor**: `↑`/`↓` move
+between settings, `←`/`→` change the highlighted one, `p` auditions the
+highlighted sound, and every change is saved to `~/.relay/config` as you go -
+no separate save step. Sound changes apply immediately; the rest take effect
+on the next relay start (the editor tags those fields "restart to apply"). On
+Apple Silicon the status-bar badge also needs Rosetta 2 - `relay doctor`
+checks it.
 
 ### Tab-title prefixes
 
