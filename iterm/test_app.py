@@ -339,6 +339,23 @@ async def go():
         chk(f"frame {r}: 6-char screen interior (rows aligned)",
             all(f[i][11] == "│" for i in (2, 3, 4)))
 
+    # --- global pause: outranks everything, even a danger reaction ------------
+    from app import effective_mascot_state as ems
+    chk("paused outranks alarmed",
+        ems("ok", awaiting=3, working=False, armed=2, paused=True) == "paused")
+    chk("paused outranks a danger reaction",
+        ems("ok", awaiting=0, working=False, armed=1,
+            reaction="danger", paused=True) == "paused")
+    chk("not paused -> normal ladder",
+        ems("ok", awaiting=0, working=False, armed=2, paused=False) == "guarding")
+    from app import mascot_face_big as mfb
+    chk("paused frame shows a paused cue",
+        any("paused" in line for line in mfb(0, "ok", armed=2, paused=True)))
+    chk("paused frame is 6 lines and aligned",
+        len(mfb(0, "ok", armed=2, paused=True)) == 6
+        and all(mfb(0, "ok", armed=2, paused=True)[i][11] == "│"
+                for i in (2, 3, 4)))
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

@@ -197,11 +197,13 @@ def mascot_state(band: str, *, alarmed: bool, working: bool,
     return "guarding" if armed else "idle"
 
 
-def effective_mascot_state(band, *, awaiting, working, armed, reaction=None):
-    """The state that drives the frame + color, folding in a momentary reaction.
-    A 'danger' reaction is its own flinch (it IS the alarm). A 'done' reaction
-    celebrates - unless a human is already needed (alarmed) or the core is
-    critical, which outrank a celebration. No reaction -> the base ladder."""
+def effective_mascot_state(band, *, awaiting, working, armed, reaction=None,
+                           paused=False):
+    """The state that drives the frame + color, folding in pause and a
+    momentary reaction. Pause outranks EVERYTHING - a frozen relay is the one
+    fact you must not miss. Then danger flinch, then the base ladder / done."""
+    if paused:
+        return "paused"
     if reaction == "danger":
         return "flinch"
     base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed)
@@ -249,18 +251,22 @@ def _speech_bubble(text: str) -> list:
 
 def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
                     working: bool = False, armed: int = 0,
-                    approvals: int = 0, reaction=None) -> list:
+                    approvals: int = 0, reaction=None,
+                    paused: bool = False) -> list:
     """The banner creature: a tiny CRT monitor (antenna, screen, feet) that
     watches the fleet from beside the RELAY logo, keyed to the 0.5s reactor
     tick. Its speech bubble says the one thing that matters right now; its
     motion budget is spent by meaning - idle barely moves, only ALARMED
     shakes. Returns equal-height lines (ragged right edges are fine)."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction)
+                                   armed=armed, reaction=reaction, paused=paused)
     beacon, mid = " ", "      "
     say = MASCOT_OFF_PHRASES[tick // 48 % len(MASCOT_OFF_PHRASES)]
     shake = False
-    if state == "celebrate":
+    if state == "paused":
+        eyes, mid, mouth, beacon = " ▪  ▪ ", "      ", "  ══  ", "⏸"
+        say = "paused"
+    elif state == "celebrate":
         eyes, mid, mouth, beacon = " ^  ^ ", "   ✓  ", "  ◡   ", "★"
         say = "task done ★"
     elif state == "flinch":
@@ -327,21 +333,23 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
 # CRITICAL, like the reactor).
 _MASCOT_COLOR = {"alarmed": WARN, "critical": DANGER,
                  "working": BRIGHT, "guarding": ACCENT, "idle": DIM,
-                 "celebrate": BRIGHT, "flinch": WARN}
+                 "celebrate": BRIGHT, "flinch": WARN, "paused": CYAN}
 
 
 def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
                      working: bool = False, armed: int = 0,
-                     approvals: int = 0, reaction=None) -> str:
+                     approvals: int = 0, reaction=None,
+                     paused: bool = False) -> str:
     """The RELAY block logo (theme-colored by CSS) with the creature on its
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction)
+                                   armed=armed, reaction=reaction, paused=paused)
     color = _MASCOT_COLOR[state]
     logo = BANNER.split("\n")
     face = mascot_face_big(tick, band, awaiting=awaiting, working=working,
-                           armed=armed, approvals=approvals, reaction=reaction)
+                           armed=armed, approvals=approvals, reaction=reaction,
+                           paused=paused)
     h = max(len(logo), len(face))
     logo = logo + [""] * (h - len(logo))
     face = face + [""] * (h - len(face))
@@ -542,6 +550,7 @@ class RelayApp(App):
         Binding("3", "send('3')", "Send 3"),
         Binding("n", "focus", "Go to tab"),
         Binding("space", "toggle", "Arm: off/safe/wild/insane"),
+        Binding("p", "pause", "Pause/resume acting"),
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
@@ -798,7 +807,10 @@ class RelayApp(App):
             attn += f" [{DIM}]·[/] [{DANGER}]{n_stale} stale[/]"
         if queued_n:
             attn += f" [{DIM}]·[/] [{CYAN}]{queued_n} msgs queued[/]"
+        pause_tag = (f"[bold {WARN}]⏸ PAUSED - NOT acting[/] [{DIM}]·[/] "
+                     if getattr(self.watcher, "paused", False) else "")
         self.query_one("#subtitle", Static).update(
+            pause_tag +
             f"[{DIM}]RELAY · SESSION CONTROL ·[/] "
             f"[{BRIGHT}]{len(sess)} units[/] [{DIM}]·[/] "
             f"[{WARN}]{armed} armed[/] [{DIM}]·[/] "
@@ -853,7 +865,8 @@ class RelayApp(App):
                 working=self._tick < getattr(self, "_mascot_active_until", 0),
                 armed=sum(1 for i in self.watcher.sessions.values()
                           if i.active and i.session_id != self._own_sid),
-                approvals=approvals, reaction=reaction))
+                approvals=approvals, reaction=reaction,
+                paused=getattr(self.watcher, "paused", False)))
         except Exception:
             pass
 
@@ -976,6 +989,11 @@ class RelayApp(App):
             return
         self.watcher.toggle(sid)
         self._refresh()
+
+    def action_pause(self) -> None:
+        if self.watcher:
+            self.watcher.toggle_pause()
+            self._refresh()
 
     def action_all(self) -> None:
         if self.watcher:
