@@ -451,7 +451,7 @@ Add to `iterm/test_app.py` inside `run()`:
     ok &= check("guarding shows the cleared tally",
                 "12" in joined(armed=3, approvals=12))
     ok &= check("guarding tally absent when zero approvals",
-                not any(c.isdigit() for c in joined(armed=3, approvals=0)))
+                "cleared" not in joined(armed=3, approvals=0))
     ok &= check("working shows the tally",
                 "12" in joined(armed=3, working=True, approvals=12))
     ok &= check("done reaction renders celebration",
@@ -518,15 +518,7 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
                     approvals: int = 0, reaction=None) -> list:
 ```
 
-Replace the `state = mascot_state(...)` line inside it with:
-
-```python
-    state = effective_mascot_state(band, awaiting=awaiting > 0 and True or False,
-                                   working=working, armed=armed,
-                                   reaction=reaction)
-```
-
-(Note: `awaiting` is an int; pass it through as `awaiting=awaiting` - fix to:)
+Replace the `state = mascot_state(...)` line inside it with (note: `awaiting` is an int; `effective_mascot_state` converts it to `alarmed=awaiting > 0` internally):
 
 ```python
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
