@@ -164,6 +164,35 @@ def provider_alive(now=None, path=None,
     return (t - ts) <= max_age
 
 
+# --- provider installed: the STABLE ownership signal -------------------------
+#
+# Exactly ONE thing may register the "com.relay.arm" RPC - iTerm2 rejects a
+# second registration with DUPLICATE_SERVER_ORIGINATED_RPC, which freezes the
+# badge. relay decides whether to render the badge itself by whether the
+# AutoLaunch provider is INSTALLED (its symlink exists), NOT by the heartbeat.
+# The heartbeat lags a just-launched-but-not-yet-rendered provider, so keying
+# on it made relay double-register and freeze; the symlink is a stable
+# filesystem fact with no such race. Installed -> the provider owns the badge,
+# relay never registers. Not installed -> relay is the sole owner, safe to
+# render in-process.
+
+def autolaunch_link_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_STATUSBAR_AUTOLAUNCH",
+                       "~/Library/Application Support/iTerm2/Scripts/"
+                       "AutoLaunch/relay_statusbar.py"))
+
+
+def provider_installed(path=None) -> bool:
+    """True when the AutoLaunch provider symlink/file is present. Uses lexists
+    so a symlink counts even if its target is momentarily missing. Never
+    raises."""
+    try:
+        return os.path.lexists(path or autolaunch_link_path())
+    except OSError:
+        return False
+
+
 # --- click queue: the AutoLaunch provider writes, relay consumes -------------
 
 def append_click(session_id: str, now=None, path=None) -> None:

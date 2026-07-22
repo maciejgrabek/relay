@@ -97,6 +97,19 @@ def run():
     ok &= check("stale heartbeat -> not alive",
                 not statusbar.provider_alive(path=alive))
 
+    # --- provider installed: the stable ownership signal ---------------------
+    link = os.path.join(tmp, "relay_statusbar.py")
+    ok &= check("no symlink -> provider not installed",
+                not statusbar.provider_installed(path=link))
+    open(link, "w").close()
+    ok &= check("symlink present -> provider installed",
+                statusbar.provider_installed(path=link))
+    # A dangling symlink (target gone) still counts as installed (lexists).
+    dangling = os.path.join(tmp, "dangling.py")
+    os.symlink(os.path.join(tmp, "does-not-exist.py"), dangling)
+    ok &= check("dangling symlink -> still installed",
+                statusbar.provider_installed(path=dangling))
+
     # --- click queue ---------------------------------------------------------
     ok &= check("no click file -> no clicks",
                 statusbar.consume_clicks(path=clicks) == [])

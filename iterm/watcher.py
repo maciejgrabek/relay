@@ -44,9 +44,13 @@ def _own_tab_profile(on: bool):
         p.set_tab_color(iterm2.Color(58, 255, 122))   # #3aff7a
     return p
 
-# The always-on status-bar provider is statusbar_autolaunch.py; its liveness
-# is proven by a heartbeat file (statusbar.provider_alive), not by the
-# AutoLaunch symlink existing.
+# The always-on status-bar provider is statusbar_autolaunch.py. relay decides
+# whether to render the badge ITSELF by whether the provider is INSTALLED
+# (statusbar.provider_installed - the symlink exists): installed means the
+# provider owns the badge and relay must not also register it. The heartbeat
+# (statusbar.provider_alive) is only a liveness read for the notes/doctor, not
+# the ownership decision - keying ownership on it caused a double-register
+# freeze (see _register_statusbar).
 
 
 @dataclass
@@ -833,27 +837,38 @@ class Watcher:
     # --- iTerm2 status-bar component (opt-in) ---------------------------------
 
     async def _register_statusbar(self) -> None:
-        """Register the per-tab arm badge on relay's connection (config-gated).
-        render() reads this process's real arm state; on_click toggles it - the
-        same state the TUI shows, so bar and panel stay in sync. A click is an
-        un-spoofable human action, which is why arm-from-the-tab is safe. Best
-        effort: a failure here must never stop the watcher starting.
+        """Set up the per-tab arm badge (config-gated). Best effort: a failure
+        here must never stop the watcher starting.
 
-        Skipped when the AutoLaunch provider is installed: iTerm2 keeps the
-        component configured in the profile even with relay off (rendering a
-        missing provider as an ERROR), so the durable fix is the provider
-        script - it serves the badge always, from the state this watcher
-        publishes (_statusbar_publish). Registering here too would put two
-        providers on one identifier."""
+        Only ONE renderer may own the "com.relay.arm" RPC - iTerm2 rejects a
+        second registration with DUPLICATE_SERVER_ORIGINATED_RPC, freezing the
+        badge. So the decision is a hard either/or, keyed on whether the
+        AutoLaunch provider is INSTALLED (its symlink exists):
+
+          provider installed -> the provider owns the badge (it renders the
+            state relay publishes each tick, and outlives relay so the slot
+            never errors while relay is off). relay must NOT also register.
+          provider absent     -> relay is the sole claimant, so it renders the
+            badge in-process here: render() reads this process's arm state,
+            on_click toggles it (an un-spoofable human action). Zero setup, but
+            the slot errors while relay is off - install the provider to fix.
+
+        We key on the symlink, not the provider heartbeat: the heartbeat lags a
+        just-launched provider, so relay would briefly see "not alive", register
+        in-process, and then collide when the provider rendered - the exact
+        freeze this replaces. Either way relay keeps publishing state and
+        consuming clicks (_statusbar_publish)."""
         if not getattr(self.cfg, "statusbar_enabled", False):
             return
-        if statusbar_mod.provider_alive():
-            # A fresh heartbeat proves the provider is actually RUNNING -
-            # the symlink merely existing is not enough (install.sh links it,
-            # but iTerm2 must still start it; without this check a linked-
-            # but-unstarted provider left the badge slot erroring).
-            self._note("statusbar served by AutoLaunch provider "
-                       "(relay_statusbar.py)")
+        if statusbar_mod.provider_installed():
+            if statusbar_mod.provider_alive():
+                self._note("statusbar served by AutoLaunch provider "
+                           "(relay_statusbar.py)")
+            else:
+                self._note("statusbar provider installed but not running - "
+                           "restart iTerm2, or start it via Scripts > "
+                           "AutoLaunch > relay_statusbar.py (badge reads "
+                           "'RELAY: off' until then)")
             return
         try:
             component = iterm2.StatusBarComponent(
@@ -875,8 +890,11 @@ class Watcher:
 
             await component.async_register(self.connection, render,
                                            onclick=on_click)
-            self._note("statusbar component registered (add 'Relay' to your "
-                       "iTerm2 status bar)")
+            self._note("statusbar rendering in-process (no AutoLaunch "
+                       "provider). Add 'Relay' to your bar: Settings > "
+                       "Profiles > Session > Configure Status Bar. Run "
+                       "./install.sh for the always-on provider so the badge "
+                       "survives relay being off.")
         except Exception as e:
             self._note(f"statusbar register failed: {e}")
 
