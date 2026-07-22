@@ -840,6 +840,12 @@ then open iTerm2 **Settings -> Profiles -> your profile -> Session ->
 Configure Status Bar** (enable "Status bar enabled" if needed) and drag the
 **"Relay"** component into the bar.
 
+> **Apple Silicon needs Rosetta 2.** The AutoLaunch provider runs under
+> iTerm2's bundled Python runtime, which is x86_64 - so on an M-series Mac the
+> provider (and therefore the badge) silently never starts unless Rosetta 2 is
+> installed: `softwareupdate --install-rosetta --agree-to-license`. `relay
+> doctor` checks this for you.
+
 > **"Relay" isn't in the Configure Status Bar list?** The component only
 > appears in that picker while a provider is **registered** - i.e. the
 > AutoLaunch provider is running, or (with no provider installed) relay is

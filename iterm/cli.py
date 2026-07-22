@@ -504,6 +504,26 @@ def _doctor_statusbar(cfg) -> None:
     if installed and not running:
         print("        -> start it: iTerm2 menu Scripts > AutoLaunch > "
               "relay_statusbar.py, or just restart iTerm2")
+    # Apple Silicon: the AutoLaunch provider runs under iTerm2's bundled
+    # x86_64 Python runtime, so it needs Rosetta 2 - without it the provider
+    # (and thus the badge) silently never starts. This is the usual cause of a
+    # provider that is installed but will not run on an M-series laptop.
+    import platform
+    if platform.machine() == "arm64":
+        have_rosetta = False
+        try:
+            import subprocess
+            have_rosetta = subprocess.run(
+                ["/usr/sbin/pkgutil", "--pkg-info",
+                 "com.apple.pkg.RosettaUpdateAuto"],
+                capture_output=True).returncode == 0
+        except Exception:
+            pass
+        print(f"    {ok if have_rosetta else no} Rosetta 2 (Apple Silicon: "
+              f"iTerm2's Python runtime is x86_64)")
+        if not have_rosetta:
+            print("        -> install: softwareupdate --install-rosetta "
+                  "--agree-to-license")
     # Step 3 can't be detected via the API - always remind. 'Relay' only
     # appears in the Configure Status Bar picker while a provider is REGISTERED
     # (provider running, or - with no provider installed - relay running). An
