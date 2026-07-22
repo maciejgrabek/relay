@@ -375,13 +375,17 @@ class Watcher:
 
     async def _handle(self, info: SessionInfo, raw, hard) -> None:
         decision: Decision = classify(raw, hard)
-        info.last_decision = decision.reason
 
         if decision.action == Action.NONE:
             # No actionable prompt: read the screen for a real working/idle
             # signal instead of blindly claiming "working".
             info.state = detect_state(reconstruct_lines(raw, hard))
             return
+
+        # Record why relay ACTED so the live-feed pane can show it; a NONE
+        # reason ("no actionable prompt") would be noise. Retains the last
+        # actionable reason between prompts.
+        info.last_decision = decision.reason
 
         if decision.command:
             info.last_command = decision.command

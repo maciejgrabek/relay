@@ -219,6 +219,17 @@ async def go():
     await w._handle(bb, pc, [True] * len(pc))
     chk("back-to-back distinct prompts each approve", fb.sent == ["\r", "\r", "\r"])
 
+    # last_decision retains the last ACTIONABLE reason - a NONE screen (idle/
+    # working) must not overwrite it with classifier noise.
+    fld = FakeSession()
+    ld = SessionInfo("ld", title="lastdec", _iterm_session=fld, mode="safe")
+    w.sessions["ld"] = ld
+    sraw2, shard2 = _safe()
+    await w._handle(ld, sraw2, shard2)
+    chk("last_decision set on a safe prompt", ld.last_decision == "safe permission prompt")
+    await w._handle(ld, ["just some quiet screen text", "nothing to do here"], [True, True])
+    chk("NONE screen does not overwrite last_decision", ld.last_decision == "safe permission prompt")
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
