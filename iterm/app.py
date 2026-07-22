@@ -326,6 +326,16 @@ def reactor_band(temp: float):
     return ("STABLE", DIM, False)
 
 
+def why_line(last_decision: str, last_command: str, width: int) -> str:
+    """The ' WHY: <reason>[: <cmd>]' live-feed line for the last decision relay
+    made on a session, or '' when there is nothing to show. Pure, width-clamped
+    (plain text - the pane renders literally)."""
+    if not last_decision:
+        return ""
+    text = last_decision + (f": {last_command}" if last_command else "")
+    return f" WHY: {text}"[:max(6, width) - 1] + "\n"
+
+
 def getting_started_panel(width: int) -> str:
     """Shown in the preview pane when relay has nothing to control (only its own
     tab is open). Relay acts on OTHER sessions, so an empty roster is the moment
@@ -855,10 +865,12 @@ class RelayApp(App):
             attn = " ⧗ STALE: no visible progress\n"
         elif info.state == "blocked":
             attn = " ⊘ LOCKED\n"
+        why = why_line(info.last_decision, info.last_command, w)
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{why}"
                   f"{attn}"
                   f"╚{bar}╝\n")
         body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
