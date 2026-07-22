@@ -166,6 +166,23 @@ def run():
     finally:
         os.environ.pop("RELAY_CONFIG", None)
 
+    import dataclasses
+    # dump -> load round-trips every managed field (non-default values).
+    custom = dataclasses.replace(
+        config.Config(), title_style="hybrid", alert_sound="/a/x.aiff",
+        done_sound="", danger_sound="/a/d.aiff", message_sound="/a/m.aiff",
+        stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
+        statusbar_enabled=True, danger_preset="paranoid", theme="amber")
+    p = _write(config.dump(custom))
+    back, warns = config.load(p)
+    ok &= check("dump->load round-trips every field", back == custom)
+    ok &= check("round-trip has no warnings", warns == [])
+    # save writes atomically to the given path.
+    sp = os.path.join(tempfile.mkdtemp(), "cfg")
+    config.save(custom, sp)
+    ok &= check("save then load equals cfg", config.load(sp)[0] == custom)
+    ok &= check("silent sound round-trips as empty", back.done_sound == "")
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
