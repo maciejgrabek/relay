@@ -236,6 +236,20 @@ def run():
                     code == 0 and "none registered" in out and "relay spawn" in out)
     finally:
         os.environ["RELAY_DB"] = old_db
+
+    # recap: subcommand parses/dispatches; the command itself is read-only.
+    args = cli.build_parser().parse_args(["recap", "--all"])
+    ok &= check("recap subcommand dispatches to cmd_recap",
+                args.fn is cli.cmd_recap and args.all is True)
+    args2 = cli.build_parser().parse_args(["recap"])
+    ok &= check("recap defaults to today (all=False)", args2.all is False)
+    code, out, _ = run_cli("recap")
+    ok &= check("recap exits 0 and reports today's tally",
+                code == 0 and "relay recap (today)" in out and "tasks:" in out)
+    code, out, _ = run_cli("recap", "--all")
+    ok &= check("recap --all reports all time", code == 0
+                and "relay recap (all time)" in out)
+
     # version: prints something, exits 0 (git or 'unknown').
     code, out, _ = run_cli("version")
     ok &= check("version exits 0", code == 0 and "relay" in out)
