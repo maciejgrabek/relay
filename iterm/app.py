@@ -99,6 +99,7 @@ MODE_STYLE = {
     "safe":   ("◉", "SAFE",    BRIGHT),
     "wild":   ("▲", "WILD",    WARN),
     "insane": ("✦", "INSANE",  DANGER),
+    "shadow": ("◌", "SHADOW",  CYAN),
 }
 
 
@@ -114,12 +115,12 @@ def _keys(pairs) -> str:
 
 
 KEYBAR = (
-    _keys([("↑↓", "move"), ("SPACE", "arm"), ("ENTER", "answer"),
+    _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"),
            ("v", "audit")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("R×2", "restore"), ("W×2", "wipe"), ("?", "help"),
+             ("p", "pause"), ("R×2", "restore"), ("W×2", "wipe"), ("?", "help"),
              ("q", "quit")]))
 
 
@@ -420,10 +421,12 @@ def help_text() -> str:
         row("1 2 3", "send that digit (pick a menu option by hand)"),
         row("SPACE", "cycle arm: off -> safe -> wild -> insane -> off"),
         row("a / d", "arm all (safe) / disarm all"),
+        row("s", "shadow-arm a tab: dry-run, records what it would do without acting"),
         row("n", "jump to the selected session's iTerm2 tab"),
         row("x", "hide / show the selected session"),
         row("v", "audit view: what relay approved for this session"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
+        row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
         row("R R", "restore dead task-owners (double-press confirms)"),
         row("W W", "WIPE dead sessions' work (double-press confirms)"),
         row("q", "quit (asks twice only when something is live)"),
@@ -435,9 +438,11 @@ def help_text() -> str:
         row("◉ SAFE", "auto-approves commands classified safe; escalates rest"),
         row("▲ WILD", "approves any 'Do you want to proceed?' unclassified"),
         row("✦ INSANE", "approves ANY tool prompt, even fail-safe cases"),
+        row("◌ SHADOW", "dry-run - records would-approve/would-escalate, never acts"),
         "",
         f"[{D}]A real question (multi-choice) is ALWAYS yours - no mode"
-        f" auto-answers decisions.[/]",
+        f" auto-answers decisions. A PAUSED relay is not acting on ANY"
+        f" tab, regardless of arm level.[/]",
     ])
 
 
@@ -904,7 +909,8 @@ class RelayApp(App):
                 db_path=swarmdb.default_path(),
                 dry_run=self.dry_run))
             return
-        mode = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE"}.get(info.mode, "MANUAL")
+        mode = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
+                "shadow": "SHADOW"}.get(info.mode, "MANUAL")
         loc = "QUARANTINED" if info.hidden else "ACTIVE"
         # Size the frame to the pane width so the header bars span the full pane.
         w = max(40, preview.size.width - 2)
@@ -913,7 +919,11 @@ class RelayApp(App):
         # header is plain text - the phosphor-green comes from CSS.
         # Why this session needs you, when it does (plain text, like the pane).
         attn = ""
-        if info.state == "prompting":
+        if info.mode == "shadow":
+            pass    # the "◌ SHADOW - previewing" banner below already explains
+                    # this tab; its state reflects what it WOULD do, not a real
+                    # AWAITING/LOCKED/STALE condition, so don't render one.
+        elif info.state == "prompting":
             why = info.last_command[:w - 14] if info.last_command \
                 else "a question / unreadable prompt"
             attn = f" ‼ AWAITING: {why}\n"

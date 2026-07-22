@@ -186,6 +186,13 @@ async def go():
 
     chk("help text covers keys + arm levels",
         "ARM LEVELS" in appmod.help_text() and "SPACE" in appmod.help_text())
+    ht = appmod.help_text()
+    chk("help text covers pause", "pause" in ht.lower())
+    chk("help text covers shadow", "shadow" in ht.lower() and "◌" in ht)
+    chk("keybar covers pause + shadow",
+        "pause" in appmod.KEYBAR.lower() and "shadow" in appmod.KEYBAR.lower())
+    chk("MODE_STYLE has a shadow entry",
+        appmod.MODE_STYLE.get("shadow") == ("◌", "SHADOW", appmod.CYAN))
     ah = _TestApp(_one(), dry_run=True)
     async with ah.run_test() as pilot:
         await pilot.pause()
@@ -204,6 +211,27 @@ async def go():
         await pilot.pause()
         chk("TAB from help lands in swarm view, help closed",
             not ah._help_visible and ah._swarm_visible)
+
+    # --- shadow tab: pane reads SHADOW, not MANUAL/LOCKED --------------------
+    def _shadow_one():
+        si = SessionInfo("sh", title="shadowed", window_idx=0, tab_idx=0,
+                          last_screen=["x"])
+        si.mode = "shadow"
+        si.state = "blocked"     # would-escalate, not a real lockdown
+        return {"sh": si}
+
+    sh = _TestApp(_shadow_one(), dry_run=True)
+    async with sh.run_test() as pilot:
+        await pilot.pause()
+        sh._refresh()
+        await pilot.pause()
+        pv = str(sh.query_one("#preview", appmod.Static).render())
+        chk("shadow pane header reads MODE:SHADOW, not MODE:MANUAL",
+            "MODE:SHADOW" in pv)
+        chk("shadow pane suppresses the LOCKED/attn line",
+            "LOCKED" not in pv and "AWAITING" not in pv and "STALE" not in pv)
+        chk("shadow pane still shows the SHADOW previewing banner",
+            "SHADOW" in pv and "previewing" in pv)
 
     # --- themes: complete palettes, resolved CSS ------------------------------
     keys = set(appmod.THEMES["phosphor"])
