@@ -485,11 +485,17 @@ def _doctor_statusbar(cfg) -> None:
     if installed and not running:
         print("        -> start it: iTerm2 menu Scripts > AutoLaunch > "
               "relay_statusbar.py, or just restart iTerm2")
-    # Step 3 can't be detected via the API - always remind.
-    print("    ? component in your bar (can't be auto-detected): iTerm2 "
-          "Settings > Profiles > <profile> > Session >")
-    print("        Configure Status Bar > drag 'Relay' into the bar (also "
-          "tick 'Status bar enabled')")
+    # Step 3 can't be detected via the API - always remind. 'Relay' only
+    # appears in the Configure Status Bar picker while a provider is REGISTERED
+    # (provider running, or - with no provider installed - relay running). An
+    # empty picker means nothing is registered right now, not that it's broken.
+    print("    ? 'Relay' added to your bar (can't be auto-detected): iTerm2 "
+          "Settings > Profiles >")
+    print("        <profile> > Session > Configure Status Bar > drag 'Relay' "
+          "in (tick 'Status bar enabled')")
+    if not running:
+        print("        note: 'Relay' only shows in that picker while a "
+              "provider is running - start it first (above)")
 
 
 def _run_git(cwd: str, *a, timeout=8):
