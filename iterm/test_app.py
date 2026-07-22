@@ -316,6 +316,18 @@ async def go():
             ce.watcher.alert_sound != before)
         chk("the change was auto-saved to disk",
             cfgmod.load()[0].alert_sound == ce.watcher.alert_sound)
+        # Session-mutating keys must be inert while the overlay hides the
+        # session list - a stray 'a'/'1' must not act on a tab you can't see.
+        mode_before = ce.watcher.sessions["s0"].mode
+        ce.watcher.sent.clear()
+        await pilot.press("a")
+        await pilot.pause()
+        chk("'a' while settings open does not arm sessions",
+            ce.watcher.sessions["s0"].mode == mode_before)
+        await pilot.press("1")
+        await pilot.pause()
+        chk("'1' while settings open does not send keys",
+            ce.watcher.sent == [])
         await pilot.press("comma")
         await pilot.pause()
         chk("comma closes settings", not ce._settings_visible)

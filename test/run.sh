@@ -5,6 +5,11 @@
 #   ./test/run.sh        run everything
 #   ./test/run.sh -v     verbose (forwards -v to the bash classifier suite)
 set -uo pipefail
+
+# Defense-in-depth: no test (present or future) should ever be able to write
+# the developer's real ~/.relay/config. A throwaway path for the whole suite.
+export RELAY_CONFIG="$(mktemp -d)/relay-test-config"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 fail=0

@@ -605,6 +605,13 @@ class RelayApp(App):
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
         self._own_sid = os.environ.get("ITERM_SESSION_ID", "").split(":")[-1] or None
 
+    def _any_overlay_open(self) -> bool:
+        """True while a full-screen overlay (settings/swarm/help) hides the
+        session list - session-mutating keys must be inert then, or a stray
+        keypress acts on a tab you cannot see."""
+        return (self._settings_visible or self._swarm_visible
+                or self._help_visible)
+
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
         if not self.watcher:
@@ -1001,6 +1008,8 @@ class RelayApp(App):
         self._manual_send("\r")
 
     def action_send(self, key: str) -> None:
+        if self._any_overlay_open():
+            return
         self._manual_send(key)
 
     def _manual_send(self, text: str) -> None:
@@ -1010,12 +1019,16 @@ class RelayApp(App):
 
     # --- navigate to the real iTerm2 tab --------------------------------------
     def action_focus(self) -> None:
+        if self._any_overlay_open():
+            return
         sid = self._selected_sid()
         if sid and self.watcher:
             self.run_worker(self.watcher.focus_session(sid), exclusive=False)
 
     # --- arming ---------------------------------------------------------------
     def action_toggle(self) -> None:
+        if self._any_overlay_open():
+            return
         sid = self._selected_sid()
         if not (sid and self.watcher):
             return
@@ -1035,6 +1048,8 @@ class RelayApp(App):
             self._refresh()
 
     def action_shadow(self) -> None:
+        if self._any_overlay_open():
+            return
         sid = self._selected_sid()
         if not (sid and self.watcher):
             return
@@ -1046,11 +1061,15 @@ class RelayApp(App):
         self._refresh()
 
     def action_all(self) -> None:
+        if self._any_overlay_open():
+            return
         if self.watcher:
             self.watcher.set_all(True)
             self._refresh()
 
     def action_none(self) -> None:
+        if self._any_overlay_open():
+            return
         if self.watcher:
             self.watcher.set_all(False)
             self._refresh()
@@ -1071,6 +1090,8 @@ class RelayApp(App):
 
     def _render_settings(self) -> None:
         if self._working_cfg is None:
+            self.query_one("#settingsview", Static).update(
+                "\n  connecting to iTerm2 - settings load in a moment...")
             return
         w = self.query_one("#settingsview").size.width - 4
         self.query_one("#settingsview", Static).update(
@@ -1135,6 +1156,8 @@ class RelayApp(App):
 
     # --- audit view (v): the preview pane shows this session's decisions -----
     def action_audit_view(self) -> None:
+        if self._any_overlay_open():
+            return
         self._audit_visible = not self._audit_visible
         self._update_preview()
 
@@ -1193,6 +1216,8 @@ class RelayApp(App):
 
     # --- hide / show ----------------------------------------------------------
     def action_hide(self) -> None:
+        if self._any_overlay_open():
+            return
         sid = self._selected_sid()
         if sid and self.watcher:
             prev_row = self.query_one(DataTable).cursor_row
@@ -1263,6 +1288,8 @@ class RelayApp(App):
 
     # --- restore (respawn dead task-owner workers) -----------------------
     def action_restore(self) -> None:
+        if self._any_overlay_open():
+            return
         if not getattr(self.watcher, "orphan_count", 0):
             self.query_one(Log).write_line(
                 "restore: nothing orphaned - R acts only on CLOSED sessions "
@@ -1282,6 +1309,8 @@ class RelayApp(App):
 
     # --- wipe (delete orphaned task-owner work) --------------------------
     def action_wipe(self) -> None:
+        if self._any_overlay_open():
+            return
         if not getattr(self.watcher, "orphan_count", 0):
             self.query_one(Log).write_line(
                 "wipe: nothing orphaned - W deletes work owned by CLOSED "
