@@ -826,6 +826,22 @@ def legible_spine_tests():
         W.notify_mac = real_notify2
         W.swarmdb.list_tasks = real_list
 
+    # A malformed task row (missing "id") must not raise out of the whole
+    # method - the try must cover the set comprehension + notify, not just
+    # the list_tasks call.
+    real_list2 = W.swarmdb.list_tasks
+    try:
+        W.swarmdb.list_tasks = lambda conn: [{"state": "done"}]
+        w3 = Watcher(connection=None, dry_run=False)
+        w3._swarm_conn = lambda: None
+        try:
+            w3._check_completions()
+            chk("malformed task row does not raise", True)
+        except Exception:
+            chk("malformed task row does not raise", False)
+    finally:
+        W.swarmdb.list_tasks = real_list2
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
