@@ -761,6 +761,75 @@ async def statusbar_registration_tests():
     return ok
 
 
+def legible_spine_tests():
+    """Watcher emits differentiated sounds + a _last_event pulse, and detects
+    task completions edge-triggered (silent on the first tick)."""
+    from watcher import Watcher, _notify_sound
+    from gates import DANGEROUS_COMMAND
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    # Pure sound routing.
+    chk("danger reason -> danger sound",
+        _notify_sound(DANGEROUS_COMMAND, danger="D", alert="A") == "D")
+    chk("other reason -> alert sound",
+        _notify_sound("real question - hands off", danger="D", alert="A") == "A")
+
+    # Escalations play the MESSAGE sound (was alert).
+    captured = []
+    real_notify = W.notify_mac
+    real_undeliv = W.swarmdb.undelivered
+    real_pings = W.swarm.escalation_pings
+    try:
+        row = {"id": 1, "kind": "escalation", "from_name": "w1",
+               "to_name": "c", "body": "help"}
+        W.notify_mac = lambda t, m, s: captured.append(s)
+        W.swarmdb.undelivered = lambda conn: [row]
+        W.swarm.escalation_pings = lambda msgs, seen: msgs
+        w = Watcher(connection=None, dry_run=False)
+        w._swarm_conn = lambda: None
+        w._check_escalations()
+        chk("escalation uses message_sound",
+            captured and captured[0] == w.message_sound)
+    finally:
+        W.notify_mac = real_notify
+        W.swarmdb.undelivered = real_undeliv
+        W.swarm.escalation_pings = real_pings
+
+    # Completions: seed silently on the first tick, fire on a NEW done id.
+    fired = []
+    real_notify2 = W.notify_mac
+    real_list = W.swarmdb.list_tasks
+    try:
+        tasks = [{"id": 1, "state": "done"}]
+        W.swarmdb.list_tasks = lambda conn: list(tasks)
+        W.notify_mac = lambda t, m, s: fired.append(s)
+        w2 = Watcher(connection=None, dry_run=False)
+        w2._swarm_conn = lambda: None
+        w2._check_completions()
+        chk("first tick seeds, does NOT fire", fired == []
+            and w2._last_event is None)
+        tasks.append({"id": 2, "state": "done"})
+        w2._check_completions()
+        chk("new done id fires done event + chime",
+            len(fired) == 1 and fired[0] == w2.done_sound
+            and w2._last_event is not None and w2._last_event[0] == "done")
+        w2._check_completions()
+        chk("no new done -> no repeat fire", len(fired) == 1)
+    finally:
+        W.notify_mac = real_notify2
+        W.swarmdb.list_tasks = real_list
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -770,5 +839,6 @@ if __name__ == "__main__":
     r6 = asyncio.run(own_tab_name_tests())
     r7 = escalation_ratelimit_tests()
     r8 = asyncio.run(statusbar_registration_tests())
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8)
+    r9 = legible_spine_tests()
+    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8 and r9)
              else 1)

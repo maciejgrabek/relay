@@ -26,7 +26,8 @@ import swarm
 import statusbar as statusbar_mod
 import config as relay_config
 import titles
-from gates import classify, Action, Decision, reconstruct_lines, detect_state
+from gates import (classify, Action, Decision, reconstruct_lines,
+                   detect_state, DANGEROUS_COMMAND)
 
 # Relay's own tab title, set by design. Without this iTerm2 job-derives the
 # title from relay's `caffeinate` child - accurate, but not what the panel IS.
@@ -122,10 +123,18 @@ def notify_mac(title: str, message: str, sound: Optional[str]) -> None:
         pass
 
 
+def _notify_sound(reason, *, danger, alert):
+    """The sound a NOTIFY should play: the danger tone for a confirmed
+    dangerous command, else the general alert. Pure - no I/O."""
+    return danger if reason == DANGEROUS_COMMAND else alert
+
+
 class Watcher:
     def __init__(self, connection,
                  alert_sound=None,
                  done_sound=None,
+                 danger_sound=None,
+                 message_sound=None,
                  on_change: Optional[Callable[[], None]] = None,
                  dry_run: bool = False,
                  cfg=None,
@@ -150,6 +159,8 @@ class Watcher:
                 cfg, "danger_preset", "default")
         self.alert_sound = alert_sound or cfg.alert_sound
         self.done_sound = done_sound or cfg.done_sound
+        self.danger_sound = danger_sound or cfg.danger_sound
+        self.message_sound = message_sound or cfg.message_sound
         self.on_change = on_change or (lambda: None)
         self.dry_run = dry_run            # if True, never actually inject
         self.sessions: Dict[str, SessionInfo] = {}
@@ -169,6 +180,9 @@ class Watcher:
         self._esc_ping_ts = 0.0    # last escalation sound (rate limit)
         self.stale_after = cfg.stale_minutes * 60.0
         self._gone_notified: set = set()   # names alerted as gone-with-queue
+        self._last_event = None            # (kind, ts): danger|done reaction pulse
+        self._done_seen: set = set()       # task ids already seen 'done'
+        self._done_seen_init = False       # first tick seeds without firing
         self._arm_seen: dict = {}          # sid -> time first seen registered
         self.arm_grace = 20.0              # spawn pre-arm window (s), > boot delay
         self._mode_restored: set = set()   # sids whose persisted mode was restored
@@ -215,6 +229,7 @@ class Watcher:
                 self._swarm_refresh_registry()
                 await self._name_own_tab()
                 self._check_escalations()
+                self._check_completions()
                 self._statusbar_publish()
                 if self._roster_ok:
                     self._mark_closed_sessions()
@@ -412,13 +427,17 @@ class Watcher:
                 return
             info._last_notify_ts = now
             info.n_escalated += 1
+            if decision.reason == DANGEROUS_COMMAND:
+                self._last_event = ("danger", time.time())
             audit.record("escalated", info.title, decision.command or "",
                          decision.reason)
             self._note(f"NOTIFY {info.title}: {decision.reason}")
             notify_mac(f"Relay - {info.title}",
                        decision.reason + (f": {decision.command[:80]}"
                                           if decision.command else ""),
-                       self.alert_sound)
+                       _notify_sound(decision.reason,
+                                     danger=self.danger_sound,
+                                     alert=self.alert_sound))
             return
 
         # --- approve path ---
@@ -660,16 +679,35 @@ class Watcher:
             first = fresh[0]
             if len(fresh) == 1:
                 notify_mac(f"Relay - escalation from {first['from_name']}",
-                           first["body"][:120], self.alert_sound)
+                           first["body"][:120], self.message_sound)
             else:
                 notify_mac("Relay - escalations",
                            f"{len(fresh)} pending, first from "
                            f"{first['from_name']}: {first['body'][:80]}",
-                           self.alert_sound)
+                           self.message_sound)
         except Exception as e:
             # Never let a bad row escape into start()'s tick loop (it has no
             # per-tick except; an escape would kill the watcher outright).
             self._note(f"escalation check error: {e}")
+
+    def _check_completions(self) -> None:
+        """Fire a 'done' pulse + chime the first time a task/epic reaches done.
+        Seeds silently on the first tick so a pre-existing backlog does not
+        chime on startup. Best-effort; never raises into the poll loop."""
+        try:
+            tasks = swarmdb.list_tasks(self._swarm_conn())
+        except Exception:
+            return
+        done_ids = {t["id"] for t in tasks if t["state"] == "done"}
+        if self._done_seen_init:
+            new_done = done_ids - self._done_seen
+            if new_done:
+                self._last_event = ("done", time.time())
+                notify_mac("Relay - done",
+                           f"{len(new_done)} task(s) completed",
+                           self.done_sound)
+        self._done_seen = done_ids
+        self._done_seen_init = True
 
     def _check_stale(self, info: SessionInfo) -> None:
         """Flag a registered session STALE (and notify ONCE per onset) when a

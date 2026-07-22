@@ -39,6 +39,11 @@ _OPTION_RE = re.compile(r"^\s*(❯\s*)?(\d+)\.\s+(.*\S)\s*$")
 # The selection cursor iTerm renders on the highlighted option.
 _CURSOR = "❯"
 
+# The one reason string that means a confirmed dangerous command (as opposed to
+# a fail-safe "I could not verify"). Shared with the watcher so the danger sound
+# and mascot flinch key off the same value.
+DANGEROUS_COMMAND = "dangerous command"
+
 
 class Action(Enum):
     INJECT = "inject"        # safe permission prompt -> send Enter
@@ -324,7 +329,7 @@ def classify(raw_lines: List[str], hard_eols: Optional[List[bool]] = None) -> De
     danger = is_dangerous(cmd)
     pid = _prompt_id(lines, cmd)
     if danger is True:
-        return Decision(Action.NOTIFY, "dangerous command", command=cmd,
+        return Decision(Action.NOTIFY, DANGEROUS_COMMAND, command=cmd,
                         prompt_id=pid, is_permission=True, is_proceed=True)
     if danger is False:
         return Decision(Action.INJECT, "safe permission prompt", command=cmd,
