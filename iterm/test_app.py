@@ -36,6 +36,14 @@ class StubWatcher:
         self.done_sound = self.cfg.done_sound
         self.danger_sound = self.cfg.danger_sound
         self.message_sound = self.cfg.message_sound
+        # Mirror the real Watcher's pause interface the app calls, so the
+        # app-level pause key path is exercisable headless (not just the pure
+        # mascot function).
+        self.paused = False
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        return self.paused
 
     _CYCLE = {"off": "safe", "safe": "wild", "wild": "insane", "insane": "off"}
 
@@ -334,6 +342,21 @@ async def go():
     chk("KEYBAR advertises settings", "," in appmod.KEYBAR
         and "settings" in appmod.KEYBAR.lower())
     chk("help covers settings", "settings" in appmod.help_text().lower())
+
+    # --- pause key path (app -> watcher.toggle_pause + PAUSED banner) --------
+    pz = _TestApp(_one(), dry_run=True)
+    async with pz.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        chk("p pauses the watcher", pz.watcher.paused is True)
+        pz._tick_reactor()
+        await pilot.pause()
+        chk("subtitle shows the PAUSED banner",
+            "PAUSED" in str(pz.query_one("#subtitle", appmod.Static).render()))
+        await pilot.press("p")
+        await pilot.pause()
+        chk("p again resumes", pz.watcher.paused is False)
 
     # relay's own panel row NEVER goes to NEEDS ACTION (nor the counts)
     os.environ["ITERM_SESSION_ID"] = "w0t9p9:OWN-1"
