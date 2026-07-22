@@ -813,9 +813,25 @@ the per-tab state relay publishes each tick (`~/.relay/statusbar.json`, wiped
 on quit), and with relay off it shows `⚫ RELAY: off` instead of an error.
 Clicks are queued to `~/.relay/` and applied by the running relay with its
 normal guards; writes into `~/.relay` classify DANGEROUS in `lib/danger.sh`,
-so a safe-mode session cannot forge a click. Without the provider installed,
-relay falls back to registering the badge in-process - it works while relay
-runs, but the slot shows an iTerm2 error whenever relay is closed.
+so a safe-mode session cannot forge a click.
+
+**One owner, no freeze:** exactly one thing may register the badge - iTerm2
+rejects a second registration of the same component (`com.relay.arm`) with
+`DUPLICATE_SERVER_ORIGINATED_RPC`, which leaves the badge frozen on a stale
+frame (e.g. stuck on `⚫ RELAY: off` even after you start relay). So relay
+decides who owns the badge by a stable fact - **is the AutoLaunch provider
+installed (its symlink present)?**
+
+- **Provider installed** -> the provider owns the badge; relay never registers,
+  it only publishes state and applies clicks. Restart iTerm2 (or start the
+  script once) so the provider is actually running.
+- **Provider absent** -> relay registers the badge in-process as the sole
+  owner. Zero setup, but the slot shows an iTerm2 error whenever relay is
+  closed - install the provider to fix that.
+
+(relay keys this on the symlink, not the provider's heartbeat: the heartbeat
+lags a just-launched provider, so keying on it made relay briefly double-
+register and freeze the badge.)
 
 **Adding it (one-time):** run `./install.sh` and answer yes to the AutoLaunch
 symlink, start it once (iTerm2 menu **Scripts -> AutoLaunch ->
@@ -823,6 +839,14 @@ relay_statusbar.py**, or restart iTerm2), set `[statusbar] enabled = true`,
 then open iTerm2 **Settings -> Profiles -> your profile -> Session ->
 Configure Status Bar** (enable "Status bar enabled" if needed) and drag the
 **"Relay"** component into the bar.
+
+> **"Relay" isn't in the Configure Status Bar list?** The component only
+> appears in that picker while a provider is **registered** - i.e. the
+> AutoLaunch provider is running, or (with no provider installed) relay is
+> running. An empty list means nothing is registered right now, not that it's
+> broken: start the provider (restart iTerm2) and reopen the picker. Run
+> **`relay doctor`** for a checklist of the three steps - enabled / installed /
+> running - and exactly which one is missing.
 
 ## Project layout
 
