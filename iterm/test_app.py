@@ -230,8 +230,8 @@ async def go():
             "MODE:SHADOW" in pv)
         chk("shadow pane suppresses the LOCKED/attn line",
             "LOCKED" not in pv and "AWAITING" not in pv and "STALE" not in pv)
-        chk("shadow pane still shows the SHADOW previewing banner",
-            "SHADOW" in pv and "previewing" in pv)
+        chk("shadow pane WHY line reads WOULD ESCALATE (not a real lockdown)",
+            "SHADOW" in pv and "WOULD ESCALATE" in pv)
 
     # --- themes: complete palettes, resolved CSS ------------------------------
     keys = set(appmod.THEMES["phosphor"])

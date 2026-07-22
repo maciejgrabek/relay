@@ -776,7 +776,7 @@ class RelayApp(App):
         # Status line: live armed-count + total approvals.
         sess = list(self.watcher.sessions.values())
         armed = sum(1 for i in sess if i.active)
-        appr = sum(i.n_approved for i in sess)
+        appr = getattr(self.watcher, "_approvals", 0)   # monotonic session tally
         esc = sum(i.n_escalated for i in sess)
         dry = f" [bold {WARN}]◆ SIMULATION (dry-run)[/]" if self.dry_run else ""
         # Onboarding hints, in priority order: nothing to control -> point at
@@ -861,8 +861,7 @@ class RelayApp(App):
         ev = getattr(self.watcher, "_last_event", None)
         if ev and (time.time() - ev[1]) <= REACTION_TTL:
             reaction = ev[0]
-        approvals = sum(i.n_approved for i in self.watcher.sessions.values()
-                        if i.session_id != self._own_sid)
+        approvals = getattr(self.watcher, "_approvals", 0)   # monotonic tally
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
@@ -903,7 +902,7 @@ class RelayApp(App):
                 preview.size.width - 2,
                 units=len(ctrl),
                 armed=sum(1 for i in ctrl if i.active),
-                approvals=sum(i.n_approved for i in ctrl),
+                approvals=getattr(self.watcher, "_approvals", 0),
                 escalations=sum(i.n_escalated for i in ctrl),
                 orphans=getattr(self.watcher, "orphan_count", 0),
                 db_path=swarmdb.default_path(),
@@ -931,14 +930,20 @@ class RelayApp(App):
             attn = " ⧗ STALE: no visible progress\n"
         elif info.state == "blocked":
             attn = " ⊘ LOCKED\n"
-        why = why_line(info.last_decision, info.last_command, w)
-        shadow = " ◌ SHADOW - previewing, relay is NOT acting on this tab\n" \
-            if info.mode == "shadow" else ""
+        # WHY line: the last decision reason - or, for a shadow tab, the
+        # hypothetical it WOULD take (previewing, not acting), per the spec.
+        if info.mode == "shadow":
+            if info.state == "cleared":
+                why = f" ◌ SHADOW - WOULD CLEAR: {info.last_command or '...'}"
+            else:
+                why = f" ◌ SHADOW - WOULD ESCALATE: {info.last_decision or '...'}"
+            why = why[:w] + "\n"
+        else:
+            why = why_line(info.last_decision, info.last_command, w)
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
-                  f"{shadow}"
                   f"{why}"
                   f"{attn}"
                   f"╚{bar}╝\n")

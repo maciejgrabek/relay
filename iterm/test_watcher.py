@@ -99,6 +99,11 @@ async def go():
         await w._handle(s, sraw, shard)
     chk("armed safe: exactly 1 Enter", fsafe.sent == ["\r"])
     chk("armed safe: n_approved == 1", s.n_approved == 1)
+    # Monotonic session tally: counts the approval, and survives the tab closing
+    # (unlike summed n_approved, which the mascot used to read and would dip).
+    chk("monotonic approvals tally counts it", w._approvals == 1)
+    del w.sessions["s"]
+    chk("tally survives the tab closing", w._approvals == 1)
 
     # OWN TAB: even armed safe with a safe prompt, relay must never act on its
     # own panel session (that would be relay pressing keys on itself).
