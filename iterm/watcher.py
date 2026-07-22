@@ -696,18 +696,18 @@ class Watcher:
         chime on startup. Best-effort; never raises into the poll loop."""
         try:
             tasks = swarmdb.list_tasks(self._swarm_conn())
+            done_ids = {t["id"] for t in tasks if t["state"] == "done"}
+            if self._done_seen_init:
+                new_done = done_ids - self._done_seen
+                if new_done:
+                    self._last_event = ("done", time.time())
+                    notify_mac("Relay - done",
+                               f"{len(new_done)} task(s) completed",
+                               self.done_sound)
+            self._done_seen = done_ids
+            self._done_seen_init = True
         except Exception:
             return
-        done_ids = {t["id"] for t in tasks if t["state"] == "done"}
-        if self._done_seen_init:
-            new_done = done_ids - self._done_seen
-            if new_done:
-                self._last_event = ("done", time.time())
-                notify_mac("Relay - done",
-                           f"{len(new_done)} task(s) completed",
-                           self.done_sound)
-        self._done_seen = done_ids
-        self._done_seen_init = True
 
     def _check_stale(self, info: SessionInfo) -> None:
         """Flag a registered session STALE (and notify ONCE per onset) when a
