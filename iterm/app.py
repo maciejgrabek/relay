@@ -25,7 +25,9 @@ from textual.containers import Vertical  # noqa: E402
 from textual.widgets import DataTable, Static, Log  # noqa: E402
 
 import audit  # noqa: E402
+import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
+import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
 from watcher import Watcher  # noqa: E402
 
@@ -120,8 +122,8 @@ KEYBAR = (
            ("v", "audit")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("p", "pause"), ("R×2", "restore"), ("W×2", "wipe"), ("?", "help"),
-             ("q", "quit")]))
+             ("p", "pause"), (",", "settings"), ("R×2", "restore"),
+             ("W×2", "wipe"), ("?", "help"), ("q", "quit")]))
 
 
 def relay_self_panel(width, *, units, armed, approvals, escalations, orphans,
@@ -427,6 +429,7 @@ def help_text() -> str:
         row("v", "audit view: what relay approved for this session"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
+        row(",", "settings editor - up/down move, left/right change, p plays a sound"),
         row("R R", "restore dead task-owners (double-press confirms)"),
         row("W W", "WIPE dead sessions' work (double-press confirms)"),
         row("q", "quit (asks twice only when something is live)"),
@@ -538,7 +541,7 @@ class RelayApp(App):
         height: 5; border-top: solid $dimmer;
         background: $bg_deep; color: $dim;
     }
-    #swarmview, #helpview {
+    #swarmview, #helpview, #settingsview {
         display: none; height: 1fr; padding: 0 2;
         background: $bg_deep; color: $accent;
     }
@@ -557,6 +560,9 @@ class RelayApp(App):
         Binding("space", "toggle", "Arm: off/safe/wild/insane"),
         Binding("p", "pause", "Pause/resume acting"),
         Binding("s", "shadow", "Shadow-arm (dry-run this tab)"),
+        Binding("comma", "settings", "Settings"),
+        Binding("left", "settings_left", "Change", show=False),
+        Binding("right", "settings_right", "Change", show=False),
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
@@ -582,6 +588,14 @@ class RelayApp(App):
         self._swarm_visible = False
         self._help_visible = False
         self._audit_visible = False
+        self._settings_visible = False
+        self._settings_cursor = 0
+        # self.watcher isn't set until the async _connect() worker creates it
+        # (see below) - there's no Config to snapshot yet at __init__ time.
+        # _connect() fills these in once the watcher (and its .cfg) exist;
+        # _render_settings() guards against them still being None.
+        self._running_cfg = None      # restart baseline
+        self._working_cfg = None      # edits in progress (autosaved as they land)
         self._swarm_db = None
         self._restore_armed = False
         self._wipe_armed = False
@@ -609,6 +623,7 @@ class RelayApp(App):
                 yield Static("", id="preview", markup=False)
             yield Static("", id="swarmview")
             yield Static(help_text(), id="helpview")
+            yield Static("", id="settingsview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
 
@@ -654,6 +669,8 @@ class RelayApp(App):
                 dry_run=self.dry_run,
                 own_sid=self._own_sid,
             )
+            self._running_cfg = self.watcher.cfg
+            self._working_cfg = self.watcher.cfg
             # One poll loop reads every visible/armed session every 2s.
             await self.watcher.start(interval=2.0)
         except Exception as e:
@@ -1010,6 +1027,9 @@ class RelayApp(App):
         self._refresh()
 
     def action_pause(self) -> None:
+        if self._settings_visible:
+            self._settings_play()
+            return
         if self.watcher:
             self.watcher.toggle_pause()
             self._refresh()
@@ -1035,10 +1055,76 @@ class RelayApp(App):
             self.watcher.set_all(False)
             self._refresh()
 
+    # --- settings editor (, toggles a full-width config overlay) -------------
+    def action_settings(self) -> None:
+        if self._swarm_visible and not self._settings_visible:
+            self.action_swarm_view()      # leave swarm first
+        if self._help_visible and not self._settings_visible:
+            self.action_help()            # ...and help, same reason
+        self._settings_visible = not self._settings_visible
+        on = self._settings_visible
+        self.query_one("#middle").styles.display = "none" if on else "block"
+        self.query_one("#log").styles.display = "none" if on else "block"
+        self.query_one("#settingsview").styles.display = "block" if on else "none"
+        if on:
+            self._render_settings()
+
+    def _render_settings(self) -> None:
+        if self._working_cfg is None:
+            return
+        w = self.query_one("#settingsview").size.width - 4
+        self.query_one("#settingsview", Static).update(
+            settingsmod.render(self._working_cfg, self._running_cfg,
+                               self._settings_cursor, max(40, w)))
+
+    def _settings_move(self, step: int) -> None:
+        n = len(settingsmod.SETTINGS)
+        self._settings_cursor = (self._settings_cursor + step) % n
+        self._render_settings()
+
+    def _settings_change(self, direction: int) -> None:
+        if self._working_cfg is None:
+            return
+        field = settingsmod.SETTINGS[self._settings_cursor][1]
+        self._working_cfg = settingsmod.change(self._working_cfg, field,
+                                               direction)
+        if settingsmod.is_live(field) and self.watcher:
+            setattr(self.watcher, field, getattr(self._working_cfg, field))
+        try:
+            cfgmod.save(self._working_cfg)
+        except Exception as e:
+            self.query_one(Log).write_line(f"config save failed: {e}")
+        self._render_settings()
+
+    def _settings_play(self) -> None:
+        if self._working_cfg is None:
+            return
+        field = settingsmod.SETTINGS[self._settings_cursor][1]
+        if not settingsmod.is_live(field):
+            return
+        path = getattr(self._working_cfg, field)
+        if path:
+            try:
+                subprocess.Popen(["afplay", path],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    def action_settings_left(self) -> None:
+        if self._settings_visible:
+            self._settings_change(-1)
+
+    def action_settings_right(self) -> None:
+        if self._settings_visible:
+            self._settings_change(+1)
+
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
         if self._help_visible:
             self.action_help()            # close help first; TAB then flips
+        if self._settings_visible:
+            self.action_settings()        # ...and settings, same reason
         self._swarm_visible = not self._swarm_visible
         on = self._swarm_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -1054,7 +1140,9 @@ class RelayApp(App):
 
     # --- ESC: universal "take me back" for every overlay ----------------------
     def action_dismiss_view(self) -> None:
-        if self._help_visible:
+        if self._settings_visible:
+            self.action_settings()
+        elif self._help_visible:
             self.action_help()
         elif self._audit_visible:
             self.action_audit_view()
@@ -1065,6 +1153,8 @@ class RelayApp(App):
     def action_help(self) -> None:
         if self._swarm_visible and not self._help_visible:
             self.action_swarm_view()      # leave the swarm view first
+        if self._settings_visible and not self._help_visible:
+            self.action_settings()        # ...and settings, same reason
         self._help_visible = not self._help_visible
         on = self._help_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -1121,9 +1211,15 @@ class RelayApp(App):
             self._refresh()
 
     def action_cursor_up(self) -> None:
+        if self._settings_visible:
+            self._settings_move(-1)
+            return
         self._move_cursor(-1)
 
     def action_cursor_down(self) -> None:
+        if self._settings_visible:
+            self._settings_move(+1)
+            return
         self._move_cursor(+1)
 
     def _move_cursor(self, step: int) -> None:
