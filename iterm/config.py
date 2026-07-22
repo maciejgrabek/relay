@@ -4,8 +4,10 @@
     style = off            ; off | glyphs | words | hybrid
 
     [sounds]
-    alert = /System/Library/Sounds/Sosumi.aiff
-    done  = /System/Library/Sounds/Glass.aiff
+    alert   = /System/Library/Sounds/Sosumi.aiff   ; needs-a-look (stale, error)
+    done    = /System/Library/Sounds/Glass.aiff     ; a task/epic completed
+    danger  = /System/Library/Sounds/Basso.aiff     ; about to run something bad
+    message = /System/Library/Sounds/Tink.aiff      ; a worker messaged you
 
     [swarm]
     stale_minutes   = 10   ; mirrors RELAY_STALE_MINUTES

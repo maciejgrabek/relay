@@ -187,6 +187,8 @@ class Watcher:
         self.arm_grace = 20.0              # spawn pre-arm window (s), > boot delay
         self._mode_restored: set = set()   # sids whose persisted mode was restored
         self.paused = False                # frozen hands (approvals+deliveries)
+        self._approvals = 0                # monotonic session tally (survives a
+        #                                    tab closing, unlike summed n_approved)
         # --- tab-title prefixes (style from config; off = fully inert) ---
         self._titled: set = set()          # session ids we wrote a prefix to
         self._title_err_noted: set = set() # sessions with a logged write error
@@ -502,6 +504,7 @@ class Watcher:
         await info._iterm_session.async_send_text("\r")
         info.state = "cleared"
         info.n_approved += 1
+        self._approvals += 1
         self._note(f"INJECT {info.title}: {(decision.command or '<unparsed>')[:60]}")
 
     # --- swarm ------------------------------------------------------------------
