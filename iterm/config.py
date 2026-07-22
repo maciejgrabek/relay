@@ -38,6 +38,8 @@ class Config:
     title_style: str = "off"
     alert_sound: str = "/System/Library/Sounds/Sosumi.aiff"
     done_sound: str = "/System/Library/Sounds/Glass.aiff"
+    danger_sound: str = "/System/Library/Sounds/Basso.aiff"
+    message_sound: str = "/System/Library/Sounds/Tink.aiff"
     stale_minutes: float = 10.0
     notify_cooldown: float = 30.0
     spawn_arm: str = "off"
@@ -138,6 +140,9 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         title_style=style,
         alert_sound=cp.get("sounds", "alert", fallback=d.alert_sound).strip(),
         done_sound=cp.get("sounds", "done", fallback=d.done_sound).strip(),
+        danger_sound=cp.get("sounds", "danger", fallback=d.danger_sound).strip(),
+        message_sound=cp.get("sounds", "message",
+                             fallback=d.message_sound).strip(),
         stale_minutes=stale,
         notify_cooldown=cooldown,
         spawn_arm=arm,

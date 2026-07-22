@@ -36,6 +36,19 @@ def run():
                 and cfg.done_sound.endswith("Glass.aiff"))
     ok &= check("missing file -> no warnings", warns == [])
 
+    # New sound keys: defaults present, and overridable.
+    ok &= check("missing file -> new sound defaults",
+                cfg.danger_sound.endswith("Basso.aiff")
+                and cfg.message_sound.endswith("Tink.aiff"))
+    p2 = _write("[sounds]\ndanger = /a/x.aiff\nmessage = /a/y.aiff\n")
+    cfg2, _ = config.load(p2)
+    ok &= check("sound keys read from file",
+                cfg2.danger_sound == "/a/x.aiff"
+                and cfg2.message_sound == "/a/y.aiff")
+    ok &= check("unset new keys fall back to defaults, others still read",
+                config.load(_write("[sounds]\ndanger = /a/z.aiff\n"))[0]
+                .message_sound.endswith("Tink.aiff"))
+
     # Full file -> every key read.
     p = _write("[titles]\nstyle = hybrid\n"
                "[sounds]\nalert = /tmp/a.aiff\ndone = /tmp/d.aiff\n"
