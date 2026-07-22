@@ -197,6 +197,19 @@ def mascot_state(band: str, *, alarmed: bool, working: bool,
     return "guarding" if armed else "idle"
 
 
+def effective_mascot_state(band, *, awaiting, working, armed, reaction=None):
+    """The state that drives the frame + color, folding in a momentary reaction.
+    A 'danger' reaction is its own flinch (it IS the alarm). A 'done' reaction
+    celebrates - unless a human is already needed (alarmed) or the core is
+    critical, which outrank a celebration. No reaction -> the base ladder."""
+    if reaction == "danger":
+        return "flinch"
+    base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed)
+    if reaction == "done" and base not in ("alarmed", "critical"):
+        return "celebrate"
+    return base
+
+
 # The creature's working vocabulary - rotates every ~8s while relay acts.
 # Same spirit as Claude Code's status verbs: fun, but never misleading (it
 # only "works" when relay actually did something recently).
@@ -209,6 +222,12 @@ MASCOT_WORKING_PHRASES = (
 MASCOT_GUARD_PHRASES = (
     "guarding {n}.", "on watch.", "eyes on {n}.", "covering {n}.",
     "nothing needs you.", "all quiet on {n}.",
+)
+# When relay has cleared work this run, the guard lines report substance -
+# "N cleared" is the walk-away-trust sentence. {n}=armed, {a}=approvals.
+MASCOT_GUARD_TALLY_PHRASES = (
+    "{a} cleared, quiet.", "guarding {n} · {a} done.",
+    "eyes on {n} · {a} cleared.", "nothing needs you ({a} done).",
 )
 # Off duty (nothing armed) - relay only watches; the last line teaches.
 MASCOT_OFF_PHRASES = (
@@ -229,18 +248,25 @@ def _speech_bubble(text: str) -> list:
 
 
 def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
-                    working: bool = False, armed: int = 0) -> list:
+                    working: bool = False, armed: int = 0,
+                    approvals: int = 0, reaction=None) -> list:
     """The banner creature: a tiny CRT monitor (antenna, screen, feet) that
     watches the fleet from beside the RELAY logo, keyed to the 0.5s reactor
     tick. Its speech bubble says the one thing that matters right now; its
     motion budget is spent by meaning - idle barely moves, only ALARMED
     shakes. Returns equal-height lines (ragged right edges are fine)."""
-    state = mascot_state(band, alarmed=awaiting > 0, working=working,
-                         armed=armed)
+    state = effective_mascot_state(band, awaiting=awaiting, working=working,
+                                   armed=armed, reaction=reaction)
     beacon, mid = " ", "      "
     say = MASCOT_OFF_PHRASES[tick // 48 % len(MASCOT_OFF_PHRASES)]
     shake = False
-    if state == "alarmed":
+    if state == "celebrate":
+        eyes, mid, mouth, beacon = " ^  ^ ", "   ✓  ", "  ◡   ", "★"
+        say = "task done ★"
+    elif state == "flinch":
+        eyes, mid, mouth, beacon = " O  O ", "   !  ", "  □   ", "!"
+        say = "whoa - danger"
+    elif state == "alarmed":
         eyes, mouth = " ⊙  ⊙ ", "  ▽   "
         beacon = "‼" if tick % 2 == 0 else " "
         say = f"‼ {awaiting} need you" if awaiting > 1 else "‼ 1 needs you"
@@ -259,7 +285,9 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
                3: "   ·  ", 4: "    · ", 5: "     ·"}[tick % 6]
         beacon = "⌁" if tick % 2 == 0 else " "
         verb = MASCOT_WORKING_PHRASES[tick // 16 % len(MASCOT_WORKING_PHRASES)]
-        say = verb + "." * (tick % 4)
+        say = verb + ("." * (tick % 4))
+        if approvals:
+            say = f"{verb} · {approvals}"
     elif state == "guarding":
         t = tick % 24
         if t == 0:
@@ -272,8 +300,12 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
             eyes = " •  • "
         mouth = "  ‿   "
         beacon = "⌖"
-        say = MASCOT_GUARD_PHRASES[
-            tick // 48 % len(MASCOT_GUARD_PHRASES)].format(n=armed)
+        if approvals:
+            phrases = MASCOT_GUARD_TALLY_PHRASES
+            say = phrases[tick // 48 % len(phrases)].format(n=armed, a=approvals)
+        else:
+            say = MASCOT_GUARD_PHRASES[
+                tick // 48 % len(MASCOT_GUARD_PHRASES)].format(n=armed)
     else:
         # Off duty: relaxed lids, antenna dark, the occasional full blink.
         eyes = " ▂  ▂ " if tick % 24 == 0 else " ─  ─ "
@@ -294,20 +326,22 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
 # (amber = a session awaits you, exactly like the ‼ AWAITING row; red =
 # CRITICAL, like the reactor).
 _MASCOT_COLOR = {"alarmed": WARN, "critical": DANGER,
-                 "working": BRIGHT, "guarding": ACCENT, "idle": DIM}
+                 "working": BRIGHT, "guarding": ACCENT, "idle": DIM,
+                 "celebrate": BRIGHT, "flinch": WARN}
 
 
 def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
-                     working: bool = False, armed: int = 0) -> str:
+                     working: bool = False, armed: int = 0,
+                     approvals: int = 0, reaction=None) -> str:
     """The RELAY block logo (theme-colored by CSS) with the creature on its
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
-    state = mascot_state(band, alarmed=awaiting > 0, working=working,
-                         armed=armed)
+    state = effective_mascot_state(band, awaiting=awaiting, working=working,
+                                   armed=armed, reaction=reaction)
     color = _MASCOT_COLOR[state]
     logo = BANNER.split("\n")
     face = mascot_face_big(tick, band, awaiting=awaiting, working=working,
-                           armed=armed)
+                           armed=armed, approvals=approvals, reaction=reaction)
     h = max(len(logo), len(face))
     logo = logo + [""] * (h - len(logo))
     face = face + [""] * (h - len(face))
@@ -804,6 +838,13 @@ class RelayApp(App):
             self._mascot_active_until = self._tick + 6
         awaiting = attention_count(self.watcher.sessions.values(),
                                    self._own_sid)
+        REACTION_TTL = 1.5
+        reaction = None
+        ev = getattr(self.watcher, "_last_event", None)
+        if ev and (time.time() - ev[1]) <= REACTION_TTL:
+            reaction = ev[0]
+        approvals = sum(i.n_approved for i in self.watcher.sessions.values()
+                        if i.session_id != self._own_sid)
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
@@ -811,7 +852,8 @@ class RelayApp(App):
                 self._tick, label, awaiting=awaiting,
                 working=self._tick < getattr(self, "_mascot_active_until", 0),
                 armed=sum(1 for i in self.watcher.sessions.values()
-                          if i.active and i.session_id != self._own_sid)))
+                          if i.active and i.session_id != self._own_sid),
+                approvals=approvals, reaction=reaction))
         except Exception:
             pass
 

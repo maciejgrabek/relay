@@ -301,6 +301,37 @@ async def go():
         await pilot.pause()
     chk("idle q quits instantly (guard never armed)", not ai._quit_armed)
 
+    # --- mascot barometer: cleared tally + earned reactions -------------------
+    from app import mascot_face_big, effective_mascot_state
+
+    def joined(**kw):
+        return " ".join(mascot_face_big(0, kw.pop("band", "ok"), **kw))
+
+    chk("guarding shows the cleared tally",
+        "12" in joined(armed=3, approvals=12))
+    chk("guarding tally absent when zero approvals",
+        "cleared" not in joined(armed=3, approvals=0))
+    chk("working shows the tally",
+        "12" in joined(armed=3, working=True, approvals=12))
+    chk("done reaction renders celebration",
+        "done" in joined(armed=3, approvals=5, reaction="done")
+        and "★" in joined(armed=3, approvals=5, reaction="done"))
+    chk("danger reaction renders flinch",
+        "danger" in joined(armed=3, reaction="danger")
+        and "!" in joined(armed=3, reaction="danger"))
+    # Precedence: a pending human need outranks a 'done' celebration.
+    chk("done does not override alarmed",
+        effective_mascot_state("ok", awaiting=1, working=False,
+                               armed=1, reaction="done") == "alarmed")
+    chk("danger reaction wins as flinch",
+        effective_mascot_state("ok", awaiting=0, working=False,
+                               armed=1, reaction="danger") == "flinch")
+    chk("no reaction -> base state",
+        effective_mascot_state("ok", awaiting=0, working=False,
+                               armed=2, reaction=None) == "guarding")
+    chk("face is always 6 lines",
+        len(mascot_face_big(0, "ok", armed=3, reaction="done")) == 6)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
