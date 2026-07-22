@@ -226,6 +226,10 @@ def run():
     ok &= check("danger caught as dangerous (not parse-fail)",
                 d.reason == "dangerous command" and bool(d.command))
 
+    from gates import DANGEROUS_COMMAND
+    ok &= check("DANGEROUS_COMMAND constant is the danger reason string",
+                DANGEROUS_COMMAND == "dangerous command")
+
     # Real question -> NOTIFY (hands off)
     d = classify(FIX_QUESTION)
     ok &= check(f"question -> NOTIFY ({d.reason})", d.action == Action.NOTIFY)
