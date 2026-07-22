@@ -790,6 +790,11 @@ on the next relay start (the editor tags those fields "restart to apply"). On
 Apple Silicon the status-bar badge also needs Rosetta 2 - `relay doctor`
 checks it.
 
+Note: `RELAY_STALE_MINUTES` and `RELAY_NOTIFY_COOLDOWN` override the config
+file when set in your shell environment, so if either is exported, editing
+the matching setting in this panel is saved to the file but has no effect
+until you unset the environment variable.
+
 ### Tab-title prefixes
 
 Set `[titles] style` and Relay rewrites the iTerm2 tab title itself, so arm
