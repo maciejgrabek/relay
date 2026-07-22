@@ -152,7 +152,8 @@ else
       echo "      menu Scripts > AutoLaunch > relay_statusbar.py"
       echo "   2. ADD the badge to your bar: Settings > Profiles >"
       echo "      <profile> > Session > Configure Status Bar > drag 'Relay'"
-      echo "      in (and tick 'Status bar enabled')."
+      echo "      in (and tick 'Status bar enabled'). 'Relay' only appears"
+      echo "      in that list once step 1's provider is running."
       echo "  Check anytime with:  relay doctor"
       ;;
     *)
