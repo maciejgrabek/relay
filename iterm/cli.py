@@ -459,6 +459,25 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_recap(args) -> int:
+    """Summarize what relay did (reads the audit log + task board; never
+    mutates). Default window: today; --all for all time."""
+    import audit
+    import recap
+    since = 0.0 if getattr(args, "all", False) else recap.start_of_today()
+    s = recap.summarize(audit.read_tail(limit=100000), since)
+    conn = db.connect()
+    from collections import Counter
+    by = Counter(t["state"] for t in db.list_tasks(conn))
+    window = "all time" if since == 0.0 else "today"
+    print(f"relay recap ({window})")
+    print(f"  cleared {s['cleared']} · woke you {s['woke']}x · "
+          f"delivered {s['delivered']}")
+    print(f"  tasks: {by['done']} done · {by['doing']} doing · "
+          f"{by['blocked']} blocked · {by['todo']} todo")
+    return 0
+
+
 def _doctor_statusbar(cfg) -> None:
     """Report the three independent steps the status-bar badge needs, so a
     fresh laptop can see exactly which one is missing. iTerm2's Python API
@@ -859,6 +878,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
     dr.set_defaults(fn=cmd_doctor)
+
+    rp = sub.add_parser("recap",
+                        help="summarize what relay did today (reads audit log)")
+    rp.add_argument("--all", action="store_true",
+                    help="all time, not just today")
+    rp.set_defaults(fn=cmd_recap)
 
     dm = sub.add_parser("demo", help="guided 60s tour: spawn a demo worker "
                                      "and watch the whole loop run")

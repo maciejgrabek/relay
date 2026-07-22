@@ -1280,6 +1280,16 @@ def main() -> None:
     # iTerm2's own gestures (two-finger swipe between tabs, native scroll).
     # The terminal keeps its input; relay keeps its keys.
     RelayApp(dry_run=dry).run(mouse=False)
+    # Legible Relay: a one-line recap once the panel closes (best-effort).
+    try:
+        import audit
+        import recap
+        s = recap.summarize(audit.read_tail(limit=100000),
+                            recap.start_of_today())
+        print(f"relay: today - cleared {s['cleared']} · "
+              f"woke you {s['woke']}x · delivered {s['delivered']}")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
