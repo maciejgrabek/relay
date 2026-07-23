@@ -235,6 +235,41 @@ async def go():
     await w._handle(ld, ["just some quiet screen text", "nothing to do here"], [True, True])
     chk("NONE screen does not overwrite last_decision", ld.last_decision == "safe permission prompt")
 
+    # --- exited Claude: a shell in the foreground means there is no live prompt.
+    # After you quit Claude the tab drops back to the shell, but Claude's last
+    # permission frame can linger on the visible screen. The foreground job is
+    # now a shell, so relay must NOT read that stale frame as actionable: no
+    # blocked/LOCKED, no notify, and no stray Enter typed into your bare shell.
+    notify["n"] = 0
+    rows.clear()
+    fex = FakeSession()
+    ex = SessionInfo("ex", title="exited", _iterm_session=fex, mode="safe",
+                     job="-zsh")
+    w.sessions["ex"] = ex
+    for _ in range(3):
+        await w._handle(ex, draw, dhard)   # leftover DANGER frame under a shell
+    chk("exited/shell: not blocked (no LOCKED)", ex.state != "blocked")
+    chk("exited/shell: no notify", notify["n"] == 0)
+
+    fexs = FakeSession()
+    exs = SessionInfo("exs", title="exited-safe", _iterm_session=fexs,
+                      mode="safe", job="zsh")
+    w.sessions["exs"] = exs
+    sraw3, shard3 = _safe()
+    await w._handle(exs, sraw3, shard3)     # leftover SAFE frame under a shell
+    chk("exited/shell: no stray Enter into shell", fexs.sent == [])
+
+    # A live Claude prompt (foreground job 'node') must still escalate as before.
+    notify["n"] = 0
+    rows.clear()
+    fnode = FakeSession()
+    live = SessionInfo("live", title="live", _iterm_session=fnode, mode="safe",
+                       job="node")
+    w.sessions["live"] = live
+    await w._handle(live, draw, dhard)
+    chk("live claude (job=node): still escalates danger", notify["n"] == 1)
+    chk("live claude (job=node): shows blocked", live.state == "blocked")
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
