@@ -153,6 +153,10 @@ Two limits you must accept:
 - iTerm2 with the **Python API enabled** (Settings -> General -> Magic -> Enable
   Python API)
 - Python 3 with the `iterm2` and `textual` modules
+- Optional: `terminal-notifier` (`brew install terminal-notifier`). With it,
+  notifications show as **iTerm** and clicking one jumps to the exact session it
+  is about. Without it they fall back to `osascript`, which shows "Script
+  Editor" and has no click action. `relay doctor` reports which you have.
 
 ## Install and run
 

@@ -24,6 +24,8 @@ esac
 bad=0
 pass(){ printf '  \033[32m✓\033[0m %s\n' "$1"; }
 fail(){ printf '  \033[31m✗\033[0m %s\n' "$1"; bad=$((bad+1)); }
+# note() is for OPTIONAL extras - it never fails the install (bad stays 0).
+note(){ printf '  \033[33m•\033[0m %s\n' "$1"; }
 
 echo "Relay prerequisites:"
 
@@ -40,6 +42,16 @@ for mod in iterm2 textual; do
     fail "$mod not installed -> pip install $mod"
   fi
 done
+
+# Optional: terminal-notifier. Without it, notifications still work (relay falls
+# back to osascript) but they show "Script Editor" and clicking one won't jump
+# to the iTerm session. With it, they show as iTerm and click focuses the tab.
+if command -v terminal-notifier >/dev/null 2>&1; then
+  pass "terminal-notifier (notifications show as iTerm, click jumps to session)"
+else
+  note "terminal-notifier not installed (optional) -> brew install terminal-notifier"
+  note "  without it: notifications work but show 'Script Editor' and click won't focus the tab"
+fi
 
 on_path=0
 case ":$PATH:" in *":$BIN:"*) on_path=1 ;; esac

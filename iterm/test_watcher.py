@@ -699,7 +699,7 @@ def escalation_ratelimit_tests():
     rows = [{"id": i, "kind": "escalation", "from_name": f"w{i}",
              "to_name": "c", "body": f"b{i}"} for i in range(3)]
     try:
-        W.notify_mac = lambda t, m, s: pings.append(m)
+        W.notify_mac = lambda t, m, s, **k: pings.append(m)
         W.swarmdb.undelivered = lambda conn: rows
         w = Watcher(connection=None, dry_run=False)
         w._swarm_conn = lambda: None
@@ -840,7 +840,7 @@ def legible_spine_tests():
     try:
         row = {"id": 1, "kind": "escalation", "from_name": "w1",
                "to_name": "c", "body": "help"}
-        W.notify_mac = lambda t, m, s: captured.append(s)
+        W.notify_mac = lambda t, m, s, **k: captured.append(s)
         W.swarmdb.undelivered = lambda conn: [row]
         W.swarm.escalation_pings = lambda msgs, seen: msgs
         w = Watcher(connection=None, dry_run=False)
@@ -860,7 +860,7 @@ def legible_spine_tests():
     try:
         tasks = [{"id": 1, "state": "done"}]
         W.swarmdb.list_tasks = lambda conn: list(tasks)
-        W.notify_mac = lambda t, m, s: fired.append(s)
+        W.notify_mac = lambda t, m, s, **k: fired.append(s)
         w2 = Watcher(connection=None, dry_run=False)
         w2._swarm_conn = lambda: None
         w2._check_completions()
@@ -1029,6 +1029,74 @@ async def shadow_tests():
     return ok
 
 
+def notify_mac_tests():
+    """notify_mac routes through terminal-notifier (attributed to iTerm, click
+    jumps to the session) when it's on PATH, and falls back to osascript
+    otherwise. Asserts on the spawned argv, not on real notifications."""
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    # Earlier tests overwrite W.notify_mac with counter stubs and don't restore
+    # it, so reload to get the real implementation back before exercising it.
+    import importlib
+    importlib.reload(W)
+
+    calls = []
+    real_popen = W.subprocess.Popen
+    real_tn = W._TERMINAL_NOTIFIER
+    try:
+        W.subprocess.Popen = lambda cmd, **k: calls.append(cmd)
+
+        # --- terminal-notifier present, with a session_id -> click jumps ---
+        W._TERMINAL_NOTIFIER = "/opt/tn"
+        calls.clear()
+        W.notify_mac("Relay - w1", "danger", None, session_id="ABC-123")
+        argv = calls[0]
+        chk("uses terminal-notifier binary", argv[0] == "/opt/tn")
+        chk("attributed to iTerm via -sender",
+            "-sender" in argv
+            and argv[argv.index("-sender") + 1] == W.ITERM_BUNDLE_ID)
+        chk("click focuses the session via -execute + focus script",
+            "-execute" in argv
+            and argv[argv.index("-execute") + 1]
+                == f'"{W._FOCUS_SCRIPT}" ABC-123')
+        chk("no -activate when a session is targeted", "-activate" not in argv)
+
+        # --- terminal-notifier present, no session_id -> just activate iTerm ---
+        calls.clear()
+        W.notify_mac("Relay - done", "1 task", None)
+        argv = calls[0]
+        chk("global notify activates iTerm generally",
+            "-activate" in argv
+            and argv[argv.index("-activate") + 1] == W.ITERM_BUNDLE_ID
+            and "-execute" not in argv)
+
+        # --- sound still fires afplay alongside the notification ---
+        calls.clear()
+        W.notify_mac("Relay - w1", "x", "/S.aiff", session_id="ABC")
+        chk("sound spawns afplay too",
+            any(c[:1] == ["afplay"] and "/S.aiff" in c for c in calls))
+
+        # --- terminal-notifier absent -> osascript fallback (no click) ---
+        W._TERMINAL_NOTIFIER = None
+        calls.clear()
+        W.notify_mac("Relay - w1", 'has "quote" and \\ back', None)
+        argv = calls[0]
+        chk("falls back to osascript", argv[0] == "osascript")
+        chk("osascript neutralizes the message's double quotes",
+            "has 'quote'" in argv[-1] and 'has "quote"' not in argv[-1])
+    finally:
+        W.subprocess.Popen = real_popen
+        W._TERMINAL_NOTIFIER = real_tn
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -1041,5 +1109,6 @@ if __name__ == "__main__":
     r9 = legible_spine_tests()
     r10 = asyncio.run(pause_tests())
     r11 = asyncio.run(shadow_tests())
+    r12 = notify_mac_tests()
     sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10 and r11) else 1)
+                   and r9 and r10 and r11 and r12) else 1)

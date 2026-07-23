@@ -455,8 +455,28 @@ def cmd_doctor(args) -> int:
         for s in orphans:
             print(f"    {s['name']} (workdir: {s['workdir'] or 'unknown'})")
 
+    _doctor_notify()
     _doctor_statusbar(cfg)
     return 0
+
+
+def _doctor_notify() -> None:
+    """Report whether terminal-notifier is installed. Without it macOS
+    notifications fall back to osascript: they show 'Script Editor' and clicking
+    one opens Script Editor instead of jumping to the iTerm session. With it,
+    notifications show as iTerm and click focuses the exact tab."""
+    import shutil
+    ok = "\033[32m✓\033[0m"
+    no = "\033[31m✗\033[0m"
+    have = shutil.which("terminal-notifier")
+    print("  notifications:")
+    if have:
+        print(f"    {ok} terminal-notifier ({have}) - shown as iTerm, "
+              f"click jumps to the session")
+    else:
+        print(f"    {no} terminal-notifier not installed - notifications show "
+              f"'Script Editor' and click won't focus the tab")
+        print("        -> brew install terminal-notifier")
 
 
 def cmd_recap(args) -> int:

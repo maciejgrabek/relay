@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -119,19 +120,54 @@ def _extract_lines(contents) -> tuple[List[str], List[str]]:
     return raw, hard
 
 
-def notify_mac(title: str, message: str, sound: Optional[str]) -> None:
-    """Fire a macOS notification + optional sound. Best-effort, never raises."""
+# iTerm2's bundle id and our click-handler script. When terminal-notifier is on
+# PATH we route notifications through it so they are attributed to iTerm (its
+# icon + name) instead of "Script Editor" - the osascript host that plain
+# `display notification` credits - and, more importantly, so CLICKING a
+# notification runs focus_session.sh and jumps to the exact iTerm tab instead of
+# opening Script Editor. Resolved once at import; None means fall back to
+# osascript (no click action - the pre-terminal-notifier behavior).
+ITERM_BUNDLE_ID = "com.googlecode.iterm2"
+_FOCUS_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "focus_session.sh")
+_TERMINAL_NOTIFIER = shutil.which("terminal-notifier")
+
+
+def notify_mac(title: str, message: str, sound: Optional[str],
+               session_id: Optional[str] = None) -> None:
+    """Fire a macOS notification + optional sound. Best-effort, never raises.
+
+    With terminal-notifier installed the notification shows as iTerm and, when a
+    `session_id` is given, clicking it focuses that iTerm session (the tab the
+    alert is about) via focus_session.sh; without a session_id the click just
+    activates iTerm. When terminal-notifier is absent we fall back to a plain
+    osascript notification (shows Script Editor, no click action)."""
     try:
-        # osascript notification (no extra deps). Escape backslash FIRST (else a
-        # trailing '\' would escape the closing quote of the AppleScript string),
-        # then swap double quotes for apostrophes so they can't end the string.
-        t = title.replace("\\", "\\\\").replace('"', "'")[:120]
-        m = message.replace("\\", "\\\\").replace('"', "'")[:200]
-        subprocess.Popen(
-            ["osascript", "-e",
-             f'display notification "{m}" with title "{t}"'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        if _TERMINAL_NOTIFIER:
+            cmd = [_TERMINAL_NOTIFIER,
+                   "-title", title[:120],
+                   "-message", message[:200],
+                   "-sender", ITERM_BUNDLE_ID]
+            if session_id:
+                # -execute wins the click; quote the path (session_id is a
+                # GUID - hex + dashes - so no shell/AppleScript injection risk).
+                cmd += ["-execute", f'"{_FOCUS_SCRIPT}" {session_id}']
+            else:
+                cmd += ["-activate", ITERM_BUNDLE_ID]
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        else:
+            # osascript notification (no extra deps). Escape backslash FIRST
+            # (else a trailing '\' would escape the closing quote of the
+            # AppleScript string), then swap double quotes for apostrophes so
+            # they can't end the string.
+            t = title.replace("\\", "\\\\").replace('"', "'")[:120]
+            m = message.replace("\\", "\\\\").replace('"', "'")[:200]
+            subprocess.Popen(
+                ["osascript", "-e",
+                 f'display notification "{m}" with title "{t}"'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
         if sound:
             subprocess.Popen(["afplay", sound],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -504,7 +540,8 @@ class Watcher:
                                           if decision.command else ""),
                        _notify_sound(decision.reason,
                                      danger=self.danger_sound,
-                                     alert=self.alert_sound))
+                                     alert=self.alert_sound),
+                       session_id=info.session_id)
             return
 
         # --- approve path ---
@@ -539,7 +576,7 @@ class Watcher:
             self._note(f"AUDIT-FAIL {info.title}: not injecting (log write failed)")
             notify_mac(f"Relay - {info.title}",
                        "audit log write failed - NOT auto-approving",
-                       self.alert_sound)
+                       self.alert_sound, session_id=info.session_id)
             return
         await info._iterm_session.async_send_text("\r")
         info.state = "cleared"
@@ -605,13 +642,14 @@ class Watcher:
                         self._mode_restored.add(sid)
                         self._note(f"ARMED {d['name']} -> {req} (spawn request)")
                         notify_mac(f"Relay - {d['name']}",
-                                   f"armed {req} on spawn", self.alert_sound)
+                                   f"armed {req} on spawn", self.alert_sound,
+                                   session_id=sid)
                     else:
                         self._note(f"REFUSED arm escalation {d['name']} -> {req}")
                         notify_mac(f"Relay - {d['name']}",
                                    f"refused arm escalation to {req} "
                                    f"(request outside spawn window)",
-                                   self.alert_sound)
+                                   self.alert_sound, session_id=sid)
                 # Restore a persisted arm level after a restart: only at first
                 # sight, only if no fresh spawn arm_request took precedence, and
                 # only once (later ticks must not re-apply a stale stored value
@@ -814,7 +852,7 @@ class Watcher:
                 info._stale_notified = True
                 self._note(f"STALE {reg['name']}: {reason}")
                 notify_mac(f"Relay - {reg['name']} STALE", reason,
-                           self.alert_sound)
+                           self.alert_sound, session_id=info.session_id)
         else:
             info.stale = False
             info._stale_notified = False
