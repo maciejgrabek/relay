@@ -33,6 +33,21 @@ from gates import (classify, Action, Decision, reconstruct_lines,
 # title from relay's `caffeinate` child - accurate, but not what the panel IS.
 OWN_TAB_NAME = "RELAY CONSOLE"
 
+# Login shells iTerm2 may report as a tab's foreground job. When one of these is
+# in front, no program (Claude) is running in the tab.
+_SHELL_JOBS = frozenset({
+    "zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash", "login",
+})
+
+
+def _is_shell_job(job: str) -> bool:
+    """True when iTerm2 reports a plain login shell as the tab's foreground job -
+    i.e. Claude is NOT running in it. A leading '-' marks a login shell (e.g.
+    '-zsh'); strip it before matching. Unknown/empty -> False, so an unreadable
+    job never suppresses a real prompt (fail safe toward escalating)."""
+    j = (job or "").strip().lstrip("-").lower()
+    return j in _SHELL_JOBS
+
 
 def _own_tab_profile(on: bool):
     """Write-only profile fragment for relay's own tab color: relay-phosphor
@@ -71,6 +86,7 @@ class SessionInfo:
     #              (cursor not on option 1, unparseable). Permission prompts only.
     mode: str = "off"
     hidden: bool = False             # user hid it from the list (UI-only filter)
+    job: str = ""                    # iTerm2 foreground job name (shell => no live Claude)
     state: str = "idle"              # idle | working | prompting | blocked | cleared
     last_command: str = ""
     last_seen: float = 0.0
@@ -320,6 +336,18 @@ class Watcher:
                 return v.strip()
         return s.session_id[:8]
 
+    @staticmethod
+    async def _session_job(s) -> str:
+        """iTerm2's foreground job name for the session (e.g. 'node', 'zsh'), or
+        '' when unavailable. Used to tell a live Claude tab from one dropped back
+        to a shell. Defensive: any iTerm2 version/timeout quirk falls back to ''
+        so an unreadable job never suppresses a real prompt."""
+        try:
+            v = await s.async_get_variable("jobName")
+        except Exception:
+            v = None
+        return v.strip() if isinstance(v, str) and v.strip() else ""
+
     async def _sync_sessions(self, app) -> None:
         seen = set()
         for wi, w in enumerate(app.windows):
@@ -333,10 +361,11 @@ class Watcher:
                     title = await self._session_label(s, tab)
                     raw_title = title
                     title = titles.strip_prefix(raw_title)
+                    job = await self._session_job(s)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
-                                           _iterm_session=s)
+                                           _iterm_session=s, job=job)
                         info._raw_title = raw_title
                         # Grab the current screen once so the list/preview has
                         # content immediately, without holding a streamer open.
@@ -347,6 +376,7 @@ class Watcher:
                         info._raw_title = raw_title
                         info.window_idx, info.tab_idx = wi, ti
                         info._iterm_session = s
+                        info.job = job
         # Drop sessions whose tabs closed.
         for sid in list(self.sessions):
             if sid not in seen:
@@ -377,6 +407,16 @@ class Watcher:
             return None
 
     async def _handle(self, info: SessionInfo, raw, hard) -> None:
+        # Foreground is a plain shell => no Claude is running in this tab, so any
+        # prompt text on screen is a leftover frame from an exited Claude, not a
+        # live prompt. Treat it exactly like "no actionable prompt": never mark
+        # blocked (the "⊘ LOCKED" tag), never inject a stray Enter into the
+        # shell. Fail safe: only a positively-identified shell suppresses; an
+        # unknown/unreadable job still runs the full classifier.
+        if _is_shell_job(info.job):
+            info.state = detect_state(reconstruct_lines(raw, hard))
+            return
+
         decision: Decision = classify(raw, hard)
 
         if decision.action == Action.NONE:
