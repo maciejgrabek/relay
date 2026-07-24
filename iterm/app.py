@@ -119,7 +119,7 @@ def _keys(pairs) -> str:
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"),
-           ("v", "audit")])
+           ("v", "audit"), ("f", "feed")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), (",", "settings"), ("R×2", "restore"),
@@ -427,6 +427,7 @@ def help_text() -> str:
         row("n", "jump to the selected session's iTerm2 tab"),
         row("x", "hide / show the selected session"),
         row("v", "audit view: what relay approved for this session"),
+        row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
         row(",", "settings editor - up/down move, left/right change, p plays a sound"),
@@ -567,6 +568,7 @@ class RelayApp(App):
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
         Binding("v", "audit_view", "Audit view", show=False),
+        Binding("f", "toggle_preview", "Feed on/off", show=False),
         Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("R", "restore", "Restore orphaned", show=True),
         Binding("W", "wipe", "Wipe orphaned", show=True),
@@ -589,6 +591,9 @@ class RelayApp(App):
         self._help_visible = False
         self._audit_visible = False
         self._settings_visible = False
+        # Preview (live-feed) pane visibility. Default shown; the real value is
+        # read from config in on_mount, toggled live by 'f', and persisted.
+        self._preview_visible = True
         self._settings_cursor = 0
         # self.watcher isn't set until the async _connect() worker creates it
         # (see below) - there's no Config to snapshot yet at __init__ time.
@@ -658,6 +663,13 @@ class RelayApp(App):
         table = self.query_one(DataTable)
         table.add_columns("MODE", "STATUS", "↻", "UNIT", "ROLE", "TASK NOW",
                           "✓/⊘", "LAST DIRECTIVE")
+        # Preview pane starts in its configured state (watcher isn't connected
+        # yet, so read config directly - same as the theme is read at import).
+        try:
+            self._preview_visible = cfgmod.load()[0].preview_panel
+        except Exception:
+            self._preview_visible = True
+        self._apply_preview()
         # Keep the Mac awake while open.
         if not os.environ.get("RELAY_NO_CAFFEINATE"):
             try:
@@ -911,7 +923,7 @@ class RelayApp(App):
             pass
 
     def _update_preview(self) -> None:
-        if not self.watcher:
+        if not self.watcher or not self._preview_visible:
             return
         preview = self.query_one("#preview", Static)
         # Onboarding: nothing to control (only relay's own tab) -> teach instead
@@ -989,6 +1001,8 @@ class RelayApp(App):
         # Live-update the preview as the cursor moves between rows, and pull a
         # fresh screen for the now-selected session so it reflects reality NOW.
         self._update_preview()
+        if not self._preview_visible:
+            return                        # hidden pane: don't pay for iTerm2 reads
         sid = self._selected_sid()
         if sid and sid != self._own_sid and self.watcher:
             # exclusive=True: fast j/k scrolling cancels the prior pull instead
@@ -1120,7 +1134,11 @@ class RelayApp(App):
         field = settingsmod.SETTINGS[self._settings_cursor][1]
         self._working_cfg = settingsmod.change(self._working_cfg, field,
                                                direction)
-        if settingsmod.is_live(field) and self.watcher:
+        if settingsmod.is_app_live(field):
+            # Lands on the TUI, not the watcher (e.g. preview pane visibility).
+            self._preview_visible = getattr(self._working_cfg, field)
+            self._apply_preview()
+        elif settingsmod.is_live(field) and self.watcher:
             setattr(self.watcher, field, getattr(self._working_cfg, field))
         try:
             cfgmod.save(self._working_cfg)
@@ -1131,8 +1149,9 @@ class RelayApp(App):
     def _settings_play(self) -> None:
         if self._working_cfg is None:
             return
-        field = settingsmod.SETTINGS[self._settings_cursor][1]
-        if not settingsmod.is_live(field):
+        row = settingsmod.SETTINGS[self._settings_cursor]
+        field, kind = row[1], row[2]
+        if kind != "sound":       # p only previews sounds; toggles have no sound
             return
         path = getattr(self._working_cfg, field)
         if path:
@@ -1164,6 +1183,41 @@ class RelayApp(App):
         self.query_one("#swarmview").styles.display = "block" if on else "none"
         if on:
             self._render_swarm_view()
+
+    # --- preview pane (f): hide/show the live terminal feed -------------------
+    def _apply_preview(self) -> None:
+        """Show or hide the #preview pane per self._preview_visible. Hidden ->
+        the #grid DataTable fills #middle on its own (Textual flex). Repaints
+        the pane when re-shown so it isn't stale."""
+        try:
+            pane = self.query_one("#preview", Static)
+        except Exception:
+            return
+        pane.styles.display = "block" if self._preview_visible else "none"
+        if self._preview_visible:
+            self._update_preview()
+
+    def _persist_preview(self) -> None:
+        """Write the preview choice through to ~/.relay/config so it survives a
+        restart, and keep the editor's working copy in sync. preview_panel is a
+        live field (settings.is_app_live), so no restart-baseline juggling is
+        needed. A save error must never break the toggle."""
+        import dataclasses
+        try:
+            base = (self._working_cfg if self._working_cfg is not None
+                    else cfgmod.load()[0])
+            self._working_cfg = dataclasses.replace(
+                base, preview_panel=self._preview_visible)
+            cfgmod.save(self._working_cfg)
+        except Exception as e:
+            self.query_one(Log).write_line(f"config save failed: {e}")
+
+    def action_toggle_preview(self) -> None:
+        if self._any_overlay_open():
+            return
+        self._preview_visible = not self._preview_visible
+        self._apply_preview()
+        self._persist_preview()
 
     # --- audit view (v): the preview pane shows this session's decisions -----
     def action_audit_view(self) -> None:

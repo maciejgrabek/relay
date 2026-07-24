@@ -48,6 +48,7 @@ class Config:
     statusbar_enabled: bool = False
     danger_preset: str = "default"
     theme: str = "phosphor"
+    preview_panel: bool = True
 
 
 def default_path() -> str:
@@ -122,6 +123,14 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(THEME_NAMES)} - using 'phosphor'")
         theme = "phosphor"
 
+    try:
+        preview = cp.getboolean("layout", "preview",
+                                fallback=d.preview_panel)
+    except ValueError:
+        warns.append("config: [layout] preview must be true/false - "
+                     "using true")
+        preview = True
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -151,6 +160,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         statusbar_enabled=statusbar,
         danger_preset=preset,
         theme=theme,
+        preview_panel=preview,
     ), warns
 
 
@@ -175,7 +185,9 @@ def dump(cfg: Config) -> str:
         "[danger]\n"
         f"preset = {cfg.danger_preset}\n\n"
         "[theme]\n"
-        f"name = {cfg.theme}\n"
+        f"name = {cfg.theme}\n\n"
+        "[layout]\n"
+        f"preview = {'true' if cfg.preview_panel else 'false'}\n"
     )
 
 

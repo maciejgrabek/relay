@@ -343,6 +343,38 @@ async def go():
         and "settings" in appmod.KEYBAR.lower())
     chk("help covers settings", "settings" in appmod.help_text().lower())
 
+    # --- preview pane toggle (f), persisted, + settings-editor parity --------
+    chk("KEYBAR + help advertise the feed toggle",
+        "feed" in appmod.KEYBAR.lower() and "feed" in appmod.help_text().lower())
+    pp = _TestApp(_one(), dry_run=True)
+    async with pp.run_test() as pilot:
+        await pilot.pause()
+        pane = pp.query_one("#preview", appmod.Static)
+        chk("preview shown by default", pp._preview_visible
+            and str(pane.styles.display) == "block")
+        await pilot.press("f")
+        await pilot.pause()
+        chk("f hides the preview pane", not pp._preview_visible
+            and str(pane.styles.display) == "none")
+        chk("hiding is persisted to config",
+            cfgmod.load()[0].preview_panel is False)
+        await pilot.press("f")
+        await pilot.pause()
+        chk("f again shows it, and re-persists",
+            pp._preview_visible and str(pane.styles.display) == "block"
+            and cfgmod.load()[0].preview_panel is True)
+        # the settings editor drives the SAME state (app-live, no restart).
+        await pilot.press("comma")
+        await pilot.pause()
+        pp._settings_cursor = [s[1] for s in appmod.settingsmod.SETTINGS].index(
+            "preview_panel")
+        await pilot.press("right")
+        await pilot.pause()
+        chk("settings toggle hides the pane live + persists",
+            not pp._preview_visible
+            and str(pane.styles.display) == "none"
+            and cfgmod.load()[0].preview_panel is False)
+
     # --- pause key path (app -> watcher.toggle_pause + PAUSED banner) --------
     pz = _TestApp(_one(), dry_run=True)
     async with pz.run_test() as pilot:

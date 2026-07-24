@@ -19,9 +19,23 @@ def run():
     ok = True
     c = config.Config()
 
-    ok &= check("is_live only for sounds",
+    ok &= check("is_live for sounds + the app-live preview toggle",
                 settings.is_live("alert_sound")
+                and settings.is_live("preview_panel")
                 and not settings.is_live("theme"))
+    ok &= check("is_app_live only for preview_panel",
+                settings.is_app_live("preview_panel")
+                and not settings.is_app_live("alert_sound")
+                and not settings.is_app_live("statusbar_enabled"))
+
+    # preview toggle flips like any other toggle.
+    ok &= check("preview toggle flips",
+                settings.change(c, "preview_panel", +1).preview_panel
+                is (not c.preview_panel))
+    # ...and being live, it never shows a 'restart to apply' tag.
+    prev_changed = settings.change(c, "preview_panel", +1)
+    ok &= check("no restart tag for the live preview change",
+                "restart" not in settings.render(prev_changed, c, 0, 60))
 
     # enum cycles and wraps
     t = settings.change(c, "theme", +1).theme

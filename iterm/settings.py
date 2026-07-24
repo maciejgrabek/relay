@@ -21,6 +21,7 @@ SETTINGS = [
     ("SOUNDS", "message_sound", "sound", None),
     ("APPEARANCE", "theme", "enum", _config.THEME_NAMES),
     ("APPEARANCE", "title_style", "enum", _config.TITLE_STYLES),
+    ("APPEARANCE", "preview_panel", "toggle", None),
     ("BEHAVIOR", "statusbar_enabled", "toggle", None),
     ("BEHAVIOR", "spawn_arm", "enum", _config.SPAWN_ARM_MODES),
     ("BEHAVIOR", "stale_minutes", "number", (1.0, 1.0)),
@@ -28,11 +29,23 @@ SETTINGS = [
     ("BEHAVIOR", "danger_preset", "enum", _config.DANGER_PRESETS),
 ]
 
+# _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
+# the running TUI (display) instead - same "no restart tag" treatment, but the
+# app, not the watcher, is where the change lands.
 _LIVE = {"alert_sound", "done_sound", "danger_sound", "message_sound"}
+_APP_LIVE = {"preview_panel"}
 
 
 def is_live(field: str) -> bool:
-    return field in _LIVE
+    """True when a change takes effect immediately (no restart) - whether its
+    target is the watcher (_LIVE) or the app's display (_APP_LIVE)."""
+    return field in _LIVE or field in _APP_LIVE
+
+
+def is_app_live(field: str) -> bool:
+    """True when the live target is the TUI itself (the app applies it), not the
+    watcher - so app._settings_change routes it to the display, not setattr."""
+    return field in _APP_LIVE
 
 
 def _descriptor(field):
