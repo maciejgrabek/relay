@@ -546,10 +546,10 @@ async def go():
     chk("timers_summary empty when no timers",
         appmod.timers_summary([], now=1000.0) == "")
     chk("help advertises timers", "timers" in appmod.help_text().lower())
-    chk("timer cell: count + soonest countdown, pending flag, else empty",
-        appmod.timer_cell(active=2, soonest_secs=125, pending=False) == "2·2m"
-        and appmod.timer_cell(active=0, soonest_secs=None, pending=True) == "?"
-        and appmod.timer_cell(active=0, soonest_secs=None, pending=False) == "")
+    chk("timer cell: active count, pending flag, else empty",
+        appmod.timer_cell(active=2, pending=False) == "2"
+        and appmod.timer_cell(active=0, pending=True) == "?"
+        and appmod.timer_cell(active=0, pending=False) == "")
 
     to = _TestApp(_one(), dry_run=True)
     async with to.run_test() as pilot:
