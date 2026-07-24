@@ -773,15 +773,23 @@ async def statusbar_registration_tests():
         await w._register_statusbar()
         chk("no provider -> relay registers in-process", registered["n"] == 1)
 
-        # (b) provider installed, not running -> relay must NOT register.
+        # (b) provider installed, not running -> relay must NOT register in
+        # process; instead it auto-starts the provider (statusbar_ensure). Inject
+        # a fake ensure so the test stays hermetic (no real osascript / spawn).
         open(link, "w").close()
-        w2 = Watcher(connection=None, dry_run=False, cfg=cfg)
-        registered["n"] = 0
-        await w2._register_statusbar()
+        import statusbar_ensure as SE
+        real_ensure = SE.ensure
+        SE.ensure = lambda: "start"
+        try:
+            w2 = Watcher(connection=None, dry_run=False, cfg=cfg)
+            registered["n"] = 0
+            await w2._register_statusbar()
+        finally:
+            SE.ensure = real_ensure
         chk("provider installed -> relay does NOT register (no collision)",
             registered["n"] == 0)
-        chk("provider installed but idle -> actionable note",
-            any("not running" in l for l in w2.log))
+        chk("provider installed but idle -> relay auto-starts it",
+            any("started" in l for l in w2.log))
 
         # (c) provider installed AND alive -> defer, say so.
         SB.touch_provider_alive(path=alive)

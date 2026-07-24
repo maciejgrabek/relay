@@ -520,10 +520,21 @@ def _doctor_statusbar(cfg) -> None:
     if not installed:
         print("        -> run ./install.sh (answer yes to the iTerm2 provider "
               "step); without it the badge slot ERRORS while relay is off")
-    print(f"    {ok if running else no} provider running")
+    # Self-heal: installed but not running is the common rot (symlink relinked
+    # after iTerm2 last launched). Start it now - same path relay + install use
+    # - then re-read liveness so the line below reflects the healed state.
+    heal_msg = None
     if installed and not running:
-        print("        -> start it: iTerm2 menu Scripts > AutoLaunch > "
-              "relay_statusbar.py, or just restart iTerm2")
+        try:
+            import statusbar_ensure
+            action = statusbar_ensure.ensure()
+            heal_msg = statusbar_ensure._MESSAGES.get(action, action)
+            running = sb.provider_alive()
+        except Exception as e:
+            heal_msg = f"auto-start failed: {e}"
+    print(f"    {ok if running else no} provider running")
+    if heal_msg:
+        print(f"        {ok if running else '->'} {heal_msg}")
     # Apple Silicon: the AutoLaunch provider runs under iTerm2's bundled
     # x86_64 Python runtime, so it needs Rosetta 2 - without it the provider
     # (and thus the badge) silently never starts. This is the usual cause of a

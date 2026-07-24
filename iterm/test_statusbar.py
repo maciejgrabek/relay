@@ -115,6 +115,114 @@ def run():
     ok &= check("dangling symlink -> still installed",
                 statusbar.provider_installed(path=dangling))
 
+    # --- provider_script_path: resolve the symlink target, else repo file ----
+    target = os.path.join(tmp, "the_provider.py")
+    open(target, "w").close()
+    sl = os.path.join(tmp, "linked_provider.py")
+    os.symlink(target, sl)
+    ok &= check("script path resolves an installed symlink to its target",
+                statusbar.provider_script_path(path=sl)
+                == os.path.realpath(target))
+    missing = os.path.join(tmp, "nope.py")
+    ok &= check("script path falls back to the repo autolaunch file",
+                statusbar.provider_script_path(path=missing)
+                == os.path.join(os.path.dirname(
+                    os.path.abspath(statusbar.__file__)),
+                    "statusbar_autolaunch.py"))
+
+    # --- plan_provider_start: the pure auto-start verdict --------------------
+    ok &= check("not installed -> absent",
+                statusbar.plan_provider_start(False, False, True) == "absent")
+    ok &= check("installed + alive -> alive (never double-register)",
+                statusbar.plan_provider_start(True, True, True) == "alive")
+    ok &= check("installed + dead + no cookie -> no-cookie",
+                statusbar.plan_provider_start(True, False, False)
+                == "no-cookie")
+    ok &= check("installed + dead + cookie -> start",
+                statusbar.plan_provider_start(True, False, True) == "start")
+
+    # --- statusbar_ensure.ensure: the live orchestration (fakes injected) ----
+    import statusbar_ensure
+    elink = os.path.join(tmp, "ensure_link.py")
+    ealive = os.path.join(tmp, "ensure.alive")
+    os.environ["RELAY_STATUSBAR_AUTOLAUNCH"] = elink
+    os.environ["RELAY_STATUSBAR_ALIVE"] = ealive
+
+    calls = []
+    fake_spawn = lambda script, cookie: calls.append((script, cookie))
+    ready = lambda: True          # interpreter has iterm2
+    came_alive = lambda: True     # provider confirmed up after launch
+
+    # installed but dead + a cookie + confirmed alive -> spawns once -> start.
+    open(elink, "w").close()
+    got = statusbar_ensure.ensure(cookie_getter=lambda: "COOKIE123",
+                                  spawn=fake_spawn, interpreter_ready=ready,
+                                  confirm=came_alive)
+    ok &= check("ensure starts the provider when installed+dead+cookie",
+                got == "start" and len(calls) == 1
+                and calls[0][1] == "COOKIE123")
+
+    # launched but the provider never heartbeats -> start-unconfirmed (spawned).
+    calls.clear()
+    got = statusbar_ensure.ensure(cookie_getter=lambda: "COOKIE123",
+                                  spawn=fake_spawn, interpreter_ready=ready,
+                                  confirm=lambda: False)
+    ok &= check("ensure reports start-unconfirmed when it never comes alive",
+                got == "start-unconfirmed" and len(calls) == 1)
+
+    # interpreter can't import iterm2 -> no-iterm2, and we DON'T spawn a doomed
+    # process.
+    calls.clear()
+    got = statusbar_ensure.ensure(cookie_getter=lambda: "COOKIE123",
+                                  spawn=fake_spawn, interpreter_ready=lambda: False,
+                                  confirm=came_alive)
+    ok &= check("ensure refuses to spawn when the interpreter lacks iterm2",
+                got == "no-iterm2" and calls == [])
+
+    # no cookie (iTerm2 not running) -> no-cookie, no spawn.
+    calls.clear()
+    got = statusbar_ensure.ensure(cookie_getter=lambda: "", spawn=fake_spawn,
+                                  interpreter_ready=ready, confirm=came_alive)
+    ok &= check("ensure returns no-cookie and does not spawn without a cookie",
+                got == "no-cookie" and calls == [])
+
+    # alive -> never spawns (would DUPLICATE-register and freeze the badge).
+    statusbar.touch_provider_alive(path=ealive)
+    calls.clear()
+    got = statusbar_ensure.ensure(cookie_getter=lambda: "COOKIE123",
+                                  spawn=fake_spawn, interpreter_ready=ready,
+                                  confirm=came_alive)
+    ok &= check("ensure leaves a live provider alone (no spawn)",
+                got == "alive" and calls == [])
+
+    # not installed -> absent, no cookie fetched, no spawn.
+    os.remove(elink)
+    os.remove(ealive)
+    calls.clear()
+    def _boom():
+        raise AssertionError("must not request a cookie when not installed")
+    got = statusbar_ensure.ensure(cookie_getter=_boom, spawn=fake_spawn,
+                                  interpreter_ready=ready, confirm=came_alive)
+    ok &= check("ensure is absent (skips cookie + spawn) when not installed",
+                got == "absent" and calls == [])
+
+    # _confirm_alive: returns fast when already alive; times out via injected
+    # sleep without real waiting when it never appears.
+    statusbar.touch_provider_alive(path=ealive)
+    os.environ["RELAY_STATUSBAR_ALIVE"] = ealive
+    ok &= check("_confirm_alive true when heartbeat already fresh",
+                statusbar_ensure._confirm_alive(sleep=lambda s: None) is True)
+    os.remove(ealive)
+    slept = []
+    ok &= check("_confirm_alive false (and polled) when never alive",
+                statusbar_ensure._confirm_alive(
+                    timeout=0.5, interval=0.25,
+                    sleep=lambda s: slept.append(s)) is False
+                and len(slept) == 2)
+
+    os.environ.pop("RELAY_STATUSBAR_AUTOLAUNCH", None)
+    os.environ.pop("RELAY_STATUSBAR_ALIVE", None)
+
     # --- click queue ---------------------------------------------------------
     ok &= check("no click file -> no clicks",
                 statusbar.consume_clicks(path=clicks) == [])

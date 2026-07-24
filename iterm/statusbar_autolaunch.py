@@ -22,9 +22,9 @@ Scripts > AutoLaunch > relay_statusbar.py, or restart iTerm2. While this
 provider is installed, relay skips its own in-process registration - one
 provider, no identifier conflicts.
 """
+import asyncio
 import os
 import sys
-import time
 
 import iterm2
 
@@ -45,17 +45,8 @@ async def main(connection):
         identifier="com.relay.arm",
     )
 
-    last_touch = 0.0
-
     @iterm2.StatusBarRPC
     async def render(knobs, session_id=iterm2.Reference("id")):
-        # Heartbeat: proves to relay this provider is RUNNING (throttled -
-        # render fires per second per visible tab).
-        nonlocal last_touch
-        now = time.time()
-        if now - last_touch >= 2.0:
-            last_touch = now
-            statusbar.touch_provider_alive()
         return statusbar.read_state_label(session_id)
 
     async def on_click(session_id):
@@ -63,8 +54,21 @@ async def main(connection):
         if statusbar.state_fresh():
             statusbar.append_click(session_id)
 
+    async def _heartbeat():
+        # Liveness on a TIMER, not from render(). render only fires while the
+        # component is placed AND its tab is visible, so a render-based
+        # heartbeat goes stale whenever the badge isn't on screen even though
+        # this process is fine - which would fool relay into starting a SECOND
+        # provider (duplicate com.relay.arm registration). A steady timer makes
+        # provider_alive() an honest "this process is running" signal, well
+        # inside PROVIDER_ALIVE_MAX_AGE_S (15s).
+        while True:
+            statusbar.touch_provider_alive()
+            await asyncio.sleep(5)
+
     statusbar.touch_provider_alive()   # announce liveness immediately
     await component.async_register(connection, render, onclick=on_click)
+    asyncio.create_task(_heartbeat())
 
 
 iterm2.run_forever(main)
