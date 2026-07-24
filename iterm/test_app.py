@@ -502,6 +502,10 @@ async def go():
     chk("timers_view_text lists interval + payload",
         "every 5m" in _tv and "check PRs" in _tv)
     chk("help advertises timers", "timers" in appmod.help_text().lower())
+    chk("timer badge: active count wins, pending flag, else empty",
+        appmod.timer_badge(active=2, pending=False) == "⏲2"
+        and appmod.timer_badge(active=0, pending=True) == "⏲?"
+        and appmod.timer_badge(active=0, pending=False) == "")
 
     to = _TestApp(_one(), dry_run=True)
     async with to.run_test() as pilot:

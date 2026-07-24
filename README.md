@@ -215,6 +215,7 @@ can't silently auto-approve.)
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |
 | `v` | **Audit view**: the selected session's record of unattended decisions (approvals, escalations, deliveries) in the feed pane; `v` again returns to the live feed |
+| `t` | **Timers overlay**: the selected session's timers (see [Session timers](#session-timers)); `t` again or `esc` closes it |
 | `?` | Help overlay: key map + arm-level cheat sheet |
 | `TAB` | Toggle the **swarm view** (kanban board + message feed) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
@@ -918,6 +919,53 @@ Configure Status Bar** (enable "Status bar enabled" if needed) and drag the
 > **`relay doctor`** for a checklist of the three steps - enabled / installed /
 > running - and exactly which one is missing.
 
+### Session timers
+
+A **timer** fires a payload string (a command, a nudge) into one session on a
+repeating interval - cron-for-a-tab, without leaving the panel. Press `t` on a
+selected session to open the **timers overlay**:
+
+| Key | Action |
+| --- | ------ |
+| `a` | Add a timer |
+| `enter` | Edit the highlighted timer's payload |
+| `left` / `right` | Change the highlighted timer's interval (1-90 minutes) |
+| `m` | Cycle the highlighted timer's mode: `idle` <-> `now` |
+| `space` | Toggle the highlighted timer on/off |
+| `g` | Fire the highlighted timer now (still goes through the normal audited send) |
+| `x` | Delete the highlighted timer |
+| `r` | Restore a timer that needs it (see below) |
+| `esc` | Close the form, or the overlay if no form is open |
+
+**`idle` vs `now`:** an `idle` timer only fires once the session is sitting at a
+ready prompt - it waits rather than interrupting a running command (a "check in
+when you're free" nudge). A `now` timer fires the moment it's due, regardless of
+what the session is doing.
+
+**Restore on start:** a timer is bound to one iTerm2 session id, and session ids
+don't survive quitting iTerm2 or relay. So on launch, a saved timer whose
+session isn't present yet - or whose binding has aged past `reconfirm_days` - is
+marked **needs restore** instead of firing blind into a possibly different tab.
+The session's row in the list shows `⏲?` when this happens; select it, open
+`t`, and press `r` to re-bind the timer to that session and re-arm it.
+`autostart = true` (below) skips this prompt entirely and re-activates saved
+timers on start.
+
+Firing is always **audited** the same way an auto-approval is - even "fire now"
+(`g`) goes through the normal `_fire_timers` send path, never a raw keystroke
+from the UI.
+
+Config, in `~/.relay/config`:
+
+```ini
+[timers]
+require_armed  = false   ; only fire on an armed session
+autostart      = false   ; skip the restore prompt; activate saved timers on start
+reconfirm_days = 7        ; re-confirm a timer binding older than this (0 = never)
+```
+
+`require_armed` and `reconfirm_days` take effect live, no restart needed.
+
 ## Project layout
 
 ```
@@ -930,6 +978,7 @@ relay/
   iterm/config.py        # ~/.relay/config loader (titles/sounds/swarm), pure stdlib
   iterm/titles.py        # tab-title render/strip, pure, no iTerm2 imports
   iterm/db.py            # swarm SQLite schema + connection (~/.relay/relay.db)
+  iterm/timers.py        # pure timer scheduling logic (due/firable/reconfirm), no iTerm2/sqlite imports
   iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
   iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
   iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
@@ -939,6 +988,7 @@ relay/
   iterm/test_config.py   # config loader tests (temp files, precedence)
   iterm/test_titles.py   # render/strip round-trip tests
   iterm/test_db.py       # swarm schema + query tests (temp DB file)
+  iterm/test_timers.py   # timer scheduling logic tests (due/firable/reconfirm)
   iterm/test_swarm.py    # delivery/staleness/rendering logic tests
   iterm/test_cli.py      # CLI verb tests against a temp DB file
   lib/danger.sh          # shared command-classification rules (tune me)
