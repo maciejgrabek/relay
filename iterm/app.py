@@ -22,7 +22,7 @@ from rich.markup import escape  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Vertical  # noqa: E402
-from textual.widgets import DataTable, Static, Log  # noqa: E402
+from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 
 import audit  # noqa: E402
 import config as cfgmod  # noqa: E402
@@ -623,6 +623,7 @@ class RelayApp(App):
         self._settings_visible = False
         self._timers_visible = False
         self._timers_cursor = 0
+        self._timer_form = None   # None | {"id": None|int, "interval": int, "mode": str}
         # Preview (live-feed) pane visibility. Default shown; the real value is
         # read from config in on_mount, toggled live by 'f', and persisted.
         self._preview_visible = True
@@ -1293,12 +1294,81 @@ class RelayApp(App):
         info = self.watcher.sessions.get(sid)
         title = info.title if info else sid
         w = self.query_one("#timersview").size.width - 4
-        self.query_one("#timersview", Static).update(
-            timers_view_text(rows, time.time(), title, max(40, w)))
+        body = timers_view_text(rows, time.time(), title, max(40, w))
+        if self._timer_form is not None:
+            f = self._timer_form
+            verb = "EDIT" if f["id"] else "NEW"
+            body += (f"\n\n  {verb} timer  (interval {f['interval']}m · mode "
+                     f"{f['mode']} - adjust in the list) · type the payload "
+                     f"below · enter save · esc cancel")
+        self.query_one("#timersview", Static).update(body)
+
+    def _timer_form_open(self, existing=None) -> None:
+        self._timer_form = {
+            "id": existing["id"] if existing else None,
+            "interval": existing["interval_min"] if existing else 5,
+            "mode": existing["mode"] if existing else "idle"}
+        inp = Input(value=existing["payload"] if existing else "",
+                    placeholder="payload (script name or a note to Claude)",
+                    id="timer_payload")
+        self.query_one("#timersview").mount(inp)
+        inp.focus()
+        self._render_timers()
+
+    def _timer_form_close(self) -> None:
+        self._timer_form = None
+        try:
+            self.query_one("#timer_payload").remove()
+        except Exception:
+            pass
+        self._render_timers()
+
+    def _timer_form_save(self) -> None:
+        import timers as _timers
+        if self._timer_form is None:
+            return
+        try:
+            payload = _timers.sanitize_payload(
+                self.query_one("#timer_payload").value)
+        except Exception:
+            payload = ""
+        if not payload:
+            self._timer_form_close()
+            return
+        sid = self._selected_sid()
+        info = self.watcher.sessions.get(sid) if self.watcher else None
+        interval = _timers.clamp_interval(self._timer_form["interval"])
+        mode = self._timer_form["mode"]
+        if self._timer_form["id"] is None:
+            swarmdb.add_timer(self._swarm_db_conn(), iterm_session_id=sid,
+                              label=info.title if info else sid,
+                              interval_min=interval, payload=payload, mode=mode)
+        else:
+            swarmdb.update_timer(self._swarm_db_conn(), self._timer_form["id"],
+                                 interval_min=interval, payload=payload,
+                                 mode=mode)
+        self._timer_form_close()
+
+    def on_input_submitted(self, event) -> None:
+        if self._timer_form is not None:
+            self._timer_form_save()
 
     def on_key(self, event) -> None:
         if not self._timers_visible:
             return
+        if self._timer_form is not None:
+            if event.key == "escape":
+                # Don't close the form here: escape is ALSO the app-level
+                # "dismiss" binding, which fires independently of this
+                # handler (App.action_dismiss_view runs regardless of
+                # event.stop() below) and would otherwise close the WHOLE
+                # timers overlay too. action_dismiss_view checks
+                # self._timer_form itself and closes just the form -
+                # leaving it set here is what makes that distinction
+                # possible (first esc: cancel form, second esc: close
+                # overlay).
+                event.stop()
+            return    # every other key belongs to the focused payload Input
         sid = self._selected_sid()
         rows = [dict(r) for r in swarmdb.list_timers(self._swarm_db_conn(), sid)] \
             if sid else []
@@ -1335,6 +1405,10 @@ class RelayApp(App):
             swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
                                  mode="now" if rows[cur]["mode"] == "idle" else "idle")
             self._render_timers(); event.stop()
+        elif k == "a":
+            self._timer_form_open(); event.stop()
+        elif k in ("enter", "e") and rows:
+            self._timer_form_open(rows[cur]); event.stop()
 
     # --- audit view (v): the preview pane shows this session's decisions -----
     def action_audit_view(self) -> None:
@@ -1354,7 +1428,12 @@ class RelayApp(App):
         elif self._swarm_visible:
             self.action_swarm_view()
         elif self._timers_visible:
-            self.action_timers()
+            if self._timer_form is not None:
+                # First esc cancels the add/edit form and stays on the list;
+                # only a second esc (form now closed) leaves the overlay.
+                self._timer_form_close()
+            else:
+                self.action_timers()
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:
