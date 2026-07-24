@@ -1213,6 +1213,36 @@ async def timer_tests():
         chk("dry-run: still marked fired (no immediate re-fire)",
             D.list_timers(conn, "s6")[0]["last_fired_at"] > 0)
         W.audit.record = lambda *a, **k: True
+
+        # _load_timers_on_start: the restore gate. Default config
+        # (autostart=false) deactivates every saved timer and flags present
+        # sessions' sids as pending a restore/re-confirm decision.
+        D.add_timer(conn, iterm_session_id="s7", label="w", interval_min=1,
+                    payload="restore me", mode="now", now=fresh)
+        w7 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs7 = FakeSession()
+        info7 = SessionInfo("s7", title="w", _iterm_session=fs7, mode="safe")
+        w7.sessions["s7"] = info7
+        w7._load_timers_on_start()
+        chk("restore gate (autostart=false): saved timer deactivated",
+            D.list_timers(conn, "s7")[0]["active"] == 0)
+        chk("restore gate (autostart=false): present sid marked pending",
+            "s7" in w7.pending_timer_sids)
+
+        # With [timers] autostart = true, present sessions' timers are
+        # restored active and nothing is left pending.
+        D.add_timer(conn, iterm_session_id="s8", label="w", interval_min=1,
+                    payload="autostart me", mode="now", now=fresh)
+        w8 = Watcher(connection=None, dry_run=False,
+                     cfg=C.Config(timers_autostart=True))
+        fs8 = FakeSession()
+        info8 = SessionInfo("s8", title="w", _iterm_session=fs8, mode="safe")
+        w8.sessions["s8"] = info8
+        w8._load_timers_on_start()
+        chk("restore gate (autostart=true): present session's timer active",
+            D.list_timers(conn, "s8")[0]["active"] == 1)
+        chk("restore gate (autostart=true): nothing left pending",
+            w8.pending_timer_sids == set())
     finally:
         if saved_relay_db is None:
             os.environ.pop("RELAY_DB", None)
