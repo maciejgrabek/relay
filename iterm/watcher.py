@@ -826,7 +826,9 @@ class Watcher:
                              f"timer {t['id']}")
                 self._note(f"DRY-RUN would fire timer -> {info.title}: "
                            f"{t['payload'][:60]}")
-                swarmdb.mark_timer_fired(conn, t["id"], now=now)
+                # Advance the clock (so we don't re-would-fire every tick) but do
+                # NOT consume the cap - dry-run is a simulation.
+                swarmdb.update_timer(conn, t["id"], last_fired_at=now)
                 return
             if not audit.record("timer-fired", info.title, t["payload"][:500],
                                 f"timer {t['id']}"):
