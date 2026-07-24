@@ -31,6 +31,14 @@ MODE_CIRCLE = {
 
 _ROLE_SHORT = {"coordinator": "coord", "worker": "work"}
 
+# What each arm mode PRINTS on the badge. The "off" mode renders as "manual",
+# NOT "off": relay is running, this tab just isn't armed. The word "off" is
+# reserved for OFFLINE_LABEL (relay not running) so the two can never be
+# confused - a live-but-unarmed tab reading "RELAY:off" looked identical to
+# relay being down. "manual" matches the TUI's MANUAL arm label.
+MODE_TEXT = {"off": "manual", "safe": "safe", "wild": "wild",
+             "insane": "insane", "shadow": "shadow"}
+
 
 def label(mode, *, own_panel=False, name=None, role=None) -> str:
     """The status-bar string for one tab.
@@ -43,7 +51,7 @@ def label(mode, *, own_panel=False, name=None, role=None) -> str:
     if own_panel:
         return "⬛ RELAY: panel"       # black square - inert, this is relay
     circle = MODE_CIRCLE.get(mode, MODE_CIRCLE["off"])
-    text = f"{circle} RELAY:{mode}"
+    text = f"{circle} RELAY:{MODE_TEXT.get(mode, mode)}"
     if name:
         r = _ROLE_SHORT.get(role, role) if role else None
         text += f" · {name}" + (f" ({r})" if r else "")
@@ -59,7 +67,10 @@ def label(mode, *, own_panel=False, name=None, role=None) -> str:
 # means relay is off - the badge says so instead of erroring.
 
 STATE_STALE_S = 5.0                     # > watcher tick (2s), < human patience
-OFFLINE_LABEL = "⚫ RELAY: off"          # black circle: relay itself not running
+# Black circle + the word "off" = relay is NOT running. This is the ONLY badge
+# that says "off"; a live-but-unarmed tab says "manual" (see MODE_TEXT), so the
+# two states are never confused.
+OFFLINE_LABEL = "⚫ RELAY off"
 
 
 def state_path() -> str:
