@@ -935,7 +935,7 @@ selected session to open the **timers overlay**:
 | `space` | Toggle the highlighted timer on/off |
 | `g` | Fire the highlighted timer now (still goes through the normal audited send) |
 | `x` | Delete the highlighted timer |
-| `r` | Restore a timer that needs it (see below) |
+| `r` | **Restore** a timer that needs it, or **restart** a `done` (capped) timer - same key, depends on the row's state |
 | `esc` | Close the form, or the overlay if no form is open |
 
 The highlighted row is marked with `▸` and bolded, so you always see which timer

@@ -494,7 +494,7 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
     head = (f"╔{bar}╗\n"
             f" ⏲ TIMERS // {escape(session_title[:w - 14])}\n"
             f" a add · enter edit · left/right interval · m mode · [ ] cap · "
-            f"space on/off · g fire · x del · r restore · esc close\n"
+            f"space on/off · g fire · x del · r restore/restart · esc close\n"
             f"╚{bar}╝\n")
     if not rows:
         return head + ("\n no timers on this session.\n\n"
@@ -512,7 +512,7 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
         elif not r["active"]:
             when = "needs restore (r)"
         elif _timers.capped(r):
-            when = "done (cap reached)"
+            when = "done - r restarts"
         else:
             secs = max(0, _timers.next_due_in(r, now))
             when = f"in {int(secs) // 60}m{int(secs) % 60:02d}s"
@@ -1475,10 +1475,15 @@ class RelayApp(App):
             swarmdb.delete_timer(self._swarm_db_conn(), rows[cur]["id"])
             self._timers_cursor = 0; self._render_timers(); event.stop()
         elif k == "r" and rows:
-            # Restore only the highlighted timer (consistent with every other
-            # per-row key). The session stays pending if it still has other
-            # inactive timers.
-            swarmdb.restore_timer(self._swarm_db_conn(), rows[cur]["id"])
+            # Same key, state-dependent: a capped ('done') timer RESTARTS (reset
+            # its fire count so it runs again); a needs-restore timer RESTORES.
+            # Both act only on the highlighted row, like every other per-row key.
+            import timers as _timers
+            row = rows[cur]
+            if _timers.capped(row):
+                swarmdb.restart_timer(self._swarm_db_conn(), row["id"])
+            elif not row["active"]:
+                swarmdb.restore_timer(self._swarm_db_conn(), row["id"])
             if self.watcher and sid:
                 still = any(not t["active"] for t in swarmdb.list_timers(
                     self._swarm_db_conn(), sid))

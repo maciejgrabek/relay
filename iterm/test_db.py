@@ -448,6 +448,21 @@ def run():
     ok &= check("restore_timer rebinds the clock", [t["last_fired_at"]
                 for t in rlist if t["id"] == tA][0] == 5000.0)
 
+    # restart_timer: reset fire_count to 0, re-activate, rebind (for a capped
+    # 'done' timer); enabled is left untouched.
+    tC = db.add_timer(conn, iterm_session_id="SIDC2", label="c", interval_min=1,
+                      payload="c", mode="now", max_fires=3, now=1000.0)
+    db.mark_timer_fired(conn, tC); db.mark_timer_fired(conn, tC)
+    db.mark_timer_fired(conn, tC)   # fire_count now 3 == cap
+    ok &= check("timer reached its cap (fire_count 3)",
+                db.list_timers(conn, "SIDC2")[0]["fire_count"] == 3)
+    db.set_timer_enabled(conn, tC, False)
+    db.restart_timer(conn, tC, now=6000.0)
+    rc = db.list_timers(conn, "SIDC2")[0]
+    ok &= check("restart_timer resets count + re-activates + keeps enabled flag",
+                rc["fire_count"] == 0 and rc["active"] == 1
+                and rc["last_fired_at"] == 6000.0 and rc["enabled"] == 0)
+
     db.add_timer(conn, iterm_session_id="SID2", label="b", interval_min=1,
                  payload="p", mode="now", now=1000.0)
     db.deactivate_all_timers(conn)

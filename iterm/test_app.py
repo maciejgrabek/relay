@@ -40,6 +40,9 @@ class StubWatcher:
         # app-level pause key path is exercisable headless (not just the pure
         # mascot function).
         self.paused = False
+        # The real Watcher always sets this; the timers overlay's r/restore
+        # path reads it, so the stub must have it to be pilot-testable.
+        self.pending_timer_sids = set()
 
     def toggle_pause(self):
         self.paused = not self.paused
@@ -600,6 +603,16 @@ async def go():
             _calls["n"] == 1)
         to._timers_visible = True
         to._render_timers = types.MethodType(_real_rt, to)
+
+        # r is state-dependent: a capped ('done') timer RESTARTS (fire_count->0).
+        _db.update_timer(to._swarm_db_conn(), cap_id, fire_count=99)
+        await pilot.press("r")
+        await pilot.pause()
+        fc = [r for r in _db.list_timers(to._swarm_db_conn(),
+                                         to._selected_sid())
+              if r["id"] == cap_id][0]
+        chk("r restarts a capped timer (fire_count -> 0, still active)",
+            fc["fire_count"] == 0 and fc["active"] == 1)
 
         # esc while the form is open must cancel ONLY the form - the timers
         # overlay itself has its own "escape" binding (action_dismiss_view)
