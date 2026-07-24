@@ -59,23 +59,27 @@ New `timers` table in the swarm DB (the runtime source of truth):
 | column | type | meaning |
 | --- | --- | --- |
 | `id` | INTEGER PK | |
-| `source` | TEXT | `tui` or `file` - who owns the definition (see 5.3) |
-| `file_key` | TEXT | stable key for a file-defined timer (its section name); NULL for `tui` |
-| `iterm_session_id` | TEXT | the bound tab; NULL while a file timer is unresolved |
-| `target_match` | TEXT | for `file` timers: the session title/swarm-name to bind to; NULL for `tui` |
-| `label` | TEXT | session title snapshot - display + the restore prompt |
+| `iterm_session_id` | TEXT | the bound tab (stable while the tab lives) |
+| `label` | TEXT | session title snapshot - display + the restore prompt (lets a human spot a mismatched re-binding) |
 | `interval_min` | INTEGER | 1-90 (clamped) |
 | `payload` | TEXT | the single-line string to send |
 | `mode` | TEXT | `idle` or `now` |
 | `enabled` | INTEGER | 0/1 - operator on/off |
 | `active` | INTEGER | 0/1 - has it been restored/armed this relay run (see 6) |
 | `last_fired_at` | REAL | drives next-due; set on enable/restore/fire |
+| `bound_at` | REAL | when this timer was bound/confirmed to its session; drives the stale-binding re-confirmation (see 6) |
 | `created_at` | REAL | |
 
-Schema is added via the same additive-migration path relay already uses for new
-tables/columns (see `db.py`'s `_SCHEMA` + `ALTER` migrations). `timers` is
-independent of `sessions`/`tasks`; deleting a session row does not cascade
-(timers are retained dormant and re-attach on the tab's return).
+Schema is added via `db.py`'s `_SCHEMA` (`CREATE TABLE IF NOT EXISTS`) - a
+brand-new table needs no ALTER migration, same as `tasks` was introduced.
+`timers` is independent of `sessions`/`tasks`; deleting a session row does not
+cascade (timers are retained dormant and re-attach on the tab's return).
+
+**Note on authoring surface:** the config-file importer (a declarative
+`~/.relay/timers` INI) is a **deferred extension**, not part of this build - see
+§5 and §12. The TUI overlay is the whole feature. The schema above deliberately
+omits the file-specific columns (`source`/`file_key`/`target_match`); adding
+them later is additive.
 
 ## 3. The engine
 
@@ -107,7 +111,13 @@ Watcher integration (in the existing 2s poll loop, per present session, after
 
 Multiple timers due on one session trickle out one-per-tick (2s apart) - fine.
 
-## 4. Authoring surface A: the TUI overlay
+## 4. Authoring: the TUI overlay (the config file is deferred)
+
+The declarative `~/.relay/timers` config file - and its one-way import into the
+DB - is a **deferred extension** (§9/§12), NOT part of this build. It adds real
+complexity (name/title resolution, upsert/prune, a `source` partition to keep
+two surfaces coherent) for a convenience layer; the overlay below delivers the
+entire feature on its own. When built later it is purely additive.
 
 A new full-screen overlay (like settings/swarm/help), opened with **`t`** on the
 selected session. It manages ONLY that session's timers.
@@ -133,63 +143,35 @@ Add/edit flow (three fields, arrow-key + one text input):
 - **mode**: left/right toggles `idle`/`now`.
 - `enter` saves, `esc` cancels.
 
-File-defined timers (source=`file`) are shown but **structurally read-only** in
-the TUI (you may `space` toggle / `g` fire-now / `x` delete-from-runtime, but
-interval/payload/mode are edited in the file) - see 5.3. This keeps the two
-surfaces coherent without bidirectional sync.
-
 Because this is relay's first text input, the overlay owns focus while open:
 list-navigation keys are inert during the payload Input, and the global
 session-mutating keys are inert while any overlay is open (existing
 `_any_overlay_open` guard, extended to include the timers overlay).
 
-## 5. Authoring surface B: the config file
+## 5. Stale-binding protection (recycled session ids)
 
-### 5.1 Format
+An iTerm2 session UUID can outlive the real session, and over a long-running
+relay a closed tab's UUID could in principle be reused by a different tab. A
+week-old timer bound to `SID` might then point at a session that is not what the
+operator meant. Two layers guard this:
 
-A dedicated INI file `~/.relay/timers` (override `RELAY_TIMERS`), parsed with
-`configparser` - consistent with `~/.relay/config`. One section per timer; the
-section name is the stable `file_key`:
+1. **Restart gate (§6):** every relay restart already re-confirms (timers load
+   inactive; the human restores per session, seeing the `label` snapshot). This
+   covers the common case - relay is usually restarted more often than a UUID
+   could plausibly recycle.
+2. **Bind-age re-confirmation (the long-run case):** each timer records
+   `bound_at` (set on create and on restore). A pure
+   `needs_reconfirm(timer, now, reconfirm_days)` returns true once
+   `now - bound_at > reconfirm_days * 86400`. When the engine sees a due timer
+   whose binding is that old, it **deactivates** it (`active = 0`, back to
+   pending restore) instead of firing - forcing the operator to re-confirm the
+   session. Config `[timers] reconfirm_days` (default `7`; `0` disables the
+   check). The `label` shown in the restore prompt lets a human catch a
+   mismatched binding at that moment.
 
-```ini
-[timer check-prs]
-session  = api-worker        ; match by swarm name OR tab title
-interval = 10                ; minutes, 1-90
-payload  = check open PRs and summarize
-mode     = idle              ; idle | now
-enabled  = true
-
-[timer nightly-lint]
-session  = bff-worker
-interval = 30
-payload  = ./scripts/lint.sh
-mode     = now
-enabled  = true
-```
-
-### 5.2 Import (seed, not sync)
-
-On startup and on an explicit "reload timers" action, relay reads the file and
-**upserts** each section into the `timers` table keyed by `file_key`:
-- Resolve `session` to a currently-present tab (swarm name first, then exact tab
-  title). Found -> bind `iterm_session_id`. Not present -> store with
-  `iterm_session_id = NULL` and `target_match = session`; the engine resolves it
-  when a matching session appears.
-- A `file_key` present in the DB but absent from the file is removed (the file
-  is authoritative for its own timers).
-- `tui`-source timers are never touched by import.
-
-This is deliberately **one-way (file -> DB), not bidirectional.** Two-way
-mirroring of a live table and a hand-edited file is a coherence trap for little
-gain. The file is for declarative, version-controllable, long-payload timers;
-the TUI is the live editor for ad-hoc ones.
-
-### 5.3 Coherence rule
-
-`source` partitions ownership: `file` timers are re-derived from the file on
-every import (structural edits happen in the file); `tui` timers live only in
-the DB. In the TUI overlay, `file` timers render with a small `[file]` tag and
-their interval/payload/mode are read-only there.
+This is deliberately simple (a time threshold, no cross-run session
+fingerprinting) and reuses the existing restore UX as the re-confirmation
+surface.
 
 ## 6. Restore-on-restart (the safety gate)
 
@@ -213,8 +195,9 @@ Timers persist, but **never auto-fire after a relay restart.** On startup:
 
 Escape hatch for genuine automation: a global `[timers] autostart` (default
 `false`). When `true`, saved timers for present sessions activate on startup
-**without** the prompt - for operators who intentionally maintain a timers file
-and want set-and-forget. Default keeps the safe, prompt-first behavior.
+**without** the prompt - for operators who want set-and-forget. Default keeps the
+safe, prompt-first behavior. (Even with `autostart`, the bind-age
+re-confirmation in §5 still applies.)
 
 This mirrors relay's existing `R x2` restore philosophy: unattended action after
 a restart is a deliberate human choice, not a silent resume.
@@ -228,10 +211,12 @@ Two new keys, in a `[timers]` section of `~/.relay/config`, both surfaced in the
 [timers]
 require_armed = false   ; timers only fire on an armed session
 autostart     = false   ; skip the restore prompt; activate saved timers on start
+reconfirm_days = 7      ; re-confirm a timer binding older than this (0 = never)
 ```
 
-They join the existing `config.Config` dataclass + `settings.SETTINGS` list the
-same way `statusbar_enabled` did (`toggle` kind, live where applicable).
+`require_armed` and `autostart` are `toggle` settings; `reconfirm_days` is a
+`number` setting. They join the existing `config.Config` dataclass +
+`settings.SETTINGS` list the same way `statusbar_enabled` did.
 
 ## 8. Visibility
 
@@ -259,19 +244,21 @@ same way `statusbar_enabled` did (`toggle` kind, live where applicable).
   warning, like other config validation).
 - **Audit-write failure:** fire is suppressed and retried; notify debounced by
   the session's notify cooldown (same as delivery).
-- **Dead session_id after iTerm2 restart:** if the UUID no longer resolves, the
-  timer is dormant/pending until a matching tab (by `target_match`, when set)
-  reappears; TUI-only timers with a vanished UUID surface as "orphaned - tab
-  gone" and can be deleted or left dormant.
+- **Session closed then a NEW tab reuses the UUID:** the restart gate + bind-age
+  re-confirmation (§5) force a human re-confirm before firing into a possibly
+  different session.
+- **TUI-only timer whose tab is gone:** surfaces as "orphaned - tab gone"; can be
+  deleted or left dormant (re-offered for restore if a tab with that UUID
+  returns).
 
 ## 10. Module layout
 
 ```
-iterm/timers.py         # pure: due/firable/next_due/clamp/sanitize + file parse
+iterm/timers.py         # pure: due/firable/next_due/needs_reconfirm/clamp/sanitize
 iterm/test_timers.py    # table-driven tests for the above
-iterm/db.py             # MODIFY: timers table + CRUD + file-import upsert
-iterm/config.py         # MODIFY: [timers] require_armed + autostart
-iterm/settings.py       # MODIFY: two toggles in SETTINGS
+iterm/db.py             # MODIFY: timers table + CRUD (no file import in v1)
+iterm/config.py         # MODIFY: [timers] require_armed + autostart + reconfirm_days
+iterm/settings.py       # MODIFY: two toggles + one number in SETTINGS
 iterm/watcher.py        # MODIFY: _fire_timers in the poll loop; restore-on-start
 iterm/app.py            # MODIFY: 't' overlay (list + add/edit Input + actions),
                         #         timer indicators, preview TIMERS block
@@ -282,23 +269,28 @@ README.md               # MODIFY: session-timers section + config keys + keymap
 ## 11. Testing
 
 - `test_timers.py` - due calculation across intervals; `firable` truth table
-  over (mode, paused, armed, require_armed, ready); clamp; sanitize; file parse
-  (valid, bad interval, bad mode, missing fields, malformed -> warnings).
-- `test_db.py` - timers CRUD; file-import upsert idempotency; file_key removal;
-  name/title resolution; dormant (NULL session) handling.
+  over (mode, paused, armed, require_armed, ready); `needs_reconfirm` at the
+  bind-age boundary (and disabled when `reconfirm_days = 0`); clamp; sanitize.
+- `test_db.py` - timers CRUD; `bound_at` set on add/restore; deactivate-all +
+  restore-session; dormant (NULL session) handling.
 - `test_config.py` - `[timers]` keys default/parse/bad-value/round-trip.
-- `test_settings.py` - the two toggles cycle + render.
+- `test_settings.py` - the two toggles + the number cycle + render.
 - `test_watcher.py` - fire path (idle waits for ready; now fires immediately);
   audit-before-act; pause freeze; dry-run would-fire; one-per-tick; require_armed
-  gate; restore leaves timers inactive until confirmed.
+  gate; restore leaves timers inactive until confirmed; a past-reconfirm timer
+  deactivates instead of firing.
 - `test_app.py` - piloted `t` overlay: open, add (interval cycle + payload Input
   + mode), enable/disable, fire-now, delete, restore; indicator renders.
 
-## 12. Out of scope (v1)
+## 12. Out of scope (v1) / deferred extensions
 
+- **Config-file authoring (`~/.relay/timers` import)** - a real extension we
+  chose to defer; the TUI overlay is the whole feature. Additive when built
+  (new `source`/`file_key`/`target_match` columns + a one-way import step).
 - Multi-line / scripted payloads (single-line only for now).
 - Cron expressions / wall-clock schedules (fixed elapsed intervals only).
-- Bidirectional file<->DB sync (import is one-way).
 - Timers on non-relay-visible windows.
 - Per-timer arm gating (global policy only, per the agreed knob split).
 - Backlog/catch-up firing after pause or downtime.
+- Cross-run session fingerprinting (the bind-age threshold + restart gate are
+  the chosen protection instead).
