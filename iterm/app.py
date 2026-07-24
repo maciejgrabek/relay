@@ -482,15 +482,18 @@ def audit_view_text(entries, title: str, width: int, now=None) -> str:
     return head + "\n".join(lines)
 
 
-def timers_view_text(rows, now, session_title, width) -> str:
-    """The `t` overlay body: one line per timer for the selected session, plus
-    countdown + on/off. Plain text (pane renders markup-free)."""
+def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
+    """The `t` overlay body: one line per timer for the selected session. The
+    highlighted row (index `cursor`) gets a ▸ marker and is bolded, so it is
+    obvious which timer left/right/m/[/]/space/g/x/enter act on. Each row shows
+    interval, mode, on/off, fire-cap progress, and the countdown. Rendered with
+    markup ON, so the session title and payload are escaped."""
     import timers as _timers
     w = max(40, width)
     bar = "═" * w
     head = (f"╔{bar}╗\n"
-            f" ⏲ TIMERS // {session_title[:w - 14]}\n"
-            f" a add · enter edit payload · left/right interval · m mode · "
+            f" ⏲ TIMERS // {escape(session_title[:w - 14])}\n"
+            f" a add · enter edit · left/right interval · m mode · [ ] cap · "
             f"space on/off · g fire · x del · r restore · esc close\n"
             f"╚{bar}╝\n")
     if not rows:
@@ -498,25 +501,34 @@ def timers_view_text(rows, now, session_title, width) -> str:
                        " press a to add one: an interval (1-90 min) and a\n"
                        " payload string sent to this session on that schedule.")
     lines = []
-    for r in rows:
+    for i, r in enumerate(rows):
+        sel = (i == cursor)
+        mark = "▸" if sel else " "
         onoff = "● on " if r["enabled"] else "○ off"
+        left = _timers.fires_left(r)
+        cap = "∞" if left is None else f"{r['fire_count']}/{r['max_fires']}"
         if not r["active"]:
             when = "needs restore (r)"
+        elif _timers.capped(r):
+            when = "done (cap reached)"
         else:
             secs = max(0, _timers.next_due_in(r, now))
-            when = f"next in {int(secs) // 60}m{int(secs) % 60:02d}s"
-        lines.append(f"  every {r['interval_min']}m  {r['mode']:<4} {onoff}  "
-                     f"{when:<18} {str(r['payload'])[:max(10, w - 40)]}")
+            when = f"in {int(secs) // 60}m{int(secs) % 60:02d}s"
+        payload = escape(str(r["payload"])[:max(10, w - 50)])
+        line = (f" {mark} {str(r['interval_min']) + 'm':<4} {r['mode']:<4} "
+                f"{onoff}  {cap:<7} {when:<18} {payload}")
+        lines.append(f"[b]{line}[/b]" if sel else line)
     return head + "\n".join(lines)
 
 
-def timer_badge(active, pending) -> str:
-    """Row indicator: ⏲N for N active timers, ⏲? when timers await restore,
-    else empty. active wins."""
+def timer_cell(active, soonest_secs, pending) -> str:
+    """Main-list ⏲ column: 'N·Mm' (N active timers; soonest fires in M min),
+    '?' when timers await restore, '' when none. active wins."""
     if active:
-        return f"⏲{active}"
+        m = max(0, int((soonest_secs or 0) // 60))
+        return f"{active}·{m}m"
     if pending:
-        return "⏲?"
+        return "?"
     return ""
 
 
@@ -705,8 +717,8 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "↻", "UNIT", "ROLE", "TASK NOW",
-                          "✓/⊘", "LAST DIRECTIVE")
+        table.add_columns("MODE", "STATUS", "↻", "⏲", "UNIT", "ROLE",
+                          "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
         # Preview pane starts in its configured state (watcher isn't connected
         # yet, so read config directly - same as the theme is read at import).
         try:
@@ -813,23 +825,30 @@ class RelayApp(App):
             if attention:
                 # The duplicate strip row: same data, unmissable name.
                 title = f"[bold {DANGER}]‼ {title}[/]"
+            # Timer column: N active timers + soonest countdown, or ? pending.
             pend = info.session_id in getattr(
                 self.watcher, "pending_timer_sids", set())
-            act = 0
+            act, soonest = 0, None
             try:
-                act = sum(1 for t in swarmdb.list_timers(
-                    self._swarm_db_conn(), info.session_id)
-                    if t["active"] and t["enabled"])
+                import timers as _timers
+                for t in swarmdb.list_timers(self._swarm_db_conn(),
+                                             info.session_id):
+                    if t["active"] and t["enabled"] and not _timers.capped(t):
+                        act += 1
+                        due = _timers.next_due_in(t, time.time())
+                        soonest = due if soonest is None else min(soonest, due)
             except Exception:
                 pass
-            badge = timer_badge(act, pend)
-            if badge:
-                title = f"{title} [{DIM}]{badge}[/]"
-            table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
+            tcell = timer_cell(act, soonest, pend)
+            if tcell:
+                tcolor = WARN if not act and pend else CYAN
+                tcell = f"[{DIM}]{tcell}[/]" if dim else f"[{tcolor}]{tcell}[/]"
+            table.add_row(arm, label, wt, tcell, title, role, task_now,
+                          counts, cmd)
             self._row_sids.append(info.session_id)
 
         def divider(text, color):
-            table.add_row("", f"[{color}]▼▼▼[/]", "", f"[{color}]{text}[/]",
+            table.add_row("", f"[{color}]▼▼▼[/]", "", "", f"[{color}]{text}[/]",
                           "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
 
@@ -1337,7 +1356,8 @@ class RelayApp(App):
         info = self.watcher.sessions.get(sid)
         title = info.title if info else sid
         w = self.query_one("#timersview").size.width - 4
-        body = timers_view_text(rows, time.time(), title, max(40, w))
+        cursor = min(self._timers_cursor, max(0, len(rows) - 1))
+        body = timers_view_text(rows, time.time(), title, max(40, w), cursor)
         if self._timer_form is not None:
             f = self._timer_form
             verb = "EDIT" if f["id"] else "NEW"
@@ -1454,6 +1474,18 @@ class RelayApp(App):
         elif k == "m" and rows:
             swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
                                  mode="now" if rows[cur]["mode"] == "idle" else "idle")
+            self._render_timers(); event.stop()
+        elif event.character == "[" and rows:
+            # Fire cap down (floor 0 = unlimited); raising it above fire_count
+            # resumes a 'done' timer.
+            mf = max(0, int(rows[cur]["max_fires"]) - 1)
+            swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
+                                 max_fires=mf)
+            self._render_timers(); event.stop()
+        elif event.character == "]" and rows:
+            mf = min(999, int(rows[cur]["max_fires"]) + 1)
+            swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
+                                 max_fires=mf)
             self._render_timers(); event.stop()
         elif k == "a" and sid:
             self._timer_form_open(); event.stop()
