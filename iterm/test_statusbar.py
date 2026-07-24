@@ -20,8 +20,11 @@ def check(msg, cond):
 def run():
     ok = True
 
-    # per-mode: circle + RELAY:<mode>
-    ok &= check("off", label("off") == f"{MODE_CIRCLE['off']} RELAY:off")
+    # per-mode: circle + RELAY:<mode>. mode "off" prints "manual" (relay up,
+    # tab unarmed) - NEVER "off", which is reserved for relay being down.
+    ok &= check("off mode -> manual (not 'off')",
+                label("off") == f"{MODE_CIRCLE['off']} RELAY:manual")
+    ok &= check("unarmed badge never says 'off'", ":off" not in label("off"))
     ok &= check("safe", label("safe") == f"{MODE_CIRCLE['safe']} RELAY:safe")
     ok &= check("wild", label("wild") == f"{MODE_CIRCLE['wild']} RELAY:wild")
     ok &= check("insane",
@@ -53,7 +56,14 @@ def run():
     ok &= check("name without role -> just name",
                 label("safe", name="w1") == f"{MODE_CIRCLE['safe']} RELAY:safe · w1")
     ok &= check("no name -> bare mode",
-                label("off") == f"{MODE_CIRCLE['off']} RELAY:off")
+                label("off") == f"{MODE_CIRCLE['off']} RELAY:manual")
+
+    # offline (relay down) is the ONLY badge that says "off", and it differs
+    # from an unarmed live tab in both word and circle - the whole point.
+    ok &= check("offline label says relay is off",
+                statusbar.OFFLINE_LABEL == "⚫ RELAY off")
+    ok &= check("offline != unarmed-but-live",
+                statusbar.OFFLINE_LABEL != label("off"))
 
     # --- published state (the AutoLaunch provider's view) --------------------
     tmp = tempfile.mkdtemp()
