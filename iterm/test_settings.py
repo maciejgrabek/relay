@@ -78,6 +78,14 @@ def run():
     ok &= check("no restart tag for a live (sound) change",
                 "restart" not in txt2)
 
+    ok &= check("timers settings flip/step",
+                settings.change(c, "timers_require_armed", +1).timers_require_armed
+                is (not c.timers_require_armed)
+                and settings.change(c, "timers_autostart", +1).timers_autostart
+                is (not c.timers_autostart)
+                and settings.change(c, "timers_reconfirm_days", +1).timers_reconfirm_days
+                == c.timers_reconfirm_days + 1.0)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

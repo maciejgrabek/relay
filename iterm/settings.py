@@ -27,6 +27,9 @@ SETTINGS = [
     ("BEHAVIOR", "stale_minutes", "number", (1.0, 1.0)),
     ("BEHAVIOR", "notify_cooldown", "number", (0.0, 5.0)),
     ("BEHAVIOR", "danger_preset", "enum", _config.DANGER_PRESETS),
+    ("TIMERS", "timers_require_armed", "toggle", None),
+    ("TIMERS", "timers_autostart", "toggle", None),
+    ("TIMERS", "timers_reconfirm_days", "number", (0.0, 1.0)),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
