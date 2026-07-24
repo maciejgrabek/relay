@@ -27,6 +27,7 @@ import swarm
 import statusbar as statusbar_mod
 import config as relay_config
 import titles
+import timers as timers_mod
 from gates import (classify, Action, Decision, reconstruct_lines,
                    detect_state, DANGEROUS_COMMAND)
 
@@ -251,6 +252,9 @@ class Watcher:
         self.close_misses = 2      # misses before marking closed (debounce)
         self.orphan_count = 0      # closed sessions owning non-done work
         self._roster_ok = False    # did THIS tick's sync succeed?
+        # --- swarm: session timers ---
+        self.pending_timer_sids: set = set()   # sids awaiting a restore/re-confirm decision
+        self._timers_loaded = False            # restore gate runs once per run
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -282,6 +286,9 @@ class Watcher:
                     self._roster_ok = False
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
+                if not self._timers_loaded:
+                    self._timers_loaded = True
+                    self._load_timers_on_start()
                 await self._name_own_tab()
                 self._check_escalations()
                 self._check_completions()
@@ -315,6 +322,7 @@ class Watcher:
                         # read - a hung session is exactly the stale case.
                         self._check_stale(info)
                         await self._apply_title(info)
+                        await self._fire_timers(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -769,6 +777,81 @@ class Watcher:
         # and retries next tick (a rare duplicate beats a lost wake-up).
         swarmdb.mark_delivered(self._swarm_conn(), m["id"])
         self._note(f"DELIVER -> {reg['name']}: {m['body'][:60]}")
+
+    async def _fire_timers(self, info: SessionInfo) -> None:
+        """Fire at most one due, firable timer for this session per tick. now
+        mode injects immediately; idle waits for a ready Claude prompt. Pause
+        freezes; require_armed gates on arm level; dry-run would-fire. A binding
+        older than reconfirm_days is deactivated (back to pending) instead of
+        firing - the stale-session-id guard. Audit BEFORE the send. Best-effort:
+        DB/iTerm2 errors are logged, never break the loop."""
+        if info.session_id == self.own_sid:
+            return
+        s = info._iterm_session
+        if s is None:
+            return
+        try:
+            conn = self._swarm_conn()
+            rows = swarmdb.list_timers(conn, info.session_id)
+        except Exception as e:
+            self._note(f"timers db error: {e}")
+            return
+        now = time.time()
+        due = timers_mod.due_timers(rows, now)
+        if not due:
+            return
+        ready = (info.state == "idle"
+                 and swarm.claude_prompt_ready(info.last_screen))
+        armed = info.mode in ("safe", "wild", "insane")
+        require_armed = getattr(self.cfg, "timers_require_armed", False)
+        reconfirm = getattr(self.cfg, "timers_reconfirm_days", 7.0)
+        for t in due:
+            if timers_mod.needs_reconfirm(t, now, reconfirm):
+                swarmdb.update_timer(conn, t["id"], active=0)
+                self.pending_timer_sids.add(info.session_id)
+                self._note(f"timer {t['id']} binding stale - re-confirm via t")
+                continue
+            if not timers_mod.firable(t, ready=ready, paused=self.paused,
+                                      armed=armed, require_armed=require_armed):
+                continue
+            if self.dry_run:
+                audit.record("would-fire", info.title, t["payload"][:500],
+                             f"timer {t['id']}")
+                self._note(f"DRY-RUN would fire timer -> {info.title}: "
+                           f"{t['payload'][:60]}")
+                swarmdb.mark_timer_fired(conn, t["id"], now=now)
+                return
+            if not audit.record("timer-fired", info.title, t["payload"][:500],
+                                f"timer {t['id']}"):
+                now2 = time.time()
+                if now2 - info._last_notify_ts >= self.notify_cooldown:
+                    info._last_notify_ts = now2
+                    self._note(f"AUDIT-FAIL: not firing timer {t['id']}")
+                return
+            await s.async_send_text(t["payload"])
+            await asyncio.sleep(0.3)
+            await s.async_send_text("\r")
+            swarmdb.mark_timer_fired(conn, t["id"], now=now)
+            self._note(f"TIMER -> {info.title}: {t['payload'][:60]}")
+            return    # one per tick
+
+    def _load_timers_on_start(self) -> None:
+        """Restore gate: unless [timers] autostart, every saved timer starts
+        inactive and its session is flagged pending (the app prompts to restore
+        via the t overlay). Never raises."""
+        try:
+            conn = self._swarm_conn()
+            if getattr(self.cfg, "timers_autostart", False):
+                swarmdb.restore_all_present_timers(conn, list(self.sessions))
+                self.pending_timer_sids = set()
+            else:
+                swarmdb.deactivate_all_timers(conn)
+                self.pending_timer_sids = {
+                    row["iterm_session_id"]
+                    for row in swarmdb.all_timers(conn)
+                    if row["iterm_session_id"] in self.sessions}
+        except Exception as e:
+            self._note(f"timers load error: {e}")
 
     def _check_escalations(self) -> None:
         """A worker sending --kind escalation is calling for a human. Ping
