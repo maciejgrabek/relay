@@ -530,6 +530,21 @@ async def go():
           "max_fires": 10, "fire_count": 0}],
         now=1000.0, session_title="api", width=90)
     chk("timers_view_text escapes '[' in the payload", "\\[a-z]" in _esc)
+    # live-feed header timers summary (one line, plain text)
+    _sm = appmod.timers_summary(
+        [{"interval_min": 5, "payload": "check PRs", "mode": "idle",
+          "enabled": 1, "active": 1, "last_fired_at": 880.0,
+          "max_fires": 10, "fire_count": 0},
+         {"interval_min": 9, "payload": "x", "mode": "now", "enabled": 1,
+          "active": 1, "last_fired_at": 0, "max_fires": 3, "fire_count": 3},
+         {"interval_min": 1, "payload": "y", "mode": "now", "enabled": 1,
+          "active": 0, "last_fired_at": 0, "max_fires": 10, "fire_count": 0}],
+        now=1000.0)
+    chk("timers_summary: on-count + next fire + done + needs-restore",
+        "TIMERS:" in _sm and "1 on" in _sm and "check PRs" in _sm
+        and "1 done" in _sm and "1 need restore" in _sm)
+    chk("timers_summary empty when no timers",
+        appmod.timers_summary([], now=1000.0) == "")
     chk("help advertises timers", "timers" in appmod.help_text().lower())
     chk("timer cell: count + soonest countdown, pending flag, else empty",
         appmod.timer_cell(active=2, soonest_secs=125, pending=False) == "2·2m"
