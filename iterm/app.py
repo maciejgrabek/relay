@@ -532,12 +532,14 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
     return head + "\n".join(lines)
 
 
-def timer_cell(active, soonest_secs, pending) -> str:
-    """Main-list ⏲ column: 'N·Mm' (N active timers; soonest fires in M min),
-    '?' when timers await restore, '' when none. active wins."""
+def timer_cell(active, pending) -> str:
+    """Main-list '⏲ TIMERS' column: the count of active timers on this session,
+    '?' when timers await restore, '' when none. active wins. (The next-fire
+    countdown lives in the feed header summary and the `t` overlay, where it can
+    be attributed to a specific timer - a single soonest-of-N here was
+    ambiguous.)"""
     if active:
-        m = max(0, int((soonest_secs or 0) // 60))
-        return f"{active}·{m}m"
+        return str(active)
     if pending:
         return "?"
     return ""
@@ -866,21 +868,19 @@ class RelayApp(App):
             if attention:
                 # The duplicate strip row: same data, unmissable name.
                 title = f"[bold {DANGER}]‼ {title}[/]"
-            # Timer column: N active timers + soonest countdown, or ? pending.
+            # '⏲ TIMERS' column: count of active timers, or ? when pending.
             pend = info.session_id in getattr(
                 self.watcher, "pending_timer_sids", set())
-            act, soonest = 0, None
+            act = 0
             try:
                 import timers as _timers
                 for t in swarmdb.list_timers(self._swarm_db_conn(),
                                              info.session_id):
                     if t["active"] and t["enabled"] and not _timers.capped(t):
                         act += 1
-                        due = _timers.next_due_in(t, time.time())
-                        soonest = due if soonest is None else min(soonest, due)
             except Exception:
                 pass
-            tcell = timer_cell(act, soonest, pend)
+            tcell = timer_cell(act, pend)
             if tcell:
                 tcolor = WARN if not act and pend else CYAN
                 tcell = f"[{DIM}]{tcell}[/]" if dim else f"[{tcolor}]{tcell}[/]"

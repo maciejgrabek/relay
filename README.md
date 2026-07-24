@@ -947,8 +947,10 @@ progress** (`3/10`, or `∞` for unlimited), and its countdown.
 timer shows **done (cap reached)**; raise its cap with `]` to resume it. Only
 real fires consume the cap - dry-run and "fire now" (`g`) do not.
 
-The session's list row carries a **`⏲` column** showing `N·Mm` (N active timers,
-soonest fires in M minutes), or `⏲?` when a timer needs restore.
+The session's list row carries a **`⏲ TIMERS` column** showing the count of
+active timers (or `?` when a timer needs restore). The next-fire countdown lives
+in the feed-header summary and the `t` overlay, where it belongs to a specific
+timer.
 
 **`idle` vs `now`:** an `idle` timer only fires once the session is sitting at a
 ready prompt - it waits rather than interrupting a running command (a "check in
