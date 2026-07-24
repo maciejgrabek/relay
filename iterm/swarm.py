@@ -86,6 +86,41 @@ def escalation_pings(msgs, already: set) -> list:
             if kind_of(m) == "escalation" and m["id"] not in already]
 
 
+# --- live-scoped stakes: only count what relay can act on RIGHT NOW -----------
+#
+# The header "N msgs queued" and the quit-guard stakes must reflect this run's
+# live sessions, not the whole DB. An abandoned project leaves undelivered
+# messages and orphaned "doing" tasks behind; counting those cries wolf (the
+# panel warns about work relay cannot deliver or supervise), and a panel you
+# learn to ignore is worthless. Scope every count to the sessions relay is
+# actually watching.
+
+def live_names(registry, live_sids) -> set:
+    """The swarm session NAMES relay is watching live now: registry rows
+    (bare-sid -> session row) whose iterm session is currently present. A name
+    absent here is stale - its tab is gone this run, so relay can neither
+    deliver to it nor supervise it."""
+    live = set(live_sids)
+    return {row["name"] for sid, row in registry.items() if sid in live}
+
+
+def live_queued_count(undelivered, names) -> int:
+    """Undelivered messages addressed to a live session (deliverable this run).
+    A message to a name relay isn't watching can't be delivered now, so it is
+    not a queued stake for the operator."""
+    live = set(names)
+    return sum(1 for m in undelivered if m["to_name"] in live)
+
+
+def live_doing_count(tasks, names) -> int:
+    """'doing' tasks owned by a live session (in-flight this run). A doing task
+    whose owner is gone is an orphan - surfaced separately via the restore/wipe
+    path - not a live stake, so it is excluded here."""
+    live = set(names)
+    return sum(1 for t in tasks
+               if t["state"] == "doing" and (t["owner"] or "") in live)
+
+
 # --- injection safety: is this Claude's idle input box? -----------------------
 
 # Claude Code idle screens end with a bordered input box ("│ > ") and/or the

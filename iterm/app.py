@@ -619,6 +619,14 @@ class RelayApp(App):
         return [i for i in self.watcher.sessions.values()
                 if i.session_id != self._own_sid]
 
+    def _live_names(self) -> set:
+        """Swarm names relay is watching live now - the scope for the queued /
+        doing stakes so an abandoned project's leftovers don't cry wolf."""
+        if not self.watcher:
+            return set()
+        return swarmlogic.live_names(self.watcher.registry or {},
+                                     set(self.watcher.sessions.keys()))
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(BANNER, id="banner")
@@ -827,7 +835,10 @@ class RelayApp(App):
         try:
             if self._swarm_db is None:
                 self._swarm_db = swarmdb.connect()
-            queued_n = len(swarmdb.undelivered(self._swarm_db))
+            # Scope to live sessions: an abandoned project's undelivered
+            # messages target names relay isn't watching and can't deliver.
+            queued_n = swarmlogic.live_queued_count(
+                swarmdb.undelivered(self._swarm_db), self._live_names())
         except Exception:
             pass
         attn = ""
@@ -1354,9 +1365,14 @@ class RelayApp(App):
         try:
             if self._swarm_db is None:
                 self._swarm_db = swarmdb.connect()
-            n_queued = len(swarmdb.undelivered(self._swarm_db))
-            n_doing = sum(1 for t in swarmdb.list_tasks(self._swarm_db)
-                          if t["state"] == "doing")
+            # Scope both to live sessions: a dead project's queued messages and
+            # orphaned 'doing' tasks are not stakes of quitting THIS run (the
+            # orphans have their own restore/wipe path).
+            names = self._live_names()
+            n_queued = swarmlogic.live_queued_count(
+                swarmdb.undelivered(self._swarm_db), names)
+            n_doing = swarmlogic.live_doing_count(
+                swarmdb.list_tasks(self._swarm_db), names)
         except Exception:
             pass
         return quit_stakes_text(n_armed, n_queued, n_doing)
