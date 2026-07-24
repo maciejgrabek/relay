@@ -433,6 +433,21 @@ def run():
                 n == 1 and rr["active"] == 1 and rr["last_fired_at"] == 3000.0
                 and rr["bound_at"] == 3000.0)
 
+    # restore_timer: re-activate ONLY the given timer, leaving siblings alone
+    tA = db.add_timer(conn, iterm_session_id="SIDR", label="r", interval_min=1,
+                      payload="a", mode="now", now=1000.0)
+    db.add_timer(conn, iterm_session_id="SIDR", label="r", interval_min=1,
+                 payload="b", mode="now", now=1000.0)
+    db.deactivate_all_timers(conn)
+    got = db.restore_timer(conn, tA, now=5000.0)
+    rlist = db.list_timers(conn, "SIDR")
+    ok &= check("restore_timer activates only the one timer",
+                got == 1
+                and [t["active"] for t in rlist if t["id"] == tA][0] == 1
+                and [t["active"] for t in rlist if t["id"] != tA][0] == 0)
+    ok &= check("restore_timer rebinds the clock", [t["last_fired_at"]
+                for t in rlist if t["id"] == tA][0] == 5000.0)
+
     db.add_timer(conn, iterm_session_id="SID2", label="b", interval_min=1,
                  payload="p", mode="now", now=1000.0)
     db.deactivate_all_timers(conn)
