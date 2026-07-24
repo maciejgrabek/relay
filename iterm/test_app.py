@@ -494,6 +494,32 @@ async def go():
         and all(mfb(0, "ok", armed=2, paused=True)[i][11] == "│"
                 for i in (2, 3, 4)))
 
+    # --- timers overlay -------------------------------------------------------
+    _tv = appmod.timers_view_text(
+        [{"id": 1, "interval_min": 5, "payload": "check PRs", "mode": "idle",
+          "enabled": 1, "active": 1, "last_fired_at": 1000.0}],
+        now=1000.0, session_title="api", width=80)
+    chk("timers_view_text lists interval + payload",
+        "every 5m" in _tv and "check PRs" in _tv)
+    chk("help advertises timers", "timers" in appmod.help_text().lower())
+
+    to = _TestApp(_one(), dry_run=True)
+    async with to.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        chk("t opens timers overlay",
+            to._timers_visible
+            and str(to.query_one("#timersview").styles.display) == "block")
+        await pilot.press("t")
+        await pilot.pause()
+        chk("t closes it", not to._timers_visible)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("esc also closes timers overlay", not to._timers_visible)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

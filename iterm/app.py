@@ -119,7 +119,7 @@ def _keys(pairs) -> str:
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"),
-           ("v", "audit"), ("f", "feed")])
+           ("v", "audit"), ("f", "feed"), ("t", "timers")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), (",", "settings"), ("R×2", "restore"),
@@ -428,6 +428,7 @@ def help_text() -> str:
         row("x", "hide / show the selected session"),
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
+        row("t", "timers: schedule payloads to fire into this session (cron-like)"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
         row(",", "settings editor - up/down move, left/right change, p plays a sound"),
@@ -478,6 +479,34 @@ def audit_view_text(entries, title: str, width: int, now=None) -> str:
         m = mark.get(e.get("verdict", ""), "?")
         lines.append(f" {t}  {m} {str(e.get('verdict', '?')):<13} "
                      f"{str(e.get('command', ''))[:max(10, w - 38)]}")
+    return head + "\n".join(lines)
+
+
+def timers_view_text(rows, now, session_title, width) -> str:
+    """The `t` overlay body: one line per timer for the selected session, plus
+    countdown + on/off. Plain text (pane renders markup-free)."""
+    import timers as _timers
+    w = max(40, width)
+    bar = "═" * w
+    head = (f"╔{bar}╗\n"
+            f" ⏲ TIMERS // {session_title[:w - 14]}\n"
+            f" a add · enter edit payload · left/right interval · m mode · "
+            f"space on/off · g fire · x del · r restore · esc close\n"
+            f"╚{bar}╝\n")
+    if not rows:
+        return head + ("\n no timers on this session.\n\n"
+                       " press a to add one: an interval (1-90 min) and a\n"
+                       " payload string sent to this session on that schedule.")
+    lines = []
+    for r in rows:
+        onoff = "● on " if r["enabled"] else "○ off"
+        if not r["active"]:
+            when = "needs restore (r)"
+        else:
+            secs = max(0, _timers.next_due_in(r, now))
+            when = f"next in {int(secs) // 60}m{int(secs) % 60:02d}s"
+        lines.append(f"  every {r['interval_min']}m  {r['mode']:<4} {onoff}  "
+                     f"{when:<18} {str(r['payload'])[:max(10, w - 40)]}")
     return head + "\n".join(lines)
 
 
@@ -542,7 +571,7 @@ class RelayApp(App):
         height: 5; border-top: solid $dimmer;
         background: $bg_deep; color: $dim;
     }
-    #swarmview, #helpview, #settingsview {
+    #swarmview, #helpview, #settingsview, #timersview {
         display: none; height: 1fr; padding: 0 2;
         background: $bg_deep; color: $accent;
     }
@@ -569,6 +598,7 @@ class RelayApp(App):
         Binding("x", "hide", "Hide/show"),
         Binding("v", "audit_view", "Audit view", show=False),
         Binding("f", "toggle_preview", "Feed on/off", show=False),
+        Binding("t", "timers", "Timers", show=False),
         Binding("tab", "swarm_view", "Swarm view", priority=True),
         Binding("R", "restore", "Restore orphaned", show=True),
         Binding("W", "wipe", "Wipe orphaned", show=True),
@@ -591,6 +621,8 @@ class RelayApp(App):
         self._help_visible = False
         self._audit_visible = False
         self._settings_visible = False
+        self._timers_visible = False
+        self._timers_cursor = 0
         # Preview (live-feed) pane visibility. Default shown; the real value is
         # read from config in on_mount, toggled live by 'f', and persisted.
         self._preview_visible = True
@@ -615,7 +647,7 @@ class RelayApp(App):
         session list - session-mutating keys must be inert then, or a stray
         keypress acts on a tab you cannot see."""
         return (self._settings_visible or self._swarm_visible
-                or self._help_visible)
+                or self._help_visible or self._timers_visible)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -644,6 +676,7 @@ class RelayApp(App):
             yield Static("", id="swarmview")
             yield Static(help_text(), id="helpview")
             yield Static("", id="settingsview")
+            yield Static("", id="timersview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
 
@@ -1219,6 +1252,90 @@ class RelayApp(App):
         self._apply_preview()
         self._persist_preview()
 
+    # --- timers overlay (t): schedule payloads into the selected session ------
+    def _swarm_db_conn(self):
+        if self._swarm_db is None:
+            self._swarm_db = swarmdb.connect()
+        return self._swarm_db
+
+    def action_timers(self) -> None:
+        if self._swarm_visible:
+            self.action_swarm_view()
+        if self._settings_visible:
+            self.action_settings()
+        if self._help_visible:
+            self.action_help()
+        sid = self._selected_sid()
+        if sid == self._own_sid:
+            self.query_one(Log).write_line(
+                "timers: relay never fires into its own panel tab")
+            return
+        self._timers_visible = not self._timers_visible
+        on = self._timers_visible
+        self.query_one("#middle").styles.display = "none" if on else "block"
+        self.query_one("#log").styles.display = "none" if on else "block"
+        self.query_one("#timersview").styles.display = "block" if on else "none"
+        if on:
+            self._timers_cursor = 0
+            self._render_timers()
+
+    def _render_timers(self) -> None:
+        sid = self._selected_sid()
+        if not sid or not self.watcher:
+            self.query_one("#timersview", Static).update("\n  no session.")
+            return
+        try:
+            rows = [dict(r) for r in swarmdb.list_timers(
+                self._swarm_db_conn(), sid)]
+        except Exception as e:
+            self.query_one("#timersview", Static).update(f"\n  db error: {e}")
+            return
+        info = self.watcher.sessions.get(sid)
+        title = info.title if info else sid
+        w = self.query_one("#timersview").size.width - 4
+        self.query_one("#timersview", Static).update(
+            timers_view_text(rows, time.time(), title, max(40, w)))
+
+    def on_key(self, event) -> None:
+        if not self._timers_visible:
+            return
+        sid = self._selected_sid()
+        rows = [dict(r) for r in swarmdb.list_timers(self._swarm_db_conn(), sid)] \
+            if sid else []
+        cur = min(self._timers_cursor, max(0, len(rows) - 1))
+        k = event.key
+        if k == "up" and rows:
+            self._timers_cursor = max(0, cur - 1); self._render_timers(); event.stop()
+        elif k == "down" and rows:
+            self._timers_cursor = min(len(rows) - 1, cur + 1); self._render_timers(); event.stop()
+        elif k == "space" and rows:
+            swarmdb.set_timer_enabled(self._swarm_db_conn(), rows[cur]["id"],
+                                      not rows[cur]["enabled"])
+            self._render_timers(); event.stop()
+        elif k == "g" and rows:
+            swarmdb.mark_timer_fired(self._swarm_db_conn(), rows[cur]["id"],
+                                     now=time.time() - rows[cur]["interval_min"] * 60)
+            self._render_timers(); event.stop()      # due next tick, audited
+        elif k == "x" and rows:
+            swarmdb.delete_timer(self._swarm_db_conn(), rows[cur]["id"])
+            self._timers_cursor = 0; self._render_timers(); event.stop()
+        elif k == "r" and sid:
+            swarmdb.restore_session_timers(self._swarm_db_conn(), sid)
+            if self.watcher:
+                self.watcher.pending_timer_sids.discard(sid)
+            self._render_timers(); event.stop()
+        elif k in ("left", "right") and rows:
+            import timers as _timers
+            step = -1 if k == "left" else 1
+            swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
+                                 interval_min=_timers.clamp_interval(
+                                     rows[cur]["interval_min"] + step))
+            self._render_timers(); event.stop()
+        elif k == "m" and rows:
+            swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
+                                 mode="now" if rows[cur]["mode"] == "idle" else "idle")
+            self._render_timers(); event.stop()
+
     # --- audit view (v): the preview pane shows this session's decisions -----
     def action_audit_view(self) -> None:
         if self._any_overlay_open():
@@ -1236,6 +1353,8 @@ class RelayApp(App):
             self.action_audit_view()
         elif self._swarm_visible:
             self.action_swarm_view()
+        elif self._timers_visible:
+            self.action_timers()
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:
