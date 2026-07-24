@@ -179,14 +179,39 @@ def run():
     finally:
         os.environ.pop("RELAY_CONFIG", None)
 
+    # timers: two bools + a number; defaults; bad values warn
+    cfg, _ = config.load("/nonexistent/relay-config")
+    ok &= check("timers defaults",
+                cfg.timers_require_armed is False
+                and cfg.timers_autostart is False
+                and cfg.timers_reconfirm_days == 7.0)
+    p = _write("[timers]\nrequire_armed = true\nautostart = true\n"
+               "reconfirm_days = 3\n")
+    cfg, warns = config.load(p)
+    ok &= check("timers keys parsed",
+                cfg.timers_require_armed is True and cfg.timers_autostart is True
+                and cfg.timers_reconfirm_days == 3.0 and warns == [])
+    p = _write("[timers]\nrequire_armed = maybe\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad timers bool -> false + warning",
+                cfg.timers_require_armed is False
+                and any("require_armed" in w for w in warns))
+    p = _write("[timers]\nreconfirm_days = soon\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad reconfirm_days -> default + warning",
+                cfg.timers_reconfirm_days == 7.0
+                and any("reconfirm_days" in w for w in warns))
+
     import dataclasses
     # dump -> load round-trips every managed field (non-default values).
     custom = dataclasses.replace(
         config.Config(), title_style="hybrid", alert_sound="/a/x.aiff",
         done_sound="", danger_sound="/a/d.aiff", message_sound="/a/m.aiff",
         stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
-        statusbar_enabled=True, danger_preset="paranoid", theme="amber",
-        preview_panel=False)
+        statusbar_enabled=True, danger_preset="paranoid",
+        theme="amber", preview_panel=False,
+        timers_require_armed=True, timers_autostart=True,
+        timers_reconfirm_days=3.0)
     p = _write(config.dump(custom))
     back, warns = config.load(p)
     ok &= check("dump->load round-trips every field", back == custom)

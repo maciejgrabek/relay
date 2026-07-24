@@ -49,6 +49,9 @@ class Config:
     danger_preset: str = "default"
     theme: str = "phosphor"
     preview_panel: bool = True
+    timers_require_armed: bool = False
+    timers_autostart: bool = False
+    timers_reconfirm_days: float = 7.0
 
 
 def default_path() -> str:
@@ -131,6 +134,23 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      "using true")
         preview = True
 
+    try:
+        t_armed = cp.getboolean("timers", "require_armed",
+                                fallback=d.timers_require_armed)
+    except ValueError:
+        warns.append("config: [timers] require_armed must be true/false - "
+                     "using false")
+        t_armed = False
+    try:
+        t_auto = cp.getboolean("timers", "autostart",
+                               fallback=d.timers_autostart)
+    except ValueError:
+        warns.append("config: [timers] autostart must be true/false - "
+                     "using false")
+        t_auto = False
+    t_recon = _get_float(cp, "timers", "reconfirm_days",
+                         d.timers_reconfirm_days, warns)
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -161,6 +181,9 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         danger_preset=preset,
         theme=theme,
         preview_panel=preview,
+        timers_require_armed=t_armed,
+        timers_autostart=t_auto,
+        timers_reconfirm_days=t_recon,
     ), warns
 
 
@@ -188,6 +211,10 @@ def dump(cfg: Config) -> str:
         f"name = {cfg.theme}\n\n"
         "[layout]\n"
         f"preview = {'true' if cfg.preview_panel else 'false'}\n"
+        "\n[timers]\n"
+        f"require_armed  = {'true' if cfg.timers_require_armed else 'false'}\n"
+        f"autostart      = {'true' if cfg.timers_autostart else 'false'}\n"
+        f"reconfirm_days = {cfg.timers_reconfirm_days:g}\n"
     )
 
 
