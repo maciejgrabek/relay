@@ -1336,6 +1336,9 @@ class RelayApp(App):
             self._timer_form_close()
             return
         sid = self._selected_sid()
+        if sid is None:
+            self._timer_form_close()
+            return
         info = self.watcher.sessions.get(sid) if self.watcher else None
         interval = _timers.clamp_interval(self._timer_form["interval"])
         mode = self._timer_form["mode"]
@@ -1405,7 +1408,7 @@ class RelayApp(App):
             swarmdb.update_timer(self._swarm_db_conn(), rows[cur]["id"],
                                  mode="now" if rows[cur]["mode"] == "idle" else "idle")
             self._render_timers(); event.stop()
-        elif k == "a":
+        elif k == "a" and sid:
             self._timer_form_open(); event.stop()
         elif k in ("enter", "e") and rows:
             self._timer_form_open(rows[cur]); event.stop()
