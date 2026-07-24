@@ -506,6 +506,8 @@ async def go():
     to = _TestApp(_one(), dry_run=True)
     async with to.run_test() as pilot:
         await pilot.pause()
+        to._refresh()          # populate the grid so a session is selected
+        await pilot.pause()
         await pilot.press("t")
         await pilot.pause()
         chk("t opens timers overlay",
@@ -519,6 +521,35 @@ async def go():
         await pilot.press("escape")
         await pilot.pause()
         chk("esc also closes timers overlay", not to._timers_visible)
+
+        await pilot.press("t")            # reopen
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        chk("a opens the add form", to._timer_form is not None)
+        to.query_one("#timer_payload").value = "check PRs"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        import db as _db
+        rows = _db.list_timers(to._swarm_db_conn(), to._selected_sid())
+        chk("saved timer with typed payload + sane defaults",
+            any(r["payload"] == "check PRs" and 1 <= r["interval_min"] <= 90
+                for r in rows))
+
+        # esc while the form is open must cancel ONLY the form - the timers
+        # overlay itself has its own "escape" binding (action_dismiss_view)
+        # that fires independently of on_key, and would otherwise also close
+        # the whole overlay on the same keypress. A second esc then closes it.
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("esc cancels the form but keeps the overlay open",
+            to._timer_form is None and to._timers_visible)
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("a second esc then closes the overlay", not to._timers_visible)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
