@@ -510,6 +510,16 @@ def timers_view_text(rows, now, session_title, width) -> str:
     return head + "\n".join(lines)
 
 
+def timer_badge(active, pending) -> str:
+    """Row indicator: ⏲N for N active timers, ⏲? when timers await restore,
+    else empty. active wins."""
+    if active:
+        return f"⏲{active}"
+    if pending:
+        return "⏲?"
+    return ""
+
+
 def needs_action(state: str, stale: bool) -> bool:
     """A session a human should look at NOW: it is holding a prompt relay
     escalated (or is not allowed to clear), it is blocked, or it went stale.
@@ -803,6 +813,18 @@ class RelayApp(App):
             if attention:
                 # The duplicate strip row: same data, unmissable name.
                 title = f"[bold {DANGER}]‼ {title}[/]"
+            pend = info.session_id in getattr(
+                self.watcher, "pending_timer_sids", set())
+            act = 0
+            try:
+                act = sum(1 for t in swarmdb.list_timers(
+                    self._swarm_db_conn(), info.session_id)
+                    if t["active"] and t["enabled"])
+            except Exception:
+                pass
+            badge = timer_badge(act, pend)
+            if badge:
+                title = f"{title} [{DIM}]{badge}[/]"
             table.add_row(arm, label, wt, title, role, task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
@@ -1029,6 +1051,23 @@ class RelayApp(App):
                   f"{attn}"
                   f"╚{bar}╝\n")
         body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
+        try:
+            trows = [dict(r) for r in swarmdb.list_timers(
+                self._swarm_db_conn(), sid)]
+        except Exception:
+            trows = []
+        if trows:
+            import timers as _timers
+            tl = [" TIMERS"]
+            for r in trows[:4]:
+                st = "on" if r["enabled"] and r["active"] else (
+                    "restore?" if not r["active"] else "off")
+                secs = max(0, _timers.next_due_in(r, time.time()))
+                tl.append(f"   every {r['interval_min']}m {r['mode']} [{st}] "
+                          f"in {int(secs)//60}m: {str(r['payload'])[:w-24]}")
+            if len(trows) > 4:
+                tl.append(f"   (+{len(trows) - 4} more)")
+            body = body + "\n" + "\n".join(tl)
         preview.update(header + body)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
