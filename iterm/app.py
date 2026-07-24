@@ -517,7 +517,14 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
         payload = escape(str(r["payload"])[:max(10, w - 50)])
         line = (f" {mark} {str(r['interval_min']) + 'm':<4} {r['mode']:<4} "
                 f"{onoff}  {cap:<7} {when:<18} {payload}")
-        lines.append(f"[b]{line}[/b]" if sel else line)
+        if sel:
+            # Full-width highlight bar, matching the main list's cursor row
+            # (bright text on the cursor background) so the selection is
+            # unmistakable, not just bolded.
+            lines.append(f"[bold {TH['hot']} on {TH['bg_cursor']}]"
+                         f"{line:<{w}}[/]")
+        else:
+            lines.append(line)
     return head + "\n".join(lines)
 
 
@@ -946,6 +953,10 @@ class RelayApp(App):
         self._update_preview()
         if self._swarm_visible:
             self._render_swarm_view()
+        # Keep the timers overlay's countdown live while it's open (but not while
+        # a payload form is focused - re-rendering would disturb the Input).
+        if self._timers_visible and self._timer_form is None:
+            self._render_timers()
 
     def _tick_reactor(self) -> None:
         """Integrate reactor temp toward current pressure and render the meter.

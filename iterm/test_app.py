@@ -570,6 +570,27 @@ async def go():
         await pilot.pause()
         chk("] raises the fire cap (9 -> 10)", _mf() == 10)
 
+        # the overlay re-renders on the periodic _refresh (not only on keypress),
+        # so the countdown stays live while you watch it. Spy that _refresh calls
+        # _render_timers while the overlay is open, and NOT once it's closed.
+        import types
+        _real_rt = appmod.RelayApp._render_timers
+        _calls = {"n": 0}
+        def _spy(self):
+            _calls["n"] += 1
+            return _real_rt(self)
+        to._render_timers = types.MethodType(_spy, to)
+        to._refresh()
+        chk("open timers overlay re-renders on _refresh (live countdown)",
+            _calls["n"] == 1)
+        # (and not when it's closed)
+        to._timers_visible = False
+        to._refresh()
+        chk("_refresh does not re-render a closed timers overlay",
+            _calls["n"] == 1)
+        to._timers_visible = True
+        to._render_timers = types.MethodType(_real_rt, to)
+
         # esc while the form is open must cancel ONLY the form - the timers
         # overlay itself has its own "escape" binding (action_dismiss_view)
         # that fires independently of on_key, and would otherwise also close
