@@ -758,7 +758,7 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "↻", "⏲", "UNIT", "ROLE",
+        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "UNIT", "ROLE",
                           "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
         # Preview pane starts in its configured state (watcher isn't connected
         # yet, so read config directly - same as the theme is read at import).
