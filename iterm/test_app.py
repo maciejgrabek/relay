@@ -495,17 +495,33 @@ async def go():
                 for i in (2, 3, 4)))
 
     # --- timers overlay -------------------------------------------------------
-    _tv = appmod.timers_view_text(
-        [{"id": 1, "interval_min": 5, "payload": "check PRs", "mode": "idle",
-          "enabled": 1, "active": 1, "last_fired_at": 1000.0}],
-        now=1000.0, session_title="api", width=80)
-    chk("timers_view_text lists interval + payload",
-        "every 5m" in _tv and "check PRs" in _tv)
+    _trows = [
+        {"id": 1, "interval_min": 5, "payload": "check PRs", "mode": "idle",
+         "enabled": 1, "active": 1, "last_fired_at": 1000.0,
+         "max_fires": 10, "fire_count": 3},
+        {"id": 2, "interval_min": 9, "payload": "second", "mode": "now",
+         "enabled": 1, "active": 1, "last_fired_at": 1000.0,
+         "max_fires": 0, "fire_count": 0}]
+    _tv = appmod.timers_view_text(_trows, now=1000.0, session_title="api",
+                                  width=90, cursor=1)
+    chk("timers_view_text lists interval + payload", "5m" in _tv
+        and "check PRs" in _tv and "second" in _tv)
+    chk("timers_view_text shows fire-cap progress + unlimited",
+        "3/10" in _tv and "∞" in _tv)
+    chk("timers_view_text marks the cursor row (▸ on row index 1)",
+        "▸" in _tv and _tv.count("▸") == 1)
+    # payload with a '[' must be escaped (view renders with markup on)
+    _esc = appmod.timers_view_text(
+        [{"id": 1, "interval_min": 5, "payload": "sed 's/[a-z]/x/'",
+          "mode": "now", "enabled": 1, "active": 1, "last_fired_at": 1000.0,
+          "max_fires": 10, "fire_count": 0}],
+        now=1000.0, session_title="api", width=90)
+    chk("timers_view_text escapes '[' in the payload", "\\[a-z]" in _esc)
     chk("help advertises timers", "timers" in appmod.help_text().lower())
-    chk("timer badge: active count wins, pending flag, else empty",
-        appmod.timer_badge(active=2, pending=False) == "⏲2"
-        and appmod.timer_badge(active=0, pending=True) == "⏲?"
-        and appmod.timer_badge(active=0, pending=False) == "")
+    chk("timer cell: count + soonest countdown, pending flag, else empty",
+        appmod.timer_cell(active=2, soonest_secs=125, pending=False) == "2·2m"
+        and appmod.timer_cell(active=0, soonest_secs=None, pending=True) == "?"
+        and appmod.timer_cell(active=0, soonest_secs=None, pending=False) == "")
 
     to = _TestApp(_one(), dry_run=True)
     async with to.run_test() as pilot:
@@ -540,6 +556,19 @@ async def go():
         chk("saved timer with typed payload + sane defaults",
             any(r["payload"] == "check PRs" and 1 <= r["interval_min"] <= 90
                 for r in rows))
+
+        # fire-cap edit: '[' lowers, ']' raises max_fires on the selected timer
+        cap_id = [r for r in rows if r["payload"] == "check PRs"][0]["id"]
+        _mf = lambda: [r for r in _db.list_timers(
+            to._swarm_db_conn(), to._selected_sid())
+            if r["id"] == cap_id][0]["max_fires"]
+        chk("new timer defaults to fire cap 10", _mf() == 10)
+        await pilot.press("left_square_bracket")
+        await pilot.pause()
+        chk("[ lowers the fire cap (10 -> 9)", _mf() == 9)
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        chk("] raises the fire cap (9 -> 10)", _mf() == 10)
 
         # esc while the form is open must cancel ONLY the form - the timers
         # overlay itself has its own "escape" binding (action_dismiss_view)
