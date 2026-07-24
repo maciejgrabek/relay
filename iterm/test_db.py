@@ -394,6 +394,47 @@ def run():
     conn5.close()
     up.close()
 
+    # --- session timers -------------------------------------------------------
+    tid = db.add_timer(conn, iterm_session_id="SID1", label="api",
+                       interval_min=5, payload="check PRs", mode="idle",
+                       now=1000.0)
+    rows = db.list_timers(conn, "SID1")
+    ok &= check("add_timer + list_timers", len(rows) == 1
+                and rows[0]["payload"] == "check PRs"
+                and rows[0]["active"] == 1 and rows[0]["enabled"] == 1
+                and rows[0]["bound_at"] == 1000.0)
+    db.set_timer_enabled(conn, tid, False)
+    ok &= check("set_timer_enabled off",
+                db.list_timers(conn, "SID1")[0]["enabled"] == 0)
+    db.mark_timer_fired(conn, tid, now=2000.0)
+    ok &= check("mark_timer_fired sets last_fired_at",
+                db.list_timers(conn, "SID1")[0]["last_fired_at"] == 2000.0)
+    db.update_timer(conn, tid, interval_min=15, mode="now")
+    r = db.list_timers(conn, "SID1")[0]
+    ok &= check("update_timer", r["interval_min"] == 15 and r["mode"] == "now")
+
+    db.deactivate_all_timers(conn)
+    ok &= check("deactivate_all_timers",
+                db.list_timers(conn, "SID1")[0]["active"] == 0)
+    n = db.restore_session_timers(conn, "SID1", now=3000.0)
+    rr = db.list_timers(conn, "SID1")[0]
+    ok &= check("restore_session_timers activates + resets clock + rebinds",
+                n == 1 and rr["active"] == 1 and rr["last_fired_at"] == 3000.0
+                and rr["bound_at"] == 3000.0)
+
+    db.add_timer(conn, iterm_session_id="SID2", label="b", interval_min=1,
+                 payload="p", mode="now", now=1000.0)
+    db.deactivate_all_timers(conn)
+    db.restore_all_present_timers(conn, ["SID1", "SID2"], now=4000.0)
+    ok &= check("restore_all_present_timers activates each present session",
+                db.list_timers(conn, "SID1")[0]["active"] == 1
+                and db.list_timers(conn, "SID2")[0]["active"] == 1)
+
+    db.delete_timer(conn, tid)
+    ok &= check("delete_timer", db.list_timers(conn, "SID1") == [])
+    ok &= check("all_timers sees other sessions' timers",
+                any(t["iterm_session_id"] == "SID2" for t in db.all_timers(conn)))
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

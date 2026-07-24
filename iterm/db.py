@@ -64,6 +64,19 @@ CREATE TABLE IF NOT EXISTS tasks(
   created_by TEXT,
   updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS timers(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  iterm_session_id TEXT,
+  label TEXT NOT NULL DEFAULT '',
+  interval_min INTEGER NOT NULL DEFAULT 5,
+  payload TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'idle',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  active INTEGER NOT NULL DEFAULT 1,
+  last_fired_at REAL NOT NULL DEFAULT 0,
+  bound_at REAL NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -351,6 +364,73 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
            ORDER BY CASE state WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1
                     ELSE 2 END, updated_at DESC LIMIT 1""",
         (owner,)).fetchone()
+
+
+# --- session timers ----------------------------------------------------------
+
+def add_timer(conn, *, iterm_session_id, label, interval_min, payload, mode,
+              active=1, now: Optional[float] = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
+        "mode, enabled, active, last_fired_at, bound_at, created_at) "
+        "VALUES(?,?,?,?,?,1,?,?,?,?)",
+        (iterm_session_id, label, int(interval_min), payload, mode,
+         int(active), _now(now), _now(now), _now(now)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_timers(conn, iterm_session_id) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM timers WHERE iterm_session_id=? ORDER BY id",
+        (iterm_session_id,)).fetchall()
+
+
+def all_timers(conn) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM timers ORDER BY id").fetchall()
+
+
+def update_timer(conn, timer_id, **fields) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    conn.execute(f"UPDATE timers SET {cols} WHERE id=?",
+                 (*fields.values(), timer_id))
+    conn.commit()
+
+
+def set_timer_enabled(conn, timer_id, enabled) -> None:
+    update_timer(conn, timer_id, enabled=int(bool(enabled)))
+
+
+def delete_timer(conn, timer_id) -> None:
+    conn.execute("DELETE FROM timers WHERE id=?", (timer_id,))
+    conn.commit()
+
+
+def mark_timer_fired(conn, timer_id, now: Optional[float] = None) -> None:
+    update_timer(conn, timer_id, last_fired_at=_now(now))
+
+
+def restore_session_timers(conn, iterm_session_id,
+                           now: Optional[float] = None) -> int:
+    cur = conn.execute(
+        "UPDATE timers SET active=1, last_fired_at=?, bound_at=? "
+        "WHERE iterm_session_id=?",
+        (_now(now), _now(now), iterm_session_id))
+    conn.commit()
+    return cur.rowcount
+
+
+def deactivate_all_timers(conn) -> None:
+    conn.execute("UPDATE timers SET active=0")
+    conn.commit()
+
+
+def restore_all_present_timers(conn, present_sids,
+                               now: Optional[float] = None) -> None:
+    for sid in present_sids:
+        restore_session_timers(conn, sid, now=now)
 
 
 # --- clean helpers ---------------------------------------------------------------
