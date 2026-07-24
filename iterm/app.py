@@ -1429,9 +1429,13 @@ class RelayApp(App):
                                       not rows[cur]["enabled"])
             self._render_timers(); event.stop()
         elif k == "g" and rows:
-            swarmdb.mark_timer_fired(self._swarm_db_conn(), rows[cur]["id"],
-                                     now=time.time() - rows[cur]["interval_min"] * 60)
-            self._render_timers(); event.stop()      # due next tick, audited
+            # Backdate the clock so it becomes due next tick and fires through
+            # the audited engine. Use update_timer (not mark_timer_fired) so a
+            # manual nudge does NOT consume the fire cap.
+            swarmdb.update_timer(
+                self._swarm_db_conn(), rows[cur]["id"],
+                last_fired_at=time.time() - rows[cur]["interval_min"] * 60)
+            self._render_timers(); event.stop()
         elif k == "x" and rows:
             swarmdb.delete_timer(self._swarm_db_conn(), rows[cur]["id"])
             self._timers_cursor = 0; self._render_timers(); event.stop()

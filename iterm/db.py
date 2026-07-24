@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS timers(
   active INTEGER NOT NULL DEFAULT 1,
   last_fired_at REAL NOT NULL DEFAULT 0,
   bound_at REAL NOT NULL DEFAULT 0,
+  max_fires INTEGER NOT NULL DEFAULT 10,
+  fire_count INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL DEFAULT 0
 );
 """
@@ -105,7 +107,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 5
+_CURRENT_VERSION = 6
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -115,6 +117,13 @@ _MIGRATIONS = {
         "ALTER TABLE sessions ADD COLUMN closed_at REAL NOT NULL DEFAULT 0"),
     4: ("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'info'",
         "ALTER TABLE sessions ADD COLUMN worktree_repo TEXT NOT NULL DEFAULT ''"),
+    # v6: per-timer fire cap. The timers table (added via _SCHEMA without a
+    # version bump) predates these columns on any DB that already ran the
+    # timers feature, so existing DBs need the ALTERs; fresh DBs get them from
+    # _SCHEMA. "column already present" is swallowed by _migrate, so a DB that
+    # got the columns from _SCHEMA before this bump migrates harmlessly.
+    5: ("ALTER TABLE timers ADD COLUMN max_fires INTEGER NOT NULL DEFAULT 10",
+        "ALTER TABLE timers ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0"),
 }
 
 
@@ -369,13 +378,13 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
 # --- session timers ----------------------------------------------------------
 
 def add_timer(conn, *, iterm_session_id, label, interval_min, payload, mode,
-              active=1, now: Optional[float] = None) -> int:
+              active=1, max_fires=10, now: Optional[float] = None) -> int:
     cur = conn.execute(
         "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
-        "mode, enabled, active, last_fired_at, bound_at, created_at) "
-        "VALUES(?,?,?,?,?,1,?,?,?,?)",
+        "mode, enabled, active, last_fired_at, bound_at, max_fires, "
+        "fire_count, created_at) VALUES(?,?,?,?,?,1,?,?,?,?,0,?)",
         (iterm_session_id, label, int(interval_min), payload, mode,
-         int(active), _now(now), _now(now), _now(now)))
+         int(active), _now(now), _now(now), int(max_fires), _now(now)))
     conn.commit()
     return cur.lastrowid
 
@@ -409,7 +418,13 @@ def delete_timer(conn, timer_id) -> None:
 
 
 def mark_timer_fired(conn, timer_id, now: Optional[float] = None) -> None:
-    update_timer(conn, timer_id, last_fired_at=_now(now))
+    """Record a REAL fire: advance the clock AND consume one of the fire cap.
+    The 'fire now' key and the dry-run path set last_fired_at via update_timer
+    instead, so they do not consume the cap."""
+    conn.execute(
+        "UPDATE timers SET last_fired_at=?, fire_count=fire_count+1 WHERE id=?",
+        (_now(now), timer_id))
+    conn.commit()
 
 
 def restore_session_timers(conn, iterm_session_id,

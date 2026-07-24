@@ -29,8 +29,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 5",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 5)
+    ok &= check("fresh connect stamps user_version = 6",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 6)
 
     # v1 -> v5 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
@@ -50,13 +50,13 @@ def run():
     db.register(mig, "migrated", "M-1", "worker", "p")
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
-    ok &= check("v1 db migrates to v5 with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 5
+    ok &= check("v1 db migrates to current with arm_request + mode columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 6
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
-    ok &= check("v1 db migrates to v5 with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 5
+    ok &= check("v1 db migrates to current with context + closed_at columns",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 6
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -343,8 +343,8 @@ def run():
     # --- v5: message kind + worktree_repo ------------------------------------
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
-    ok &= check("fresh DB is schema v5",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 5)
+    ok &= check("fresh DB is schema v6",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 6)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -385,8 +385,8 @@ def run():
     """)
     old.commit(); old.close()
     up = db.connect(p4)
-    ok &= check("v4 -> v5 migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 5)
+    ok &= check("v4 -> current migration runs",
+                up.execute("PRAGMA user_version").fetchone()[0] == 6)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -403,12 +403,23 @@ def run():
                 and rows[0]["payload"] == "check PRs"
                 and rows[0]["active"] == 1 and rows[0]["enabled"] == 1
                 and rows[0]["bound_at"] == 1000.0)
+    ok &= check("add_timer default fire cap 10, count 0",
+                rows[0]["max_fires"] == 10 and rows[0]["fire_count"] == 0)
     db.set_timer_enabled(conn, tid, False)
     ok &= check("set_timer_enabled off",
                 db.list_timers(conn, "SID1")[0]["enabled"] == 0)
     db.mark_timer_fired(conn, tid, now=2000.0)
-    ok &= check("mark_timer_fired sets last_fired_at",
-                db.list_timers(conn, "SID1")[0]["last_fired_at"] == 2000.0)
+    r0 = db.list_timers(conn, "SID1")[0]
+    ok &= check("mark_timer_fired sets last_fired_at AND increments fire_count",
+                r0["last_fired_at"] == 2000.0 and r0["fire_count"] == 1)
+    # a custom cap is honored, and update_timer can adjust it
+    ct = db.add_timer(conn, iterm_session_id="SIDC", label="c", interval_min=1,
+                      payload="p", mode="now", max_fires=3, now=1000.0)
+    ok &= check("add_timer custom max_fires",
+                db.list_timers(conn, "SIDC")[0]["max_fires"] == 3)
+    db.update_timer(conn, ct, max_fires=0)
+    ok &= check("update_timer can set unlimited (0)",
+                db.list_timers(conn, "SIDC")[0]["max_fires"] == 0)
     db.update_timer(conn, tid, interval_min=15, mode="now")
     r = db.list_timers(conn, "SID1")[0]
     ok &= check("update_timer", r["interval_min"] == 15 and r["mode"] == "now")
