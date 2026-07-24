@@ -1105,6 +1105,124 @@ def notify_mac_tests():
     return ok
 
 
+async def timer_tests():
+    """Watcher fires due timers: now fires immediately, idle waits for ready,
+    pause freezes, require_armed gates, past-reconfirm deactivates."""
+    import tempfile
+    from watcher import Watcher, SessionInfo
+    import db as D
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    W.notify_mac = lambda *a, **k: None
+    W.audit.record = lambda *a, **k: True
+
+    # Hermetic temp DB shared between D.connect() (this test) and the
+    # watcher's own _swarm_conn() (both honor RELAY_DB, read at call time).
+    tmp = tempfile.mkdtemp()
+    saved_relay_db = os.environ.get("RELAY_DB")
+    os.environ["RELAY_DB"] = os.path.join(tmp, "relay-timers-test.db")
+    try:
+        conn = D.connect()
+        # A recent (not epoch-0) bound_at/last_fired_at: overdue by the 1-minute
+        # interval (due), but nowhere near timers_reconfirm_days old (not
+        # stale) - isolates the now/idle/pause/require_armed checks below from
+        # the stale-binding guard, which s5 tests on its own further down.
+        fresh = _time.time() - 120.0
+        D.add_timer(conn, iterm_session_id="s1", label="api", interval_min=1,
+                    payload="run lint", mode="now", now=fresh)
+        w = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs = FakeSession()
+        info = SessionInfo("s1", title="api", _iterm_session=fs, mode="safe",
+                           state="working")
+        w.sessions["s1"] = info
+        await w._fire_timers(info)
+        chk("now-mode fires immediately (busy ok)",
+            any("run lint" in s for s in fs.sent))
+
+        D.add_timer(conn, iterm_session_id="s2", label="w", interval_min=1,
+                    payload="check PRs", mode="idle", now=fresh)
+        w2 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs2 = FakeSession()
+        info2 = SessionInfo("s2", title="w", _iterm_session=fs2, mode="safe",
+                            state="working")
+        w2.sessions["s2"] = info2
+        await w2._fire_timers(info2)
+        chk("idle-mode waits while busy", fs2.sent == [])
+        info2.state = "idle"
+        info2.last_screen = ["│ > ", "? for shortcuts"]
+        await w2._fire_timers(info2)
+        chk("idle-mode fires at a ready prompt",
+            any("check PRs" in s for s in fs2.sent))
+
+        D.add_timer(conn, iterm_session_id="s3", label="w", interval_min=1,
+                    payload="x", mode="now", now=fresh)
+        w3 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        w3.paused = True
+        fs3 = FakeSession()
+        info3 = SessionInfo("s3", title="w", _iterm_session=fs3, mode="safe")
+        w3.sessions["s3"] = info3
+        await w3._fire_timers(info3)
+        chk("pause freezes timers", fs3.sent == [])
+
+        D.add_timer(conn, iterm_session_id="s4", label="w", interval_min=1,
+                    payload="y", mode="now", now=fresh)
+        w4 = Watcher(connection=None, dry_run=False,
+                     cfg=C.Config(timers_require_armed=True))
+        fs4 = FakeSession()
+        info4 = SessionInfo("s4", title="w", _iterm_session=fs4, mode="off")
+        w4.sessions["s4"] = info4
+        await w4._fire_timers(info4)
+        chk("require_armed blocks an unarmed session", fs4.sent == [])
+
+        # a binding older than reconfirm_days deactivates instead of firing
+        tid5 = D.add_timer(conn, iterm_session_id="s5", label="w",
+                           interval_min=1, payload="z", mode="now",
+                           now=0.0)   # bound_at = 0
+        w5 = Watcher(connection=None, dry_run=False,
+                     cfg=C.Config(timers_reconfirm_days=7))
+        fs5 = FakeSession()
+        info5 = SessionInfo("s5", title="w", _iterm_session=fs5, mode="safe")
+        w5.sessions["s5"] = info5
+        await w5._fire_timers(info5)     # now() >> 7 days after bound_at=0
+        chk("past-reconfirm timer does not fire",
+            fs5.sent == []
+            and D.list_timers(conn, "s5")[0]["active"] == 0
+            and "s5" in w5.pending_timer_sids)
+
+        # dry-run: would-fire is audited, but nothing is ever injected, and the
+        # timer is still marked fired (so it doesn't re-fire every tick).
+        audited = []
+        W.audit.record = lambda *a, **k: (audited.append(a), True)[1]
+        D.add_timer(conn, iterm_session_id="s6", label="w", interval_min=1,
+                    payload="dry payload", mode="now", now=fresh)
+        w6 = Watcher(connection=None, dry_run=True, cfg=C.Config())
+        fs6 = FakeSession()
+        info6 = SessionInfo("s6", title="w", _iterm_session=fs6, mode="safe")
+        w6.sessions["s6"] = info6
+        await w6._fire_timers(info6)
+        chk("dry-run: never injects", fs6.sent == [])
+        chk("dry-run: audits would-fire",
+            any(a[0] == "would-fire" for a in audited))
+        chk("dry-run: still marked fired (no immediate re-fire)",
+            D.list_timers(conn, "s6")[0]["last_fired_at"] > 0)
+        W.audit.record = lambda *a, **k: True
+    finally:
+        if saved_relay_db is None:
+            os.environ.pop("RELAY_DB", None)
+        else:
+            os.environ["RELAY_DB"] = saved_relay_db
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -1118,5 +1236,6 @@ if __name__ == "__main__":
     r10 = asyncio.run(pause_tests())
     r11 = asyncio.run(shadow_tests())
     r12 = notify_mac_tests()
+    r_timer = asyncio.run(timer_tests())
     sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10 and r11 and r12) else 1)
+                   and r9 and r10 and r11 and r12 and r_timer) else 1)
