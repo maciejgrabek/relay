@@ -759,19 +759,41 @@ def cmd_wipe(args) -> int:
         nt = len(db.list_tasks(conn, project=args.project))
         ns = len(db.list_sessions(conn, project=args.project))
         nm = len(db.message_history(conn, project=args.project, limit=10**9))
+        # Relay-created worktrees the DB wipe would otherwise orphan on disk.
+        # Computed BEFORE the wipe (it deletes the session rows), then removed
+        # after - clean ones only; dirty ones are kept (uncommitted work).
+        wt_sessions = [dict(r) for r in db.list_sessions(conn,
+                                                         project=args.project)]
+        removals = swarm.worktree_removals(wt_sessions, os.path.isdir,
+                                           _worktree_dirty)
         print(swarm.wipe_plan_text([], project_all=(nt, ns, nm)))
+        n_rm = sum(1 for r in removals if r["action"] == "remove")
+        for r in removals:
+            if r["action"] == "remove":
+                print(f"    remove worktree {r['workdir']} "
+                      f"(branch relay/{r['name']})")
+            else:
+                print(f"    KEEP worktree {r['workdir']} - uncommitted "
+                      f"changes, left on disk")
         if args.dry_run:
             return 0
         if not (nt or ns or nm):
             return 0
+        wt_note = f" + {n_rm} worktree(s)" if n_rm else ""
         if not args.yes and not _confirm(
                 f"permanently DELETE all of project '{args.project}' "
-                f"({nt} tasks + {ns} sessions + {nm} messages)?"):
+                f"({nt} tasks + {ns} sessions + {nm} messages{wt_note})?"):
             print("aborted.")
             return 0
         nt2, ns2, nm2 = db.wipe_project(conn, args.project)
         print(f"wiped project '{args.project}': {nt2} tasks, {ns2} sessions, "
               f"{nm2} messages.")
+        for r in removals:
+            if r["action"] != "remove":
+                continue
+            ok_rm, rm_err = _worktree_remove(r["repo"], r["workdir"], r["name"])
+            print(f"  removed worktree {r['workdir']}" if ok_rm
+                  else f"  worktree removal failed: {rm_err}")
         return 0
 
     sessions = [dict(r) for r in db.closed_sessions(conn, args.project)]

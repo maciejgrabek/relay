@@ -283,6 +283,27 @@ def wipe_candidates(sessions, tasks, names=None):
     return out
 
 
+def worktree_removals(sessions, exists_fn, dirty_fn):
+    """The relay-created worktrees to act on when wiping a whole project. Both
+    wipe paths must clean these up - the per-session path already does, but the
+    `--all` path historically deleted only DB rows, orphaning the worktrees (and
+    their relay/<name> branches) on disk. Returns [{name, repo, workdir,
+    action}] where action is 'remove' (clean) or 'keep-dirty' (uncommitted work
+    - NEVER destroyed, matching the per-session safety). Sessions with no relay
+    worktree, or whose workdir is already gone, are skipped. exists_fn/dirty_fn
+    are injected (os.path.isdir / a git status check) so this stays pure."""
+    def g(s, k):
+        return (s.get(k, "") if hasattr(s, "get") else s[k]) or ""
+    out = []
+    for s in sorted(sessions, key=lambda r: g(r, "name")):
+        repo, workdir = g(s, "worktree_repo"), g(s, "workdir")
+        if not (repo and workdir and exists_fn(workdir)):
+            continue
+        out.append({"name": g(s, "name"), "repo": repo, "workdir": workdir,
+                    "action": "keep-dirty" if dirty_fn(workdir) else "remove"})
+    return out
+
+
 def wipe_blocker_warnings(cands, tasks):
     """Warn when a task being wiped is a blocker of a task that is NOT being
     wiped - that dependent may never unblock once its blocker is gone."""
