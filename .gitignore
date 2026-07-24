@@ -12,3 +12,6 @@ __pycache__/
 
 # Internal design/planning docs - kept locally, not published
 docs/superpowers/
+
+# graphify knowledge-graph output (local, regenerable)
+graphify-out/
