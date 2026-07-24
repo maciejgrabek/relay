@@ -186,22 +186,24 @@ def reactor_pressure(sessions) -> float:
 
 
 def mascot_state(band: str, *, alarmed: bool, working: bool,
-                 armed: int = 0) -> str:
+                 armed: int = 0, timers_on: int = 0) -> str:
     """The creature's mood, in priority order: something awaits a human
     (alarmed) beats a CRITICAL core beats recent activity (working) beats
-    standing guard (armed sessions, nothing happening) beats off-duty
-    (nothing armed - relay is just watching). One ladder, one truth."""
+    watching the clock (timers are set and firing) beats standing guard (armed
+    sessions, nothing happening) beats off-duty. One ladder, one truth."""
     if alarmed:
         return "alarmed"
     if band == "☢ CRITICAL":
         return "critical"
     if working:
         return "working"
+    if timers_on:
+        return "timing"
     return "guarding" if armed else "idle"
 
 
 def effective_mascot_state(band, *, awaiting, working, armed, reaction=None,
-                           paused=False):
+                           paused=False, timers_on=0):
     """The state that drives the frame + color, folding in pause and a
     momentary reaction. Pause outranks EVERYTHING - a frozen relay is the one
     fact you must not miss. Then danger flinch, then the base ladder / done."""
@@ -209,10 +211,20 @@ def effective_mascot_state(band, *, awaiting, working, armed, reaction=None,
         return "paused"
     if reaction == "danger":
         return "flinch"
-    base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed)
+    base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed,
+                        timers_on=timers_on)
     if reaction == "done" and base not in ("alarmed", "critical"):
         return "celebrate"
     return base
+
+
+def _mascot_countdown(secs) -> str:
+    """Compact next-fire countdown for the clock mascot's speech: 'moments' when
+    imminent/unknown, else 'Ns' under a minute or 'Nm'."""
+    if secs is None or secs <= 0:
+        return "moments"
+    s = int(secs)
+    return f"{s}s" if s < 60 else f"{s // 60}m"
 
 
 # The creature's working vocabulary - rotates every ~8s while relay acts.
@@ -239,6 +251,13 @@ MASCOT_OFF_PHRASES = (
     "nothing armed.", "off duty.", "just watching.",
     "SPACE arms a session.",
 )
+# Timers armed and firing: the creature watches the clock. {t} is the soonest
+# next-fire countdown (from _mascot_countdown).
+MASCOT_TIMER_PHRASES = (
+    "tick... tick...", "on the clock.", "keeping time.",
+    "next in {t}.", "counting down.", "watching the clock.",
+    "cron's ticking.",
+)
 
 
 def _speech_bubble(text: str) -> list:
@@ -255,14 +274,16 @@ def _speech_bubble(text: str) -> list:
 def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
                     working: bool = False, armed: int = 0,
                     approvals: int = 0, reaction=None,
-                    paused: bool = False) -> list:
+                    paused: bool = False, timers_on: int = 0,
+                    timer_next=None) -> list:
     """The banner creature: a tiny CRT monitor (antenna, screen, feet) that
     watches the fleet from beside the RELAY logo, keyed to the 0.5s reactor
     tick. Its speech bubble says the one thing that matters right now; its
     motion budget is spent by meaning - idle barely moves, only ALARMED
     shakes. Returns equal-height lines (ragged right edges are fine)."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction, paused=paused)
+                                   armed=armed, reaction=reaction, paused=paused,
+                                   timers_on=timers_on)
     beacon, mid = " ", "      "
     say = MASCOT_OFF_PHRASES[tick // 48 % len(MASCOT_OFF_PHRASES)]
     shake = False
@@ -297,6 +318,18 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
         say = verb + ("." * (tick % 4))
         if approvals:
             say = f"{verb} · {approvals}"
+    elif state == "timing":
+        # Watching the clock: a quadrant "hand" sweeps its CRT screen, the eyes
+        # tick side to side following it, the antenna pulses. The bubble says
+        # something about the countdown to the next fire.
+        hand = "◴◵◶◷"[tick % 4]
+        mid = f"  {hand}   "                       # 6 cells: screen-clock
+        eyes = (" ◐  ◐ ", " ◑  ◑ ")[tick // 2 % 2]  # metronome sway
+        mouth = "  ‿   "
+        beacon = "⌁" if tick % 2 == 0 else "·"     # antenna tick
+        say = MASCOT_TIMER_PHRASES[
+            tick // 32 % len(MASCOT_TIMER_PHRASES)].format(
+                t=_mascot_countdown(timer_next))
     elif state == "guarding":
         t = tick % 24
         if t == 0:
@@ -336,23 +369,27 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
 # CRITICAL, like the reactor).
 _MASCOT_COLOR = {"alarmed": WARN, "critical": DANGER,
                  "working": BRIGHT, "guarding": ACCENT, "idle": DIM,
-                 "celebrate": BRIGHT, "flinch": WARN, "paused": CYAN}
+                 "celebrate": BRIGHT, "flinch": WARN, "paused": CYAN,
+                 "timing": CYAN}
 
 
 def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
                      working: bool = False, armed: int = 0,
                      approvals: int = 0, reaction=None,
-                     paused: bool = False) -> str:
+                     paused: bool = False, timers_on: int = 0,
+                     timer_next=None) -> str:
     """The RELAY block logo (theme-colored by CSS) with the creature on its
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction, paused=paused)
+                                   armed=armed, reaction=reaction, paused=paused,
+                                   timers_on=timers_on)
     color = _MASCOT_COLOR[state]
     logo = BANNER.split("\n")
     face = mascot_face_big(tick, band, awaiting=awaiting, working=working,
                            armed=armed, approvals=approvals, reaction=reaction,
-                           paused=paused)
+                           paused=paused, timers_on=timers_on,
+                           timer_next=timer_next)
     h = max(len(logo), len(face))
     logo = logo + [""] * (h - len(logo))
     face = face + [""] * (h - len(face))
@@ -682,6 +719,9 @@ class RelayApp(App):
         self._temp = 0.0          # reactor temperature (integrates toward pressure)
         self._tick = 0            # frame counter for the CRITICAL pulse
         self.reactor_off = bool(os.environ.get("RELAY_NO_REACTOR"))
+        self._fleet_timers = {}
+        self._timers_fleet_n = 0          # active timers across the fleet
+        self._timers_fleet_next = None    # soonest next-fire, seconds
         self._swarm_visible = False
         self._help_visible = False
         self._audit_visible = False
@@ -760,7 +800,7 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "UNIT", "ROLE",
+        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "SESSION", "ROLE",
                           "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
         # Preview pane starts in its configured state (watcher isn't connected
         # yet, so read config directly - same as the theme is read at import).
@@ -817,6 +857,7 @@ class RelayApp(App):
         prev_row = table.cursor_row       # ...nearest occurrence wins (dups)
         table.clear()
         self._row_sids = []           # sid per row; None marks the divider row
+        self._fleet_timers = {}       # sid -> (active_count, soonest_secs)
         by_pos = lambda i: (i.window_idx, i.tab_idx)
         shown = sorted((i for i in self.watcher.sessions.values() if not i.hidden), key=by_pos)
         hidden = sorted((i for i in self.watcher.sessions.values() if i.hidden), key=by_pos)
@@ -869,17 +910,22 @@ class RelayApp(App):
                 # The duplicate strip row: same data, unmissable name.
                 title = f"[bold {DANGER}]‼ {title}[/]"
             # '⏲ TIMERS' column: count of active timers, or ? when pending.
+            # Also feed the fleet tally (keyed by sid, so the attention-strip
+            # duplicate can't double-count) that drives the clock mascot.
             pend = info.session_id in getattr(
                 self.watcher, "pending_timer_sids", set())
-            act = 0
+            act, soonest = 0, None
             try:
                 import timers as _timers
                 for t in swarmdb.list_timers(self._swarm_db_conn(),
                                              info.session_id):
                     if t["active"] and t["enabled"] and not _timers.capped(t):
                         act += 1
+                        due = _timers.next_due_in(t, time.time())
+                        soonest = due if soonest is None else min(soonest, due)
             except Exception:
                 pass
+            self._fleet_timers[info.session_id] = (act, soonest)
             tcell = timer_cell(act, pend)
             if tcell:
                 tcolor = WARN if not act and pend else CYAN
@@ -914,6 +960,13 @@ class RelayApp(App):
             divider(f"── QUARANTINED ({len(hidden)}) ──", DIMMER)
             for info in hidden:
                 add(info, dim=True)
+
+        # Fleet timer tally (drives the clock mascot): total active timers and
+        # the soonest fire across all sessions.
+        vals = self._fleet_timers.values()
+        self._timers_fleet_n = sum(c for c, _ in vals)
+        nexts = [s for c, s in vals if c and s is not None]
+        self._timers_fleet_next = min(nexts) if nexts else None
 
         # sync log (append-only). watcher.log is capped at 200; track by a
         # monotonic id we stamp, not by len() (which stops growing once capped).
@@ -1038,7 +1091,9 @@ class RelayApp(App):
                 armed=sum(1 for i in self.watcher.sessions.values()
                           if i.active and i.session_id != self._own_sid),
                 approvals=approvals, reaction=reaction,
-                paused=getattr(self.watcher, "paused", False)))
+                paused=getattr(self.watcher, "paused", False),
+                timers_on=getattr(self, "_timers_fleet_n", 0),
+                timer_next=getattr(self, "_timers_fleet_next", None)))
         except Exception:
             pass
 

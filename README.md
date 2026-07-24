@@ -19,7 +19,7 @@ arm/disarm them with the arrow keys.
   RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
-  MODE      STATUS      ↻    UNIT          ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
+  MODE      STATUS      ↻    SESSION       ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
   ── NEEDS ACTION (1) ──────────────────────────────────────────────────────────
 ▸ ✦ INSANE  ‼ AWAITING  4s   ‼ api-worker  work   #17 ⊘ by 14  2/1  terraform apply -auto-…
   ── SESSIONS ──────────────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ kept sessions while still being able to see and un-hide (`x` again) the rest. Th
 moment you land on it (and updates as that session prints), so you see the live
 prompt before you answer it.
 
-The **UNIT** column is each session's name: the iTerm2 tab/session name you've
+The **SESSION** column is each session's name: the iTerm2 tab/session name you've
 set (Edit Session > Name, or a tab title) if there is one, otherwise iTerm2's
 auto, job-derived name. Relay's own tab is named **`RELAY CONSOLE`** and
 **colored relay-green** in the tab bar while the panel runs (otherwise it
@@ -835,7 +835,7 @@ attention state - its write path recomputes the prefix and rewrites/restores.
 A **manual, idle** tab is deliberately never rewritten (that protects titles
 you set by hand), so a leftover prefix there persists until you rename the tab
 yourself or briefly arm it (which lets relay take ownership and then restore
-the bare name). Reads are always clean regardless - the UNIT column and swarm
+the bare name). Reads are always clean regardless - the SESSION column and swarm
 addressing strip the prefix on read. Same residue class as any other tool that
 writes tab titles.
 
