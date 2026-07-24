@@ -286,7 +286,14 @@ class Watcher:
                     self._roster_ok = False
                     self._note(f"roster sync error: {e}")
                 self._swarm_refresh_registry()
-                if not self._timers_loaded:
+                # Only latch the restore gate on a tick whose roster sync
+                # succeeded: on a failed sync self.sessions is empty/stale,
+                # so _load_timers_on_start() would deactivate every saved
+                # timer while computing an empty pending set - and since the
+                # gate only runs once per run, that would orphan every timer
+                # (inactive AND absent from the restore prompt) until relay
+                # is restarted.
+                if self._roster_ok and not self._timers_loaded:
                     self._timers_loaded = True
                     self._load_timers_on_start()
                 await self._name_own_tab()
