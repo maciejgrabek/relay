@@ -394,6 +394,29 @@ def run():
     ok &= check("live_doing_count counts only live-owned doing tasks",
                 swarm.live_doing_count(tks, live) == 1)
 
+    # --- worktree_removals: --all must clean up worktrees too ----------------
+    sess = [
+        {"name": "w-clean", "worktree_repo": "/repo", "workdir": "/repo-w-clean"},
+        {"name": "w-dirty", "worktree_repo": "/repo", "workdir": "/repo-w-dirty"},
+        {"name": "w-gone",  "worktree_repo": "/repo", "workdir": "/repo-w-gone"},
+        {"name": "no-wt",   "worktree_repo": "",      "workdir": "/somewhere"},
+    ]
+    exists = lambda p: p != "/repo-w-gone"          # w-gone's dir is gone
+    dirty = lambda p: p == "/repo-w-dirty"          # only w-dirty has changes
+    rem = swarm.worktree_removals(sess, exists, dirty)
+    by = {r["name"]: r["action"] for r in rem}
+    ok &= check("worktree_removals: clean worktree -> remove",
+                by.get("w-clean") == "remove")
+    ok &= check("worktree_removals: dirty worktree -> keep-dirty (never destroyed)",
+                by.get("w-dirty") == "keep-dirty")
+    ok &= check("worktree_removals: vanished workdir skipped",
+                "w-gone" not in by)
+    ok &= check("worktree_removals: session without a relay worktree skipped",
+                "no-wt" not in by)
+    ok &= check("worktree_removals: carries repo + workdir for the git call",
+                any(r["name"] == "w-clean" and r["repo"] == "/repo"
+                    and r["workdir"] == "/repo-w-clean" for r in rem))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
