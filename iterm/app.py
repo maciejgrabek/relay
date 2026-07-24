@@ -186,24 +186,23 @@ def reactor_pressure(sessions) -> float:
 
 
 def mascot_state(band: str, *, alarmed: bool, working: bool,
-                 armed: int = 0, timers_on: int = 0) -> str:
+                 armed: int = 0) -> str:
     """The creature's mood, in priority order: something awaits a human
     (alarmed) beats a CRITICAL core beats recent activity (working) beats
-    watching the clock (timers are set and firing) beats standing guard (armed
-    sessions, nothing happening) beats off-duty. One ladder, one truth."""
+    standing guard (armed sessions, nothing happening) beats off-duty. One
+    ladder, one truth. Timers do NOT get their own mood - they surface as lines
+    woven into the guarding/idle chatter (see mascot_face_big)."""
     if alarmed:
         return "alarmed"
     if band == "☢ CRITICAL":
         return "critical"
     if working:
         return "working"
-    if timers_on:
-        return "timing"
     return "guarding" if armed else "idle"
 
 
 def effective_mascot_state(band, *, awaiting, working, armed, reaction=None,
-                           paused=False, timers_on=0):
+                           paused=False):
     """The state that drives the frame + color, folding in pause and a
     momentary reaction. Pause outranks EVERYTHING - a frozen relay is the one
     fact you must not miss. Then danger flinch, then the base ladder / done."""
@@ -211,8 +210,7 @@ def effective_mascot_state(band, *, awaiting, working, armed, reaction=None,
         return "paused"
     if reaction == "danger":
         return "flinch"
-    base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed,
-                        timers_on=timers_on)
+    base = mascot_state(band, alarmed=awaiting > 0, working=working, armed=armed)
     if reaction == "done" and base not in ("alarmed", "critical"):
         return "celebrate"
     return base
@@ -282,9 +280,15 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
     motion budget is spent by meaning - idle barely moves, only ALARMED
     shakes. Returns equal-height lines (ragged right edges are fine)."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction, paused=paused,
-                                   timers_on=timers_on)
+                                   armed=armed, reaction=reaction, paused=paused)
     beacon, mid = " ", "      "
+    # A timer line is woven into the calm ambient chatter (guarding/idle) every
+    # other phrase window, so timers surface in the NORMAL message stream rather
+    # than taking over the creature. clock_win is that window's toggle.
+    clock_win = bool(timers_on) and (tick // 48) % 2 == 1
+    timer_say = MASCOT_TIMER_PHRASES[
+        (tick // 96) % len(MASCOT_TIMER_PHRASES)].format(
+            t=_mascot_countdown(timer_next))
     say = MASCOT_OFF_PHRASES[tick // 48 % len(MASCOT_OFF_PHRASES)]
     shake = False
     if state == "paused":
@@ -318,18 +322,6 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
         say = verb + ("." * (tick % 4))
         if approvals:
             say = f"{verb} · {approvals}"
-    elif state == "timing":
-        # Watching the clock: a quadrant "hand" sweeps its CRT screen, the eyes
-        # tick side to side following it, the antenna pulses. The bubble says
-        # something about the countdown to the next fire.
-        hand = "◴◵◶◷"[tick % 4]
-        mid = f"  {hand}   "                       # 6 cells: screen-clock
-        eyes = (" ◐  ◐ ", " ◑  ◑ ")[tick // 2 % 2]  # metronome sway
-        mouth = "  ‿   "
-        beacon = "⌁" if tick % 2 == 0 else "·"     # antenna tick
-        say = MASCOT_TIMER_PHRASES[
-            tick // 32 % len(MASCOT_TIMER_PHRASES)].format(
-                t=_mascot_countdown(timer_next))
     elif state == "guarding":
         t = tick % 24
         if t == 0:
@@ -342,7 +334,11 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
             eyes = " •  • "
         mouth = "  ‿   "
         beacon = "⌖"
-        if approvals:
+        if clock_win:
+            # timer line woven into the guard chatter; antenna shows a clock cue
+            say, beacon = timer_say, "◷"
+            mid = f"  {'◴◵◶◷'[tick % 4]}   "   # a little clock ticks on screen
+        elif approvals:
             phrases = MASCOT_GUARD_TALLY_PHRASES
             say = phrases[tick // 48 % len(phrases)].format(n=armed, a=approvals)
         else:
@@ -352,6 +348,9 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
         # Off duty: relaxed lids, antenna dark, the occasional full blink.
         eyes = " ▂  ▂ " if tick % 24 == 0 else " ─  ─ "
         mouth = "  ‿   "
+        if clock_win:
+            say, beacon = timer_say, "◷"
+            mid = f"  {'◴◵◶◷'[tick % 4]}   "
     lead = " " if shake else "  "
     bub = _speech_bubble(say)
     return [
@@ -369,8 +368,7 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
 # CRITICAL, like the reactor).
 _MASCOT_COLOR = {"alarmed": WARN, "critical": DANGER,
                  "working": BRIGHT, "guarding": ACCENT, "idle": DIM,
-                 "celebrate": BRIGHT, "flinch": WARN, "paused": CYAN,
-                 "timing": CYAN}
+                 "celebrate": BRIGHT, "flinch": WARN, "paused": CYAN}
 
 
 def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
@@ -382,8 +380,7 @@ def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
-                                   armed=armed, reaction=reaction, paused=paused,
-                                   timers_on=timers_on)
+                                   armed=armed, reaction=reaction, paused=paused)
     color = _MASCOT_COLOR[state]
     logo = BANNER.split("\n")
     face = mascot_face_big(tick, band, awaiting=awaiting, working=working,

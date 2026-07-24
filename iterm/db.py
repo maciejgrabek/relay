@@ -408,8 +408,16 @@ def update_timer(conn, timer_id, **fields) -> None:
     conn.commit()
 
 
-def set_timer_enabled(conn, timer_id, enabled) -> None:
-    update_timer(conn, timer_id, enabled=int(bool(enabled)))
+def set_timer_enabled(conn, timer_id, enabled, now: Optional[float] = None) -> None:
+    """Toggle a timer on/off. Turning it ON resets the clock (last_fired_at=now)
+    so it starts from a FULL interval, not from wherever the countdown was when
+    it was switched off - toggling off/on restarts the cycle."""
+    if enabled:
+        conn.execute("UPDATE timers SET enabled=1, last_fired_at=? WHERE id=?",
+                     (_now(now), timer_id))
+    else:
+        conn.execute("UPDATE timers SET enabled=0 WHERE id=?", (timer_id,))
+    conn.commit()
 
 
 def delete_timer(conn, timer_id) -> None:

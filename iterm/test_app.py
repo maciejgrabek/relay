@@ -497,36 +497,36 @@ async def go():
         and all(mfb(0, "ok", armed=2, paused=True)[i][11] == "│"
                 for i in (2, 3, 4)))
 
-    # --- clock mascot: timers set + nothing urgent -> 'timing' ----------------
-    chk("timers_on -> timing (outranks guarding/idle)",
-        ems("ok", awaiting=0, working=False, armed=0, timers_on=2) == "timing"
-        and ems("ok", awaiting=0, working=False, armed=3,
-                timers_on=1) == "timing")
-    chk("nothing urgent + no timers -> guarding/idle, not timing",
-        ems("ok", awaiting=0, working=False, armed=1, timers_on=0) == "guarding")
-    # urgent states still outrank the clock
-    chk("alarmed outranks timing",
-        ems("ok", awaiting=2, working=False, armed=0, timers_on=5) == "alarmed")
-    chk("working outranks timing",
-        ems("ok", awaiting=0, working=True, armed=0, timers_on=5) == "working")
-    chk("paused outranks timing",
-        ems("ok", awaiting=0, working=False, armed=0, timers_on=5,
-            paused=True) == "paused")
-    # the timing frame: a rotating clock hand on the screen + a timer phrase,
-    # still 6 lines and box-aligned.
-    tframe = mfb(0, "ok", armed=1, timers_on=2, timer_next=185)
-    chk("timing frame shows a clock hand + is aligned",
-        len(tframe) == 6
-        and any(g in "".join(tframe) for g in "◴◵◶◷")
-        and all(tframe[i][11] == "│" for i in (2, 3, 4)))
-    chk("timing frame says something about the clock",
-        any("tick" in ln or "clock" in ln or "next in" in ln or "time" in ln
-            for ln in mfb(96, "ok", armed=1, timers_on=1, timer_next=185)))
+    # --- timers woven into the NORMAL guard/idle chatter (no takeover mood) ---
+    # Timers do not get their own mood; a timer line surfaces every other phrase
+    # window (tick//48 odd), keeping the base mood's visual.
+    chk("timers do not create a new mood (still guarding/idle)",
+        ems("ok", awaiting=0, working=False, armed=1) == "guarding"
+        and ems("ok", awaiting=0, working=False, armed=0) == "idle")
+
+    def _is_timer_line(ln):
+        return any(w in ln for w in ("tick", "clock", "next in", "time",
+                                     "counting", "cron"))
+    # base window (tick 0): guarding says a GUARD line, no clock glyph
+    g0 = "".join(mfb(0, "ok", armed=3, timers_on=2, timer_next=185))
+    chk("guard base window: guard chatter, no clock",
+        not _is_timer_line(g0) and not any(c in g0 for c in "◴◵◶◷"))
+    # clock window (tick 48): a timer line + clock cue woven in, still aligned
+    g48 = mfb(48, "ok", armed=3, timers_on=2, timer_next=185)
+    chk("guard clock window: timer line + clock cue, aligned",
+        _is_timer_line("".join(g48))
+        and any(c in "".join(g48) for c in "◴◵◶◷")
+        and len(g48) == 6 and all(g48[i][11] == "│" for i in (2, 3, 4)))
+    # same weaving happens off-duty (idle) with a timer set
+    i48 = "".join(mfb(48, "ok", armed=0, timers_on=1, timer_next=185))
+    chk("idle clock window weaves a timer line too", _is_timer_line(i48))
+    # no timers -> never a timer line, even in the clock window
+    chk("no timers -> pure guard chatter (no timer line ever)",
+        not _is_timer_line("".join(mfb(48, "ok", armed=3, timers_on=0))))
     chk("_mascot_countdown formats seconds/minutes/imminent",
         appmod._mascot_countdown(45) == "45s"
         and appmod._mascot_countdown(185) == "3m"
         and appmod._mascot_countdown(None) == "moments")
-    chk("_MASCOT_COLOR covers timing", "timing" in appmod._MASCOT_COLOR)
 
     # --- timers overlay -------------------------------------------------------
     _trows = [

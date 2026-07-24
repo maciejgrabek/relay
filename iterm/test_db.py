@@ -408,6 +408,12 @@ def run():
     db.set_timer_enabled(conn, tid, False)
     ok &= check("set_timer_enabled off",
                 db.list_timers(conn, "SID1")[0]["enabled"] == 0)
+    # turning a timer back ON resets its clock to a full interval (off/on
+    # restarts the cycle, doesn't resume from where it paused)
+    db.set_timer_enabled(conn, tid, True, now=7777.0)
+    ren = db.list_timers(conn, "SID1")[0]
+    ok &= check("set_timer_enabled on resets last_fired_at (full interval)",
+                ren["enabled"] == 1 and ren["last_fired_at"] == 7777.0)
     db.mark_timer_fired(conn, tid, now=2000.0)
     r0 = db.list_timers(conn, "SID1")[0]
     ok &= check("mark_timer_fired sets last_fired_at AND increments fire_count",
