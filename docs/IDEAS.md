@@ -15,28 +15,23 @@ provider now self-heals: relay / install / `relay doctor` start it when it's
 installed but not running (see statusbar_ensure.py), and the provider heartbeats
 on a timer so liveness is honest even when the badge isn't on screen.
 
-## 2. Status/mode prefix in the tab name, e.g. "[INSANE][BLOCKED] api-server" (2026-07-15)
+## 2. Status/mode prefix in the tab name, e.g. "[INSANE][BLOCKED] api-server" (2026-07-15) - SHIPPED (2026-07-15)
 
-Relay rewrites each session's tab title so mode + state are visible on the tab
-bar itself - glanceable without the TUI. Notes:
-
-- Watcher already knows mode + state per session; iTerm2 allows setting names
-  via async_set_name.
-- CONFLICT to solve first: relay's UNIT column and the swarm registry read the
-  user-set titleOverride as the session's name, and `relay spawn` sets tab
-  names too. If relay also WRITES prefixes into the same field, it must
-  reliably strip/re-apply its own prefix (idempotent, crash-safe) and never
-  clobber the user's actual name. Probably: store the bare name, render
-  "[MODE][STATE] bare-name", and strip the bracket prefix when reading.
-- Opt-in flag (env var) at first; restore original titles on quit.
+Done: `iterm/titles.py` (pure render/strip), a `[titles] style` config key
+(off/glyphs/words/hybrid), and the watcher write path (`_apply_title` /
+`_restore_titles`) that strips on read so the UNIT column + swarm registry
+always see bare names, writes only on change, restores on quit, and is inert in
+dry-run. The strip-on-read + self-heal makes it crash-safe. Later evolution
+added a shadow-mode glyph and swapped the stale glyph to one users can't type.
+See docs/specs/2026-07-15-tab-title-prefixes-design.md (status: Implemented).
 
 ## Open follow-ups (2026-07-21 review sweep)
 
-- `wipe --project X --all` does not remove relay-created worktrees (only the
-  per-session wipe path does) - bulk-wiping a worktree-heavy project orphans
-  them on disk.
-- Header `msgs queued` and the quit-guard stakes count across the WHOLE DB,
-  not scoped to live sessions' projects - stale projects can cry wolf.
+- ~~`wipe --project X --all` does not remove relay-created worktrees~~ FIXED
+  (2026-07-24): `--all` now cleans up worktrees via swarm.worktree_removals,
+  keeping dirty ones.
+- ~~Header `msgs queued` and the quit-guard stakes count across the WHOLE DB~~
+  FIXED (2026-07-24): both scope to live sessions via swarm.live_* helpers.
 - Efficiency pass: `_check_escalations` and `_check_gone` each scan
   undelivered per tick (fetch once, share); `_statusbar_publish` writes the
   state file every tick even when unchanged; `_render_swarm_view` queries
