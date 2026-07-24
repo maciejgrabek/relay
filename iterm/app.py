@@ -1174,6 +1174,8 @@ class RelayApp(App):
 
     # --- settings editor (, toggles a full-width config overlay) -------------
     def action_settings(self) -> None:
+        if self._timers_visible and not self._settings_visible:
+            self.action_timers()          # ...and timers, same reason
         if self._swarm_visible and not self._settings_visible:
             self.action_swarm_view()      # leave swarm first
         if self._help_visible and not self._settings_visible:
@@ -1245,6 +1247,8 @@ class RelayApp(App):
 
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
+        if self._timers_visible:
+            self.action_timers()          # close timers first; TAB then flips
         if self._help_visible:
             self.action_help()            # close help first; TAB then flips
         if self._settings_visible:
@@ -1479,6 +1483,8 @@ class RelayApp(App):
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:
+        if self._timers_visible and not self._help_visible:
+            self.action_timers()          # ...and timers, same reason
         if self._swarm_visible and not self._help_visible:
             self.action_swarm_view()      # leave the swarm view first
         if self._settings_visible and not self._help_visible:
@@ -1544,11 +1550,19 @@ class RelayApp(App):
         if self._settings_visible:
             self._settings_move(-1)
             return
+        if self._any_overlay_open():
+            # timers/help/swarm open: don't move the hidden session list -
+            # event.stop() in on_key only halts DOM bubbling, not this
+            # App-level binding, so without this guard the overlay's own
+            # cursor AND the hidden list's cursor would both move.
+            return
         self._move_cursor(-1)
 
     def action_cursor_down(self) -> None:
         if self._settings_visible:
             self._settings_move(+1)
+            return
+        if self._any_overlay_open():
             return
         self._move_cursor(+1)
 
