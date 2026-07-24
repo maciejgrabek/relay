@@ -543,6 +543,36 @@ def timer_cell(active, soonest_secs, pending) -> str:
     return ""
 
 
+def timers_summary(rows, now) -> str:
+    """One-line timers summary for the live-feed preview header: how many are
+    running, the soonest fire (payload + countdown), and any done / needs-restore
+    / off. Plain text (the preview renders markup-free). '' when no timers."""
+    import timers as _timers
+    if not rows:
+        return ""
+    on = [r for r in rows
+          if r["enabled"] and r["active"] and not _timers.capped(r)]
+    done = sum(1 for r in rows if _timers.capped(r))
+    pend = sum(1 for r in rows if not r["active"])
+    off = sum(1 for r in rows if not r["enabled"] and r["active"])
+    parts = []
+    if on:
+        nxt = min(on, key=lambda r: _timers.next_due_in(r, now))
+        secs = max(0, _timers.next_due_in(nxt, now))
+        parts.append(f"{len(on)} on")
+        parts.append(f'next "{str(nxt["payload"])[:24]}" in '
+                     f"{int(secs) // 60}m{int(secs) % 60:02d}s")
+    if done:
+        parts.append(f"{done} done")
+    if pend:
+        parts.append(f"{pend} need restore")
+    if off:
+        parts.append(f"{off} off")
+    if not parts:
+        parts = [f"{len(rows)} timer(s)"]
+    return " TIMERS: " + " · ".join(parts)
+
+
 def needs_action(state: str, stale: bool) -> bool:
     """A session a human should look at NOW: it is holding a prompt relay
     escalated (or is not allowed to clear), it is blocked, or it went stale.
@@ -1077,31 +1107,24 @@ class RelayApp(App):
             why = why[:w] + "\n"
         else:
             why = why_line(info.last_decision, info.last_command, w)
-        header = (f"╔{bar}╗\n"
-                  f" ▓ LIVE FEED // {info.title[:w-16]}\n"
-                  f" MODE:{mode}  LINK:{loc}  "
-                  f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
-                  f"{why}"
-                  f"{attn}"
-                  f"╚{bar}╝\n")
-        body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
         try:
             trows = [dict(r) for r in swarmdb.list_timers(
                 self._swarm_db_conn(), sid)]
         except Exception:
             trows = []
-        if trows:
-            import timers as _timers
-            tl = [" TIMERS"]
-            for r in trows[:4]:
-                st = "on" if r["enabled"] and r["active"] else (
-                    "restore?" if not r["active"] else "off")
-                secs = max(0, _timers.next_due_in(r, time.time()))
-                tl.append(f"   every {r['interval_min']}m {r['mode']} [{st}] "
-                          f"in {int(secs)//60}m: {str(r['payload'])[:w-24]}")
-            if len(trows) > 4:
-                tl.append(f"   (+{len(trows) - 4} more)")
-            body = body + "\n" + "\n".join(tl)
+        # A one-line timers summary at the TOP of the feed header (press t for
+        # the full per-timer view). Only shown when the session has timers.
+        tsum = timers_summary(trows, time.time())
+        tsum_line = f"{tsum[:w]}\n" if tsum else ""
+        header = (f"╔{bar}╗\n"
+                  f" ▓ LIVE FEED // {info.title[:w-16]}\n"
+                  f" MODE:{mode}  LINK:{loc}  "
+                  f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{tsum_line}"
+                  f"{why}"
+                  f"{attn}"
+                  f"╚{bar}╝\n")
+        body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
         preview.update(header + body)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
