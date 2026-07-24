@@ -931,11 +931,24 @@ selected session to open the **timers overlay**:
 | `enter` | Edit the highlighted timer's payload |
 | `left` / `right` | Change the highlighted timer's interval (1-90 minutes) |
 | `m` | Cycle the highlighted timer's mode: `idle` <-> `now` |
+| `[` / `]` | Lower / raise the highlighted timer's **fire cap** (`0` = unlimited) |
 | `space` | Toggle the highlighted timer on/off |
 | `g` | Fire the highlighted timer now (still goes through the normal audited send) |
 | `x` | Delete the highlighted timer |
 | `r` | Restore a timer that needs it (see below) |
 | `esc` | Close the form, or the overlay if no form is open |
+
+The highlighted row is marked with `▸` and bolded, so you always see which timer
+your keys act on. Each row shows its interval, mode, on/off, **fire-cap
+progress** (`3/10`, or `∞` for unlimited), and its countdown.
+
+**Fire cap:** a timer stops after firing `max_fires` times (default **10**), so a
+`now`-mode timer can't run forever by accident. `0` means unlimited. A capped
+timer shows **done (cap reached)**; raise its cap with `]` to resume it. Only
+real fires consume the cap - dry-run and "fire now" (`g`) do not.
+
+The session's list row carries a **`⏲` column** showing `N·Mm` (N active timers,
+soonest fires in M minutes), or `⏲?` when a timer needs restore.
 
 **`idle` vs `now`:** an `idle` timer only fires once the session is sitting at a
 ready prompt - it waits rather than interrupting a running command (a "check in
