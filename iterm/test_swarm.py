@@ -368,6 +368,32 @@ def run():
     ok &= check("render: hostile body escaped, not executed as markup",
                 "\\[red]hostile" in vs)
 
+    # --- live-scoped stakes (the cry-wolf fix) -------------------------------
+    # registry: bare-sid -> session row. Only sids relay currently SEES live
+    # (in live_sids) count as live names.
+    reg = {"sidA": {"name": "w1"}, "sidB": {"name": "w2"},
+           "sidGone": {"name": "ghost"}}
+    live = swarm.live_names(reg, {"sidA", "sidB"})   # sidGone not watched
+    ok &= check("live_names = watched sessions only",
+                live == {"w1", "w2"})
+    ok &= check("live_names excludes an unwatched (dead-tab) session",
+                "ghost" not in live)
+
+    msgs = [{"to_name": "w1", "delivered_at": None},
+            {"to_name": "ghost", "delivered_at": None},   # stale target
+            {"to_name": "ghost", "delivered_at": None}]
+    ok &= check("live_queued_count counts only messages to live targets",
+                swarm.live_queued_count(msgs, live) == 1)
+    ok &= check("live_queued_count is 0 when nothing is live",
+                swarm.live_queued_count(msgs, set()) == 0)
+
+    tks = [{"state": "doing", "owner": "w1"},
+           {"state": "doing", "owner": "ghost"},     # orphan, not a live stake
+           {"state": "todo", "owner": "w2"},         # not doing
+           {"state": "doing", "owner": None}]        # ownerless
+    ok &= check("live_doing_count counts only live-owned doing tasks",
+                swarm.live_doing_count(tks, live) == 1)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
