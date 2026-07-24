@@ -157,6 +157,19 @@ def run():
     ok &= check("bad theme -> phosphor + warning", cfg.theme == "phosphor"
                 and any("hotdog" in w for w in warns))
 
+    # preview panel: default shown (True); parsed as bool; bad value -> True.
+    cfg, _ = config.load("/nonexistent/relay-config")
+    ok &= check("preview panel defaults to shown", cfg.preview_panel is True)
+    p = _write("[layout]\npreview = off\n")
+    cfg, warns = config.load(p)
+    ok &= check("preview = off hides the panel",
+                cfg.preview_panel is False and warns == [])
+    p = _write("[layout]\npreview = maybe\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad preview value -> shown + warning",
+                cfg.preview_panel is True
+                and any("preview" in w for w in warns))
+
     # RELAY_CONFIG env selects the path when load() gets None.
     p = _write("[titles]\nstyle = words\n")
     os.environ["RELAY_CONFIG"] = p
@@ -172,7 +185,8 @@ def run():
         config.Config(), title_style="hybrid", alert_sound="/a/x.aiff",
         done_sound="", danger_sound="/a/d.aiff", message_sound="/a/m.aiff",
         stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
-        statusbar_enabled=True, danger_preset="paranoid", theme="amber")
+        statusbar_enabled=True, danger_preset="paranoid", theme="amber",
+        preview_panel=False)
     p = _write(config.dump(custom))
     back, warns = config.load(p)
     ok &= check("dump->load round-trips every field", back == custom)

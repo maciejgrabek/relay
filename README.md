@@ -766,6 +766,10 @@ preset = default       ; default | paranoid. paranoid flips 'safe' mode to
 
 [theme]
 name = phosphor        ; phosphor | amber | ice - recolors the whole TUI
+
+[layout]
+preview = true         ; show the live-feed pane under the list (default true);
+                       ; toggle live with f, or here in the settings editor
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
