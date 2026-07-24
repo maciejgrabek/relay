@@ -427,6 +427,16 @@ def mark_timer_fired(conn, timer_id, now: Optional[float] = None) -> None:
     conn.commit()
 
 
+def restore_timer(conn, timer_id, now: Optional[float] = None) -> int:
+    """Re-activate ONE timer (active=1) and re-bind its clock/binding to now -
+    the per-row restore the `r` key uses."""
+    cur = conn.execute(
+        "UPDATE timers SET active=1, last_fired_at=?, bound_at=? WHERE id=?",
+        (_now(now), _now(now), timer_id))
+    conn.commit()
+    return cur.rowcount
+
+
 def restore_session_timers(conn, iterm_session_id,
                            now: Optional[float] = None) -> int:
     cur = conn.execute(

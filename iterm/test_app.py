@@ -510,6 +510,16 @@ async def go():
         "3/10" in _tv and "∞" in _tv)
     chk("timers_view_text marks the cursor row (▸ on row index 1)",
         "▸" in _tv and _tv.count("▸") == 1)
+    # a disabled (off) timer shows no countdown and is greyed out
+    _off = appmod.timers_view_text(
+        [{"id": 1, "interval_min": 5, "payload": "paused one", "mode": "now",
+          "enabled": 0, "active": 1, "last_fired_at": 500.0,
+          "max_fires": 10, "fire_count": 0}],
+        now=1000.0, session_title="api", width=90, cursor=99)   # not selected
+    chk("off timer shows no countdown", "in " not in _off
+        and "○ off" in _off)
+    chk("off timer row is greyed out",
+        f"[{appmod.DIM}]" in _off)
     # payload with a '[' must be escaped (view renders with markup on)
     _esc = appmod.timers_view_text(
         [{"id": 1, "interval_min": 5, "payload": "sed 's/[a-z]/x/'",

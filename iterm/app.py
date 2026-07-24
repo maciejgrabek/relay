@@ -507,7 +507,9 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
         onoff = "● on " if r["enabled"] else "○ off"
         left = _timers.fires_left(r)
         cap = "∞" if left is None else f"{r['fire_count']}/{r['max_fires']}"
-        if not r["active"]:
+        if not r["enabled"]:
+            when = "-"                       # off: won't fire, so no countdown
+        elif not r["active"]:
             when = "needs restore (r)"
         elif _timers.capped(r):
             when = "done (cap reached)"
@@ -523,6 +525,8 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
             # unmistakable, not just bolded.
             lines.append(f"[bold {TH['hot']} on {TH['bg_cursor']}]"
                          f"{line:<{w}}[/]")
+        elif not r["enabled"]:
+            lines.append(f"[{DIM}]{line}[/]")    # off: greyed out
         else:
             lines.append(line)
     return head + "\n".join(lines)
@@ -1470,10 +1474,16 @@ class RelayApp(App):
         elif k == "x" and rows:
             swarmdb.delete_timer(self._swarm_db_conn(), rows[cur]["id"])
             self._timers_cursor = 0; self._render_timers(); event.stop()
-        elif k == "r" and sid:
-            swarmdb.restore_session_timers(self._swarm_db_conn(), sid)
-            if self.watcher:
-                self.watcher.pending_timer_sids.discard(sid)
+        elif k == "r" and rows:
+            # Restore only the highlighted timer (consistent with every other
+            # per-row key). The session stays pending if it still has other
+            # inactive timers.
+            swarmdb.restore_timer(self._swarm_db_conn(), rows[cur]["id"])
+            if self.watcher and sid:
+                still = any(not t["active"] for t in swarmdb.list_timers(
+                    self._swarm_db_conn(), sid))
+                if not still:
+                    self.watcher.pending_timer_sids.discard(sid)
             self._render_timers(); event.stop()
         elif k in ("left", "right") and rows:
             import timers as _timers
