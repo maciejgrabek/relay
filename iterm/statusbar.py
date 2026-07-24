@@ -194,6 +194,42 @@ def provider_installed(path=None) -> bool:
         return False
 
 
+def provider_script_path(path=None) -> str:
+    """The real provider script to launch when starting it ourselves. Resolves
+    the AutoLaunch symlink to its target (so we run the linked copy relay update
+    keeps current), falling back to statusbar_autolaunch.py next to this module
+    when nothing is installed. Never raises."""
+    link = path or autolaunch_link_path()
+    try:
+        if os.path.lexists(link):
+            return os.path.realpath(link)
+    except OSError:
+        pass
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "statusbar_autolaunch.py")
+
+
+def plan_provider_start(installed: bool, alive: bool, has_cookie: bool) -> str:
+    """Pure verdict for the auto-start path (statusbar_ensure): what to do about
+    the AutoLaunch provider given the observable facts.
+
+      'absent'    - not installed; relay renders the badge in-process, nothing
+                    to start.
+      'alive'     - a provider is already running; leave it be (starting a
+                    second would DUPLICATE-register and freeze the badge).
+      'no-cookie' - it should start but iTerm2 handed out no cookie (iTerm2 not
+                    running / scripting refused); can't launch.
+      'start'     - installed, dead, cookie in hand: launch it now.
+    """
+    if not installed:
+        return "absent"
+    if alive:
+        return "alive"
+    if not has_cookie:
+        return "no-cookie"
+    return "start"
+
+
 # --- click queue: the AutoLaunch provider writes, relay consumes -------------
 
 def append_click(session_id: str, now=None, path=None) -> None:

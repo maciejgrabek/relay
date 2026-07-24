@@ -3,19 +3,17 @@
 Captured ideas, not commitments. Each gets its own brainstorm/spec before any
 implementation.
 
-## 1. Switch arm mode from the iTerm2 tab itself (2026-07-15)
+## 1. Switch arm mode from the iTerm2 tab itself (2026-07-15) - SHIPPED (2026-07-24)
 
-Today the arm level (off/safe/wild/insane) can only be cycled from the relay
-TUI. Idea: an iTerm2-side affordance (status bar component, key binding, or
-Python-API "plugin") to flip the CURRENT tab's mode without switching to the
-relay panel. Notes:
-
-- iTerm2 supports custom status bar components and key-bound scripts via the
-  same Python API relay already uses.
-- Needs a way to signal the running relay process (the swarm DB is a natural
-  channel: a `mode_request` row the watcher picks up on its next tick).
-- Safety: mode changes are a human act - the affordance must be un-spoofable
-  from inside the session (a Claude session must not be able to arm itself).
+Done via the status-bar badge: the `com.relay.arm` component renders each tab's
+arm mode and a CLICK cycles off/safe/wild/insane from the tab itself, no trip to
+the relay panel. Signalling channel is the click queue
+(`~/.relay/statusbar-clicks.jsonl`), which relay consumes each tick with its
+usual guards; safety holds because a click is an un-spoofable human action (a
+Claude session cannot click its own status bar). The always-on AutoLaunch
+provider now self-heals: relay / install / `relay doctor` start it when it's
+installed but not running (see statusbar_ensure.py), and the provider heartbeats
+on a timer so liveness is honest even when the badge isn't on screen.
 
 ## 2. Status/mode prefix in the tab name, e.g. "[INSANE][BLOCKED] api-server" (2026-07-15)
 

@@ -1018,11 +1018,27 @@ class Watcher:
             if statusbar_mod.provider_alive():
                 self._note("statusbar served by AutoLaunch provider "
                            "(relay_statusbar.py)")
+                return
+            # Installed but no provider process is running - the usual cause is
+            # the symlink being (re)linked (install / `relay update`) AFTER
+            # iTerm2 last launched, so iTerm2 never started it. Start it
+            # ourselves so the badge heals without an iTerm2 restart. This is
+            # safe from the DUPLICATE-register freeze: relay only ever runs
+            # inside an already-up iTerm2, so a dead heartbeat here means no
+            # provider process exists to collide with (statusbar_ensure also
+            # refuses to start a second one over a live heartbeat). The cookie
+            # + launch block, so run it off the event loop.
+            try:
+                import statusbar_ensure
+                action = await asyncio.to_thread(statusbar_ensure.ensure)
+                msg = statusbar_ensure._MESSAGES.get(action, action)
+            except Exception as e:
+                action, msg = "error", str(e)
+            if action == "alive":
+                self._note("statusbar served by AutoLaunch provider "
+                           "(relay_statusbar.py)")
             else:
-                self._note("statusbar provider installed but not running - "
-                           "restart iTerm2, or start it via Scripts > "
-                           "AutoLaunch > relay_statusbar.py (badge reads "
-                           "'RELAY: off' until then)")
+                self._note(f"statusbar: {msg}")
             return
         try:
             component = iterm2.StatusBarComponent(

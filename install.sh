@@ -159,13 +159,17 @@ else
       ln -sfn "$AL_SRC" "$AL_DST/relay_statusbar.py"
       echo "  linked $AL_DST/relay_statusbar.py"
       echo
-      echo "  Two manual steps remain (iTerm2 gives no API for either):"
-      echo "   1. START the provider: restart iTerm2, or run it once via"
-      echo "      menu Scripts > AutoLaunch > relay_statusbar.py"
-      echo "   2. ADD the badge to your bar: Settings > Profiles >"
-      echo "      <profile> > Session > Configure Status Bar > drag 'Relay'"
-      echo "      in (and tick 'Status bar enabled'). 'Relay' only appears"
-      echo "      in that list once step 1's provider is running."
+      # Start it now (no iTerm2 restart needed) if iTerm2 is running - iTerm2
+      # only AutoLaunches at its own startup, so a just-linked provider would
+      # otherwise sit dead until the next restart. Prints its own status line.
+      python3 "$REPO/iterm/statusbar_ensure.py" || true
+      echo
+      echo "  One manual step remains (iTerm2 gives no API for it):"
+      echo "   - ADD the badge to your bar: Settings > Profiles >"
+      echo "     <profile> > Session > Configure Status Bar > drag 'Relay'"
+      echo "     in (and tick 'Status bar enabled'). 'Relay' only appears"
+      echo "     in that list while the provider above is running (if it"
+      echo "     said 'no cookie', start iTerm2 first, then rerun install)."
       if [ "$(uname -m)" = "arm64" ]; then
         echo "   NOTE (Apple Silicon): iTerm2's Python runtime is x86_64, so"
         echo "        the provider needs Rosetta 2 or it will not start:"
