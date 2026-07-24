@@ -7,13 +7,26 @@ does the sending. Pure, so it is unit-testable standalone like gates.py.
 
 A "timer" is any mapping with keys enabled/active/interval_min/mode/
 last_fired_at/bound_at (sqlite3.Row and plain dict both work via t["key"]).
+The fire-cap fields max_fires/fire_count are read defensively (via _field) so a
+row or fixture that predates them still works (missing -> 0 -> unlimited).
 """
 from __future__ import annotations
 
 INTERVAL_MIN = 1
 INTERVAL_MAX = 90
 MODES = ("idle", "now")
+DEFAULT_MAX_FIRES = 10
 _DAY = 86400.0
+
+
+def _field(timer, key, default):
+    """Read an optional timer field, defaulting when the key is absent (old row
+    /fixture) or NULL. Works for both sqlite3.Row and plain dict."""
+    try:
+        v = timer[key]
+    except (KeyError, IndexError):
+        return default
+    return default if v is None else v
 
 
 def clamp_interval(n) -> int:
@@ -33,8 +46,23 @@ def sanitize_payload(s) -> str:
     return " ".join(str(s).split("\n")).replace("\r", " ").strip()
 
 
+def capped(timer) -> bool:
+    """True when a fire-limited timer has reached its cap: max_fires > 0 and
+    fire_count >= max_fires. max_fires == 0 means unlimited (never capped)."""
+    mf = _field(timer, "max_fires", 0)
+    return mf > 0 and _field(timer, "fire_count", 0) >= mf
+
+
+def fires_left(timer):
+    """Remaining fires before the cap, or None for unlimited (max_fires == 0)."""
+    mf = _field(timer, "max_fires", 0)
+    if mf <= 0:
+        return None
+    return max(0, mf - _field(timer, "fire_count", 0))
+
+
 def is_due(timer, now) -> bool:
-    if not (timer["enabled"] and timer["active"]):
+    if not (timer["enabled"] and timer["active"]) or capped(timer):
         return False
     return (timer["last_fired_at"] or 0) + timer["interval_min"] * 60 <= now
 

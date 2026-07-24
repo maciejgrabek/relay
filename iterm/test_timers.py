@@ -16,7 +16,8 @@ def check(msg, cond):
 
 def _t(**kw):
     base = dict(enabled=1, active=1, interval_min=5, mode="idle",
-                last_fired_at=1000.0, bound_at=1000.0)
+                last_fired_at=1000.0, bound_at=1000.0,
+                max_fires=0, fire_count=0)     # 0 = unlimited by default here
     base.update(kw)
     return base
 
@@ -43,6 +44,24 @@ def run():
                 not timers.is_due(_t(enabled=0), now=10 ** 9))
     ok &= check("inactive never due",
                 not timers.is_due(_t(active=0), now=10 ** 9))
+
+    # fire cap: capped timer is never due; unlimited (0) never caps
+    ok &= check("capped: at the cap -> not due",
+                not timers.is_due(_t(max_fires=3, fire_count=3), now=10 ** 9))
+    ok &= check("capped: below the cap -> due",
+                timers.is_due(_t(max_fires=3, fire_count=2, last_fired_at=0.0),
+                              now=10 ** 9))
+    ok &= check("capped() true at/over cap",
+                timers.capped(_t(max_fires=3, fire_count=3))
+                and timers.capped(_t(max_fires=3, fire_count=5)))
+    ok &= check("max_fires 0 -> unlimited, never capped",
+                not timers.capped(_t(max_fires=0, fire_count=999)))
+    ok &= check("missing cap fields default to unlimited",
+                not timers.capped({"enabled": 1, "active": 1}))
+    ok &= check("fires_left counts down; None when unlimited",
+                timers.fires_left(_t(max_fires=10, fire_count=4)) == 6
+                and timers.fires_left(_t(max_fires=0)) is None
+                and timers.fires_left(_t(max_fires=3, fire_count=5)) == 0)
     batch = [_t(interval_min=1, last_fired_at=0.0),
              _t(interval_min=1, last_fired_at=0.0, enabled=0),
              _t(interval_min=90, last_fired_at=0.0)]
