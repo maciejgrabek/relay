@@ -955,6 +955,11 @@ Firing is always **audited** the same way an auto-approval is - even "fire now"
 (`g`) goes through the normal `_fire_timers` send path, never a raw keystroke
 from the UI.
 
+Note: a timer does not fire while its session is both hidden (quarantined)
+and disarmed - unhide or arm the session to resume it. This is a side effect
+of the poll loop's parked-session optimization, which skips reading a
+hidden+disarmed session's screen entirely (nothing to check in on).
+
 Config, in `~/.relay/config`:
 
 ```ini

@@ -619,6 +619,53 @@ async def go():
             len(after) == len(before)
             and not any(r["payload"] == payload_marker for r in after))
 
+    # --- regression: arrow keys must not leak through the open timers
+    # overlay onto the hidden session list. event.stop() in on_key only
+    # halts DOM bubbling, not the App-level cursor_up/cursor_down Bindings -
+    # so before the action_cursor_up/down guard, pressing 'down' while the
+    # timers overlay was open moved BOTH the overlay's own timer cursor AND
+    # the hidden background DataTable's cursor. Since _selected_sid() reads
+    # the table's cursor_row, a subsequent overlay action (a/space/x/g/r)
+    # would then silently target a DIFFERENT session than the one the
+    # overlay is showing.
+    def _two():
+        return {
+            "s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                              last_screen=["x"]),
+            "s1": SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
+                              last_screen=["x"]),
+        }
+
+    tl = _TestApp(_two(), dry_run=True)
+    async with tl.run_test() as pilot:
+        await pilot.pause()
+        tl._refresh()
+        await pilot.pause()
+        table = tl.query_one(appmod.DataTable)
+        table.move_cursor(row=tl._row_sids.index("s0"))
+        await pilot.pause()
+        chk("leak-test setup: s0 selected before opening timers",
+            tl._selected_sid() == "s0")
+        await pilot.press("t")
+        await pilot.pause()
+        chk("timers overlay open on s0", tl._timers_visible)
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        chk("down while the timers overlay is open must NOT move the "
+            "hidden list's cursor: _selected_sid() stays s0, the session "
+            "the overlay is showing",
+            tl._selected_sid() == "s0")
+        await pilot.press("t")               # close the overlay
+        await pilot.pause()
+        chk("timers overlay closed", not tl._timers_visible)
+        await pilot.press("down")
+        await pilot.pause()
+        chk("normal list navigation still works with no overlay open: "
+            "down now moves the selection",
+            tl._selected_sid() == "s1")
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
