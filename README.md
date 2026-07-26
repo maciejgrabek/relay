@@ -532,6 +532,13 @@ your call; Relay's job is just telling you in time.
 
 - a **FLEET line** on top - unit counts by state (busy / blocked / idle),
   armed counts by mode, stale count, queued messages;
+- under it, from 8 units up, a **fleet map**: one cell per unit in offset
+  honeycomb rows, filled (`●`) when the unit is armed or working and hollow
+  (`○`) when it is idle, colored by urgency (red stale, yellow blocked, green
+  working). No names - the roster below is where those live; the map is for
+  peripheral vision, so one hot cell breaks the pattern instead of hiding in
+  a column. A smaller fleet gets no map, because the roster already answers
+  it at a glance;
 - the roster with a per-worker **heartbeat** (`↻ 12s` since its screen last
   moved; a stale row renders red with `⧗`);
 - a kanban board of tasks by state (TODO / DOING / BLOCKED / DONE) and epic
@@ -768,6 +775,13 @@ preset = default       ; default | paranoid. paranoid flips 'safe' mode to
 [theme]
 name = phosphor        ; phosphor | amber | ice - recolors the whole TUI
 
+[mascot]
+name = crt             ; which creature watches the fleet - crt | invader | owl
+                       ; | cat | core | beacon | ghost | crab | droid | bug
+                       ; | skull | toaster | atom | moth | tank (default crt).
+                       ; Purely cosmetic: every skin runs the SAME moods, tick
+                       ; and colors. Cycle it live in the settings editor (,)
+
 [layout]
 preview = true         ; show the live-feed pane under the list (default true);
                        ; toggle live with f, or here in the settings editor
@@ -794,8 +808,10 @@ in `[sounds]` (any can be set empty to silence it):
 Press **`,`** in the panel to open the **settings editor**: `↑`/`↓` move
 between settings, `←`/`→` change the highlighted one, `p` auditions the
 highlighted sound, and every change is saved to `~/.relay/config` as you go -
-no separate save step. Sound changes apply immediately; the rest take effect
-on the next relay start (the editor tags those fields "restart to apply"). On
+no separate save step. Sound changes apply immediately, as do the feed pane
+and the **mascot** (hold `←`/`→` on APPEARANCE > mascot and the creature in the
+banner changes under your hand); the rest take effect on the next relay start
+(the editor tags those fields "restart to apply"). On
 Apple Silicon the status-bar badge also needs Rosetta 2 - `relay doctor`
 checks it.
 
