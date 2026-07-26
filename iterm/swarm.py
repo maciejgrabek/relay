@@ -422,6 +422,56 @@ def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0) -> str:
     return "FLEET  " + " · ".join(bits)
 
 
+# The fleet map: one cell per unit in offset rows, no names. It is for
+# peripheral vision - "is anything hot?" - and the roster right below it is
+# where names live. Under this many units the roster already answers that at
+# a glance, so the map would be three rows saying nothing.
+FLEET_MAP_MIN_UNITS = 8
+FLEET_MAP_PER_ROW = 12
+# The honeycomb is the OFFSET, not the glyph. ⬢/⬡ (U+2B22/U+2B21) would be the
+# literal choice but they are absent from common terminal fonts - Hack Nerd
+# Font Mono has neither - and a fallback glyph from another font breaks the
+# monospace grid the map depends on. ●/○ are present essentially everywhere
+# and read the same at a glance: filled = live, hollow = idle.
+FLEET_MAP_LIVE, FLEET_MAP_IDLE = "●", "○"
+
+
+def _unit_cell(name, stale, blocked, doing, mode) -> str:
+    """One unit's cell: filled when it is doing something or armed, hollow
+    when it is idle. Color is urgency, in the swarm view's existing
+    vocabulary - red is the stale mark, yellow is the blocked kind, green is
+    live work. Loudest state wins: a unit that needs a human is never drawn
+    as merely busy."""
+    live = FLEET_MAP_LIVE
+    if name in stale:
+        return f"[red]{live}[/red]"
+    if name in blocked:
+        return f"[yellow]{live}[/yellow]"
+    if name in doing:
+        return f"[green]{live}[/green]"
+    if mode in _MODE_GLYPH:
+        return live
+    return f"[dim]{FLEET_MAP_IDLE}[/dim]"
+
+
+def fleet_map(sessions, tasks, stale=frozenset(), width: int = 100) -> list:
+    """Rows of cells, one per unit, offset like a honeycomb so a hot one
+    breaks the grid instead of hiding in a column. Empty for a small fleet."""
+    if len(sessions) < FLEET_MAP_MIN_UNITS:
+        return []
+    doing = {t["owner"] for t in tasks if t["state"] == "doing" and t["owner"]}
+    blocked = ({t["owner"] for t in tasks
+                if t["state"] == "blocked" and t["owner"]} - doing)
+    per_row = max(4, min(FLEET_MAP_PER_ROW, (width - 6) // 3))
+    cells = [_unit_cell(s["name"], stale, blocked, doing, _get(s, "mode", ""))
+             for s in sessions]
+    rows = []
+    for i in range(0, len(cells), per_row):
+        indent = "   " if (i // per_row) % 2 else "  "
+        rows.append(indent + "  ".join(cells[i:i + per_row]))
+    return rows
+
+
 def interaction_rows(messages, coordinators=frozenset(), now: float = 0.0,
                      limit: int = 6) -> list:
     """Who talks to whom: one row per unordered name pair - direction counts
@@ -490,6 +540,12 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     out: List[str] = []
     queued = sum(1 for m in messages if _get(m, "delivered_at") is None)
     out.append(_esc(fleet_line(sessions, tasks, stale=stale, queued=queued)))
+    # The map is already markup (colors are its whole point) - it carries no
+    # user text, so it does not go through _esc().
+    fmap = fleet_map(sessions, tasks, stale=stale, width=width)
+    if fmap:
+        out.append("")
+        out.extend(fmap)
     out.append("")
     projects = sorted({s["project"] for s in sessions}
                       | {t["project"] for t in tasks}) or [""]
