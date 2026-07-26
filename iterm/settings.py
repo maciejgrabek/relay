@@ -20,6 +20,7 @@ SETTINGS = [
     ("SOUNDS", "danger_sound", "sound", None),
     ("SOUNDS", "message_sound", "sound", None),
     ("APPEARANCE", "theme", "enum", _config.THEME_NAMES),
+    ("APPEARANCE", "mascot", "enum", _config.MASCOT_NAMES),
     ("APPEARANCE", "title_style", "enum", _config.TITLE_STYLES),
     ("APPEARANCE", "preview_panel", "toggle", None),
     ("BEHAVIOR", "statusbar_enabled", "toggle", None),
@@ -36,7 +37,7 @@ SETTINGS = [
 # the running TUI (display) instead - same "no restart tag" treatment, but the
 # app, not the watcher, is where the change lands.
 _LIVE = {"alert_sound", "done_sound", "danger_sound", "message_sound"}
-_APP_LIVE = {"preview_panel"}
+_APP_LIVE = {"preview_panel", "mascot"}
 
 
 def is_live(field: str) -> bool:

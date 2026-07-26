@@ -157,6 +157,20 @@ def run():
     ok &= check("bad theme -> phosphor + warning", cfg.theme == "phosphor"
                 and any("hotdog" in w for w in warns))
 
+    # mascot: default crt (the brand mark); validated; bad value -> warn + crt
+    cfg, _ = config.load("/nonexistent/relay-config")
+    ok &= check("mascot default crt", cfg.mascot == "crt")
+    p = _write("[mascot]\nname = invader\n")
+    cfg, warns = config.load(p)
+    ok &= check("mascot invader read", cfg.mascot == "invader" and warns == [])
+    p = _write("[mascot]\nname = Owl\n")
+    cfg, warns = config.load(p)
+    ok &= check("mascot name is case-insensitive", cfg.mascot == "owl")
+    p = _write("[mascot]\nname = wombat\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad mascot -> crt + warning", cfg.mascot == "crt"
+                and any("wombat" in w for w in warns))
+
     # preview panel: default shown (True); parsed as bool; bad value -> True.
     cfg, _ = config.load("/nonexistent/relay-config")
     ok &= check("preview panel defaults to shown", cfg.preview_panel is True)
@@ -209,7 +223,7 @@ def run():
         done_sound="", danger_sound="/a/d.aiff", message_sound="/a/m.aiff",
         stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
         statusbar_enabled=True, danger_preset="paranoid",
-        theme="amber", preview_panel=False,
+        theme="amber", mascot="invader", preview_panel=False,
         timers_require_armed=True, timers_autostart=True,
         timers_reconfirm_days=3.0)
     p = _write(config.dump(custom))

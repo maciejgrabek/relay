@@ -10,6 +10,7 @@ quit === everything stops. No daemon, no auto-launch, no shared state files.
 from __future__ import annotations
 
 import asyncio
+import collections
 import os
 import subprocess
 import sys
@@ -269,16 +270,165 @@ def _speech_bubble(text: str) -> list:
     ]
 
 
+# --- mascot skins -------------------------------------------------------------
+# One state machine, many bodies. A skin NEVER decides a mood, a color, a
+# phrase or a tick - it only draws the body around tokens the mood already
+# chose. `crt` is the default and relay's brand mark; the rest are the user's
+# to pick via [mascot] name in ~/.relay/config.
+#
+# A skin gets the CRT's three 6-char screen rows (eyes/mid/mouth, which carry
+# the blink, the saccade, the streaming dot and the CRITICAL roll) plus the
+# antenna beacon. Bodies without a screen use single glyphs pulled out of
+# those rows, so a new mood needs no edit here.
+#
+# The contract every skin owes the header: exactly 6 rows; rows 1-5 the same
+# width; row 0 (antenna) no wider. test_app.py enforces it for every mood at
+# every tick phase.
+Skin = collections.namedtuple("Skin", "lead build")
+
+
+def _glyph(row: str, default: str = " ") -> str:
+    """The mood's own mark, taken from a 6-char screen row (' ⊙  ⊙ ' -> '⊙')."""
+    for ch in row:
+        if ch != " ":
+            return ch
+    return default
+
+
+def _crt(eyes, mid, mouth, b):
+    return ["    " + b, "╭───┴────╮", f"│ {eyes} │", f"│ {mid} │",
+            f"│ {mouth} │", "╰─╥────╥─╯"]
+
+
+def _skin(rows):
+    """Build a skin from a 6-row template.
+
+    {e}=eye, {m}=mouth, {b}=antenna beacon, {d}=the screen's data glyph.
+
+    {d} is what the CRT shows on its middle row - the celebration ✓, the
+    flinch !, the working dot, the CRITICAL roll, the timer's turning clock
+    hand - reduced to one cell so every body can carry it too. It is a space
+    in the calm moods, so a skin's resting art is unchanged. Each template
+    spends one interior space on it; never add a column for it."""
+    def build(eyes, mid, mouth, b):
+        e, mo, d = _glyph(eyes), _glyph(mouth), _glyph(mid)
+        return [r.format(e=e, m=mo, b=b, d=d) for r in rows]
+    return Skin(" ", build)
+
+
+MASCOT_SKINS = {
+    "crt": Skin("  ", _crt),
+    "invader": _skin(["     {b}      ",
+                      " ▄▄      ▄▄ ",
+                      "▄▄████████▄▄",
+                      "██ {e}  {d} {e} ██",
+                      "███  {m}   ███",
+                      "▀▀▄▄▄▄▄▄▄▄▀▀"]),
+    "owl": _skin(["  ╱▔╲ {b}╱▔╲  ",
+                  " ╭────────╮ ",
+                  " │  {e} {d}{e}  │ ",
+                  " │    {m}   │ ",
+                  " ╰──╮  ╭──╯ ",
+                  "   ╲╱  ╲╱   "]),
+    "cat": _skin([" ╱╲  {b}   ╱╲ ",
+                  "╱  ╲____╱  ╲",
+                  "│  {e}  {d} {e}  │",
+                  "│     {m}    │",
+                  "╲__________╱",
+                  "  ╰┘    ╰┘  "]),
+    "core": _skin(["     {b}      ",
+                   "   ╱▔▔▔▔╲   ",
+                   "  │ {e} {d}{e} │  ",
+                   "  │   {m}  │  ",
+                   "   ╲▁▁▁▁╱   ",
+                   "    ╨  ╨    "]),
+    "beacon": _skin(["    (({b}))   ",
+                     "   ╭─────╮  ",
+                     "   │ {e} {e} │  ",
+                     "   │ {d}{m}  │  ",
+                     "  ╭┴─────┴╮ ",
+                     "  ╰───────╯ "]),
+    "ghost": _skin(["     {b}      ",
+                    "   ▄▄▄▄▄▄   ",
+                    "  █ {e} {d}{e} █  ",
+                    "  █   {m}  █  ",
+                    "  ████████  ",
+                    "  ▀▄▀▄▀▄▀▄  "]),
+    "crab": _skin(["  ╲   {b}  ╱  ",
+                   "   ╭────╮   ",
+                   " ╭─┤{e} {d}{e}├─╮ ",
+                   " ╰─┤  {m} ├─╯ ",
+                   "   ╰────╯   ",
+                   "   ╱╲  ╱╲   "]),
+    "droid": _skin(["     {b}      ",
+                    "   ┌────┐   ",
+                    "  ═┤{e} {d}{e}├═  ",
+                    "  ═┤ {m}  ├═  ",
+                    "   └────┘   ",
+                    "    ╨  ╨    "]),
+    "bug": _skin(["  ╲  {b}   ╱  ",
+                  "   ╭────╮   ",
+                  "  ╱│{e} {d}{e}│╲  ",
+                  "  ╲│ {m}  │╱  ",
+                  "   ╰────╯   ",
+                  "   ╱ ╲╱ ╲   "]),
+    "skull": _skin(["     {b}      ",
+                    "   ▄▄▄▄▄▄   ",
+                    "  █ {e} {d}{e} █  ",
+                    "  █   {m}  █  ",
+                    "   ╰▀▀▀▀╯   ",
+                    "    ┬┬┬┬    "]),
+    "toaster": _skin(["     {b}      ",
+                      "  ╔══════╗  ",
+                      "  ║ {e} {d}{e} ║  ",
+                      "  ║  {m}   ║  ",
+                      "  ╚══════╝  ",
+                      "   ╰╯  ╰╯   "]),
+    "atom": _skin(["     {b}      ",
+                   "  ╭──────╮  ",
+                   " ╱ {e}  {d} {e} ╲ ",
+                   " ╲   {m}    ╱ ",
+                   "  ╰──────╯  ",
+                   "   ▔▔  ▔▔   "]),
+    "moth": _skin([" ╲╲  {b}   ╱╱ ",
+                   "  ╲╲╭──╮╱╱  ",
+                   "   ╱{e} {d}{e}╲   ",
+                   "   ╲  {m} ╱   ",
+                   "  ╱╱╰──╯╲╲  ",
+                   " ╱╱      ╲╲ "]),
+    "tank": _skin(["     {b}      ",
+                   "   ▁▁▁▁▁▁   ",
+                   "  ╱{e}  {d} {e}╲  ",
+                   " │    {m}   │ ",
+                   " ╞════════╡ ",
+                   "  ○ ○  ○ ○  "]),
+}
+
+
+def _active_mascot() -> str:
+    import config as _config
+    name = getattr(_config.load()[0], "mascot", "crt")
+    return name if name in MASCOT_SKINS else "crt"
+
+
+# Read once at import, like the theme. Rebindable so the settings editor can
+# switch creature without a restart.
+ACTIVE_MASCOT = _active_mascot()
+
+
 def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
                     working: bool = False, armed: int = 0,
                     approvals: int = 0, reaction=None,
                     paused: bool = False, timers_on: int = 0,
-                    timer_next=None) -> list:
-    """The banner creature: a tiny CRT monitor (antenna, screen, feet) that
-    watches the fleet from beside the RELAY logo, keyed to the 0.5s reactor
-    tick. Its speech bubble says the one thing that matters right now; its
-    motion budget is spent by meaning - idle barely moves, only ALARMED
-    shakes. Returns equal-height lines (ragged right edges are fine)."""
+                    timer_next=None, skin=None) -> list:
+    """The banner creature that watches the fleet from beside the RELAY logo,
+    keyed to the 0.5s reactor tick. Its speech bubble says the one thing that
+    matters right now; its motion budget is spent by meaning - idle barely
+    moves, only ALARMED shakes. Returns equal-height lines (ragged right
+    edges are fine).
+
+    The mood decided here is the whole truth; `skin` (default: the configured
+    creature) only chooses the body it is drawn in - see MASCOT_SKINS."""
     state = effective_mascot_state(band, awaiting=awaiting, working=working,
                                    armed=armed, reaction=reaction, paused=paused)
     beacon, mid = " ", "      "
@@ -351,16 +501,13 @@ def mascot_face_big(tick: int, band: str, *, awaiting: int = 0,
         if clock_win:
             say, beacon = timer_say, "◷"
             mid = f"  {'◴◵◶◷'[tick % 4]}   "
-    lead = " " if shake else "  "
+    sk = MASCOT_SKINS.get(skin or ACTIVE_MASCOT, MASCOT_SKINS["crt"])
+    # ALARMED shakes the whole body one column left - the lead is what gives
+    # it the room, so it shrinks rather than the body moving inside its frame.
+    lead = sk.lead[1:] if shake else sk.lead
     bub = _speech_bubble(say)
-    return [
-        f"{lead}    {beacon}",
-        f"{lead}╭───┴────╮{bub[0]}",
-        f"{lead}│ {eyes} │{bub[1]}",
-        f"{lead}│ {mid} │{bub[2]}",
-        f"{lead}│ {mouth} │",
-        f"{lead}╰─╥────╥─╯",
-    ]
+    return [lead + row + (bub[i - 1] if 1 <= i <= 3 else "")
+            for i, row in enumerate(sk.build(eyes, mid, mouth, beacon))]
 
 
 # What each mood wears: the face speaks relay's existing color vocabulary
@@ -375,7 +522,7 @@ def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
                      working: bool = False, armed: int = 0,
                      approvals: int = 0, reaction=None,
                      paused: bool = False, timers_on: int = 0,
-                     timer_next=None) -> str:
+                     timer_next=None, skin=None) -> str:
     """The RELAY block logo (theme-colored by CSS) with the creature on its
     right, colored by mood via markup. The logo contains no markup chars;
     the face frames are built bracket-free, so no escaping is needed."""
@@ -386,7 +533,7 @@ def banner_with_face(tick: int, band: str, *, awaiting: int = 0,
     face = mascot_face_big(tick, band, awaiting=awaiting, working=working,
                            armed=armed, approvals=approvals, reaction=reaction,
                            paused=paused, timers_on=timers_on,
-                           timer_next=timer_next)
+                           timer_next=timer_next, skin=skin)
     h = max(len(logo), len(face))
     logo = logo + [""] * (h - len(logo))
     face = face + [""] * (h - len(face))
@@ -1320,8 +1467,7 @@ class RelayApp(App):
                                                direction)
         if settingsmod.is_app_live(field):
             # Lands on the TUI, not the watcher (e.g. preview pane visibility).
-            self._preview_visible = getattr(self._working_cfg, field)
-            self._apply_preview()
+            self._apply_app_live(field, getattr(self._working_cfg, field))
         elif settingsmod.is_live(field) and self.watcher:
             setattr(self.watcher, field, getattr(self._working_cfg, field))
         try:
@@ -1329,6 +1475,19 @@ class RelayApp(App):
         except Exception as e:
             self.query_one(Log).write_line(f"config save failed: {e}")
         self._render_settings()
+
+    def _apply_app_live(self, field: str, value) -> None:
+        """Apply a settings change whose target is the TUI's own display, so
+        the overlay shows the result while it is still open."""
+        global ACTIVE_MASCOT
+        if field == "preview_panel":
+            self._preview_visible = value
+            self._apply_preview()
+        elif field == "mascot":
+            ACTIVE_MASCOT = value
+            # The reactor tick would pick it up within 0.5s; redraw now so the
+            # creature changes under the user's hand, not a beat later.
+            self._tick_reactor()
 
     def _settings_play(self) -> None:
         if self._working_cfg is None:
