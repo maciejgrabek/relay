@@ -323,6 +323,42 @@ def run():
     ok &= check("fleet line stale + queued", "1 STALE" in fl
                 and "msgs 3 queued" in fl)
 
+    # --- fleet map: one hex per unit, peripheral vision only -----------------
+    import re as _re
+    plain = lambda s: _re.sub(r"\[/?[^\]]*\]", "", s)  # noqa: E731
+
+    ok &= check("no map for a small fleet (the roster already shows it)",
+                swarm.fleet_map(FS, FT, stale={"etl"}) == [])
+
+    def _unit(i, mode=""):
+        return {"name": f"w{i}", "role": "worker", "project": "p",
+                "status_text": "", "mode": mode}
+    BIG = [_unit(i, "wild" if i % 2 else "") for i in range(14)]
+    BT = [{"id": 1, "owner": "w1", "state": "doing", "project": "p",
+           "parent_id": None, "title": "x", "blocked_by": ""},
+          {"id": 2, "owner": "w2", "state": "blocked", "project": "p",
+           "parent_id": None, "title": "y", "blocked_by": ""}]
+    m = swarm.fleet_map(BIG, BT, stale={"w3"})
+    cells = sum(len([c for c in plain(r) if c in "●○"]) for r in m)
+    ok &= check("every unit gets exactly one cell", cells == len(BIG))
+    ok &= check("the map is a honeycomb (rows offset by half a cell)",
+                len(m) > 1
+                and (len(plain(m[0])) - len(plain(m[0]).lstrip()))
+                != (len(plain(m[1])) - len(plain(m[1]).lstrip())))
+    joined = "".join(m)
+    ok &= check("stale is red, blocked yellow, busy green, idle dim",
+                "[red]●" in joined and "[yellow]●" in joined
+                and "[green]●" in joined and "[dim]○" in joined)
+    ok &= check("a unit that needs a human outranks one that is merely busy",
+                swarm._unit_cell("w3", {"w3"}, set(), set(), "wild")
+                == swarm._unit_cell("w3", {"w3"}, {"w3"}, {"w3"}, "wild"))
+    big_view = swarm.render_swarm(BIG, BT, [], now=0.0, stale={"w3"})
+    ok &= check("the swarm view shows the map under the fleet line",
+                "●" in big_view
+                and big_view.index("FLEET") < big_view.index("●"))
+    ok &= check("a small fleet's view has no map",
+                "●" not in swarm.render_swarm(FS, FT, [], now=0.0))
+
     IM = [{"from_name": "coord", "to_name": "bff", "created_at": 100.0,
            "kind": "info", "delivered_at": 1},
           {"from_name": "bff", "to_name": "coord", "created_at": 200.0,
