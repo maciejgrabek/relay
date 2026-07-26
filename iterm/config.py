@@ -13,6 +13,9 @@
     stale_minutes   = 10   ; mirrors RELAY_STALE_MINUTES
     notify_cooldown = 30   ; mirrors RELAY_NOTIFY_COOLDOWN
 
+    [mascot]
+    name = crt             ; crt | invader | owl | cat | core | ... (see MASCOT_NAMES)
+
 Precedence: defaults < config file < environment variable. Env always wins,
 so existing setups keep working. A missing file, section, or key silently
 yields defaults; a malformed file or value yields defaults plus a warning
@@ -33,6 +36,12 @@ TITLE_STYLES = ("off", "glyphs", "words", "hybrid")
 SPAWN_ARM_MODES = ("off", "safe", "wild", "insane")
 DANGER_PRESETS = ("default", "paranoid")
 THEME_NAMES = ("phosphor", "amber", "ice")
+# The creature that watches the fleet. Every skin is the SAME state machine
+# (moods, tick, colors) - only the body drawn around the eyes changes. `crt`
+# is the default and stays relay's brand mark.
+MASCOT_NAMES = ("crt", "invader", "owl", "cat", "core", "beacon", "ghost",
+                "crab", "droid", "bug", "skull", "toaster", "atom", "moth",
+                "tank")
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,7 @@ class Config:
     statusbar_enabled: bool = False
     danger_preset: str = "default"
     theme: str = "phosphor"
+    mascot: str = "crt"
     preview_panel: bool = True
     timers_require_armed: bool = False
     timers_autostart: bool = False
@@ -126,6 +136,12 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(THEME_NAMES)} - using 'phosphor'")
         theme = "phosphor"
 
+    mascot = cp.get("mascot", "name", fallback=d.mascot).strip().lower()
+    if mascot not in MASCOT_NAMES:
+        warns.append(f"config: [mascot] name = {mascot!r} is not one of "
+                     f"{'/'.join(MASCOT_NAMES)} - using 'crt'")
+        mascot = "crt"
+
     try:
         preview = cp.getboolean("layout", "preview",
                                 fallback=d.preview_panel)
@@ -180,6 +196,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         statusbar_enabled=statusbar,
         danger_preset=preset,
         theme=theme,
+        mascot=mascot,
         preview_panel=preview,
         timers_require_armed=t_armed,
         timers_autostart=t_auto,
@@ -209,6 +226,8 @@ def dump(cfg: Config) -> str:
         f"preset = {cfg.danger_preset}\n\n"
         "[theme]\n"
         f"name = {cfg.theme}\n\n"
+        "[mascot]\n"
+        f"name = {cfg.mascot}\n\n"
         "[layout]\n"
         f"preview = {'true' if cfg.preview_panel else 'false'}\n"
         "\n[timers]\n"

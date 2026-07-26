@@ -378,6 +378,46 @@ async def go():
             and str(pane.styles.display) == "none"
             and cfgmod.load()[0].preview_panel is False)
 
+    # --- mascot picker: cycle the creature from the settings overlay ----------
+    chk("mascot is an editable APPEARANCE enum",
+        ("APPEARANCE", "mascot", "enum",
+         cfgmod.MASCOT_NAMES) in appmod.settingsmod.SETTINGS)
+    chk("changing the mascot needs no restart",
+        appmod.settingsmod.is_live("mascot")
+        and appmod.settingsmod.is_app_live("mascot"))
+    chk("the picker cycles through every creature",
+        appmod.settingsmod.change(cfgmod.Config(), "mascot", 1).mascot
+        == cfgmod.MASCOT_NAMES[1]
+        and appmod.settingsmod.change(cfgmod.Config(), "mascot", -1).mascot
+        == cfgmod.MASCOT_NAMES[-1])
+
+    was = appmod.ACTIVE_MASCOT
+    try:
+        mp = _TestApp(_one(), dry_run=True)
+        async with mp.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("comma")
+            await pilot.pause()
+            mp._settings_cursor = [
+                s[1] for s in appmod.settingsmod.SETTINGS].index("mascot")
+            await pilot.press("right")
+            await pilot.pause()
+            chk("picking a creature applies live (no restart)",
+                appmod.ACTIVE_MASCOT == cfgmod.MASCOT_NAMES[1])
+            chk("picking a creature persists",
+                cfgmod.load()[0].mascot == cfgmod.MASCOT_NAMES[1])
+            chk("the banner redraws as the new creature",
+                "▀▀▄▄" in str(mp.query_one("#banner",
+                                           appmod.Static).render()))
+            await pilot.press("left")
+            await pilot.pause()
+            chk("cycling back restores the CRT",
+                appmod.ACTIVE_MASCOT == "crt"
+                and "▀▀▄▄" not in str(mp.query_one("#banner",
+                                                   appmod.Static).render()))
+    finally:
+        appmod.ACTIVE_MASCOT = was
+
     # --- pause key path (app -> watcher.toggle_pause + PAUSED banner) --------
     pz = _TestApp(_one(), dry_run=True)
     async with pz.run_test() as pilot:
@@ -496,6 +536,100 @@ async def go():
         len(mfb(0, "ok", armed=2, paused=True)) == 6
         and all(mfb(0, "ok", armed=2, paused=True)[i][11] == "│"
                 for i in (2, 3, 4)))
+
+    # --- mascot skins: one state machine, fifteen bodies ----------------------
+    # A skin may only change the body drawn around the eyes. The header's
+    # layout depends on every skin being the same shape, so this is checked
+    # for every skin, in every mood, at every tick phase.
+    from app import MASCOT_SKINS
+    import config as _cfg
+
+    chk("every configurable mascot name has a skin",
+        sorted(MASCOT_SKINS) == sorted(_cfg.MASCOT_NAMES))
+    chk("crt is the default skin", appmod.ACTIVE_MASCOT == "crt")
+
+    moods = [{}, {"armed": 2}, {"working": True}, {"awaiting": 2},
+             {"band": "☢ CRITICAL"}, {"paused": True},
+             {"armed": 1, "reaction": "done"},
+             {"armed": 1, "reaction": "danger"},
+             # timers weave a clock into the guard/idle chatter, but only in
+             # the second half of each 96-tick window - a 24-tick sweep would
+             # never render that face at all.
+             {"armed": 2, "timers_on": 1}, {"timers_on": 1}]
+    shape_ok, glyph_ok = True, True
+    for name in MASCOT_SKINS:
+        for kw in moods:
+            for t in range(96):
+                kw2 = dict(kw)
+                rows = mfb(t, kw2.pop("band", "ok"), skin=name, **kw2)
+                if len(rows) != 6:
+                    shape_ok = False
+                    break
+                # Rows 4-5 are body only, so they define the body width; rows
+                # 1-3 are that same body plus the (equal-length) speech
+                # bubble; row 0 is the antenna and may be short (the face's
+                # right edge is allowed to be ragged, its columns are not).
+                w = len(rows[5])
+                if (len(rows[4]) != w or len(rows[0]) > w
+                        or len({len(rows[i]) for i in (1, 2, 3)}) != 1
+                        or len(rows[1]) <= w):
+                    shape_ok = False
+    chk("every skin is 6 rows with an aligned body, every mood, every tick",
+        shape_ok)
+
+    # Tokens must be wired through, not hardcoded per skin: the mood's eye
+    # glyph has to reach the face whichever body is drawn around it.
+    for name in MASCOT_SKINS:
+        alarmed = " ".join(mfb(0, "ok", awaiting=2, skin=name))
+        critical = " ".join(mfb(0, "☢ CRITICAL", armed=1, skin=name))
+        if "⊙" not in alarmed or "x" not in critical:
+            glyph_ok = False
+    chk("every skin shows the mood's own eyes", glyph_ok)
+
+    # Every state's screen cue must survive in EVERY body, not just the CRT's
+    # screen. Checked on the body columns only - the speech bubble would
+    # otherwise pass these for free, since it repeats the mood in words.
+    def body(name, tick=0, **kw):
+        rows = mfb(tick, kw.pop("band", "ok"), skin=name, **kw)
+        w = len(rows[5])
+        return "".join(r[:w] for r in rows)
+
+    # (label, kwargs, a cue that ONLY the screen row carries - never the
+    # antenna, so a skin that drops the screen cannot pass by accident)
+    screens = [
+        ("celebrate", {"armed": 1, "reaction": "done"}, "✓"),
+        ("working", {"armed": 1, "working": True}, "·"),
+        ("critical", {"band": "☢ CRITICAL", "armed": 1}, "░▒▓"),
+        # ◷ excluded on purpose: it is also the clock window's antenna, so
+        # only the other three hands prove the screen itself is ticking.
+        ("timer clock", {"armed": 2, "timers_on": 1}, "◴◵◶"),
+    ]
+    missing = []
+    for name in MASCOT_SKINS:
+        for label, kw, cues in screens:
+            # the clock and the roll cycle, so try the tick phases they use
+            if not any(any(c in body(name, tick=t, **dict(kw)) for c in cues)
+                       for t in range(0, 96)):
+                missing.append(f"{name}/{label}")
+    if missing:
+        print("      missing screens:", ", ".join(missing[:8]),
+              f"(+{len(missing) - 8} more)" if len(missing) > 8 else "")
+    chk("every skin keeps every state's screen cue", not missing)
+
+    chk("unknown skin name falls back to crt",
+        mfb(0, "ok", armed=2, skin="wombat") == mfb(0, "ok", armed=2,
+                                                    skin="crt"))
+    chk("a skin does not change the mood ladder",
+        appmod.effective_mascot_state("ok", awaiting=1, working=False,
+                                      armed=1) == "alarmed")
+    chk("skins differ from one another",
+        mfb(0, "ok", armed=2, skin="invader") != mfb(0, "ok", armed=2,
+                                                     skin="crt"))
+    # "▀▀▄▄" is the invader's feet and appears nowhere in the RELAY logo.
+    chk("the banner draws the skin it is given",
+        "▀▀▄▄" in appmod.banner_with_face(0, "ok", armed=2, skin="invader")
+        and "▀▀▄▄" not in appmod.banner_with_face(0, "ok", armed=2,
+                                                  skin="crt"))
 
     # --- timers woven into the NORMAL guard/idle chatter (no takeover mood) ---
     # Timers do not get their own mood; a timer line surfaces every other phrase
