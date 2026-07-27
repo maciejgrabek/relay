@@ -1105,6 +1105,48 @@ def notify_mac_tests():
     return ok
 
 
+def mute_tests():
+    """[sounds] enabled = false silences every notify sound without losing the
+    four picks, and flipping it back (as the settings editor does, live)
+    restores them."""
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    import importlib
+    importlib.reload(W)
+    import dataclasses
+    import config as C
+
+    cfg = dataclasses.replace(C.Config(), sounds_enabled=False)
+    w = W.Watcher(connection=None, dry_run=False, cfg=cfg)
+    chk("muted: all four sounds read as silence",
+        (w.alert_sound, w.done_sound, w.danger_sound, w.message_sound)
+        == ("", "", "", ""))
+    chk("muted: the danger/alert pick is silent too",
+        W._notify_sound(W.DANGEROUS_COMMAND, danger=w.danger_sound,
+                        alert=w.alert_sound) == "")
+
+    # Live un-mute (settings editor does exactly this setattr).
+    w.sounds_enabled = True
+    chk("un-mute restores the original picks, not defaults-from-nothing",
+        w.alert_sound == cfg.alert_sound and w.done_sound == cfg.done_sound
+        and w.danger_sound == cfg.danger_sound
+        and w.message_sound == cfg.message_sound)
+
+    # Live mute on a running watcher started un-muted.
+    w2 = W.Watcher(connection=None, dry_run=False, cfg=C.Config())
+    chk("default watcher is audible", w2.alert_sound != "")
+    w2.sounds_enabled = False
+    chk("live mute silences it", w2.alert_sound == "")
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 async def timer_tests():
     """Watcher fires due timers: now fires immediately, idle waits for ready,
     pause freezes, require_armed gates, past-reconfirm deactivates."""
@@ -1266,6 +1308,7 @@ if __name__ == "__main__":
     r10 = asyncio.run(pause_tests())
     r11 = asyncio.run(shadow_tests())
     r12 = notify_mac_tests()
+    r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
     sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10 and r11 and r12 and r_timer) else 1)
+                   and r9 and r10 and r11 and r12 and r13 and r_timer) else 1)

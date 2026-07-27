@@ -751,6 +751,8 @@ back too - it never crashes the TUI.
 style = hybrid         ; off | glyphs | words | hybrid (default off)
 
 [sounds]
+enabled = true         ; master mute - false silences all four without losing
+                       ; your picks; toggle it live in the settings editor (,)
 alert = /System/Library/Sounds/Sosumi.aiff
 done  = /System/Library/Sounds/Glass.aiff
 
@@ -796,7 +798,7 @@ strip-parser - a configurable vocabulary would double the bug surface).
 ### Sounds and the settings editor
 
 Relay uses four distinct sounds so your ear can triage without looking, all set
-in `[sounds]` (any can be set empty to silence it):
+in `[sounds]` (any can be set empty to silence just that one):
 
 | Key | Fires on | Default |
 | --- | -------- | ------- |
@@ -804,6 +806,12 @@ in `[sounds]` (any can be set empty to silence it):
 | `alert` | needs a look (real question, stale session, error) | Sosumi |
 | `message` | a swarm worker messaged / escalated to you | Tink |
 | `done` | a task or epic completed | Glass |
+
+To go quiet for a while, flip `enabled = false` (the first row of the SOUNDS
+group in the editor) instead of blanking the four keys: it takes effect on the
+running watcher immediately, the muted rows are tagged `(muted)`, your four
+picks survive, and flipping it back restores them. `p` still auditions the
+highlighted sound while muted - you asked to hear it.
 
 Press **`,`** in the panel to open the **settings editor**: `↑`/`↓` move
 between settings, `←`/`→` change the highlighted one, `p` auditions the

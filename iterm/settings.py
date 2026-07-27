@@ -15,6 +15,7 @@ SYSTEM_SOUNDS_DIR = "/System/Library/Sounds"
 #   toggle -> spec None
 #   sound  -> spec None (options are dynamic, see sound_options)
 SETTINGS = [
+    ("SOUNDS", "sounds_enabled", "toggle", None),
     ("SOUNDS", "alert_sound", "sound", None),
     ("SOUNDS", "done_sound", "sound", None),
     ("SOUNDS", "danger_sound", "sound", None),
@@ -36,7 +37,8 @@ SETTINGS = [
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
 # the running TUI (display) instead - same "no restart tag" treatment, but the
 # app, not the watcher, is where the change lands.
-_LIVE = {"alert_sound", "done_sound", "danger_sound", "message_sound"}
+_LIVE = {"sounds_enabled", "alert_sound", "done_sound", "danger_sound",
+         "message_sound"}
 _APP_LIVE = {"preview_panel", "mascot"}
 
 
@@ -126,6 +128,10 @@ def render(working, running, cursor, width):
             lines.append(f"  {g}")
         mark = ">" if i == cursor else " "
         val = _display(kind, getattr(working, f))
+        if kind == "sound" and not working.sounds_enabled:
+            # The pick is kept, it just cannot be heard - say so, or the four
+            # sound names read as a promise the muted panel does not keep.
+            val += "  (muted)"
         tag = ""
         if not is_live(f) and getattr(working, f) != getattr(running, f):
             tag = "   restart to apply"

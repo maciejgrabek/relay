@@ -4,6 +4,7 @@
     style = off            ; off | glyphs | words | hybrid
 
     [sounds]
+    enabled = true                                 ; master mute for all four
     alert   = /System/Library/Sounds/Sosumi.aiff   ; needs-a-look (stale, error)
     done    = /System/Library/Sounds/Glass.aiff     ; a task/epic completed
     danger  = /System/Library/Sounds/Basso.aiff     ; about to run something bad
@@ -47,6 +48,9 @@ MASCOT_NAMES = ("crt", "invader", "owl", "cat", "core", "beacon", "ghost",
 @dataclass(frozen=True)
 class Config:
     title_style: str = "off"
+    # Master mute. False silences every notification sound without touching the
+    # four choices below, so flipping it back on restores them intact.
+    sounds_enabled: bool = True
     alert_sound: str = "/System/Library/Sounds/Sosumi.aiff"
     done_sound: str = "/System/Library/Sounds/Glass.aiff"
     danger_sound: str = "/System/Library/Sounds/Basso.aiff"
@@ -114,6 +118,14 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     stale = _get_float(cp, "swarm", "stale_minutes", d.stale_minutes, warns)
     cooldown = _get_float(cp, "swarm", "notify_cooldown", d.notify_cooldown,
                           warns)
+
+    try:
+        sounds_on = cp.getboolean("sounds", "enabled",
+                                  fallback=d.sounds_enabled)
+    except ValueError:
+        warns.append("config: [sounds] enabled must be true/false - "
+                     "using true")
+        sounds_on = True
 
     try:
         statusbar = cp.getboolean("statusbar", "enabled",
@@ -185,6 +197,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
 
     return Config(
         title_style=style,
+        sounds_enabled=sounds_on,
         alert_sound=cp.get("sounds", "alert", fallback=d.alert_sound).strip(),
         done_sound=cp.get("sounds", "done", fallback=d.done_sound).strip(),
         danger_sound=cp.get("sounds", "danger", fallback=d.danger_sound).strip(),
@@ -212,6 +225,7 @@ def dump(cfg: Config) -> str:
         "[titles]\n"
         f"style = {cfg.title_style}\n\n"
         "[sounds]\n"
+        f"enabled = {'true' if cfg.sounds_enabled else 'false'}\n"
         f"alert   = {cfg.alert_sound}\n"
         f"done    = {cfg.done_sound}\n"
         f"danger  = {cfg.danger_sound}\n"
