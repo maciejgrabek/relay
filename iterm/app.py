@@ -1496,6 +1496,8 @@ class RelayApp(App):
         field, kind = row[1], row[2]
         if kind != "sound":       # p only previews sounds; toggles have no sound
             return
+        # Deliberately ignores the sounds_enabled mute: you pressed p to
+        # audition this file, and a dead key would read as a broken editor.
         path = getattr(self._working_cfg, field)
         if path:
             try:

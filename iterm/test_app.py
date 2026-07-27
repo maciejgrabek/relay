@@ -29,9 +29,10 @@ class StubWatcher:
         self.log_total = 0
         self.sent = []
         self.registry = {}
-        # config editor: a real Config plus the four live-editable sound
-        # attributes, mirroring the real Watcher's shape.
+        # config editor: a real Config plus the master mute and the four
+        # live-editable sound attributes, mirroring the real Watcher's shape.
         self.cfg = cfgmod.Config()
+        self.sounds_enabled = self.cfg.sounds_enabled
         self.alert_sound = self.cfg.alert_sound
         self.done_sound = self.cfg.done_sound
         self.danger_sound = self.cfg.danger_sound
@@ -319,7 +320,19 @@ async def go():
         chk("comma opens settings",
             ce._settings_visible
             and str(ce.query_one("#settingsview").styles.display) == "block")
-        # move to the first sound row (cursor starts at 0 = alert_sound), change
+        # Cursor starts at 0 = the SOUNDS master mute: flipping it lands on the
+        # running watcher live and persists, with no restart.
+        await pilot.press("right")
+        await pilot.pause()
+        chk("right on the mute row silences the live watcher",
+            ce.watcher.sounds_enabled is False
+            and cfgmod.load()[0].sounds_enabled is False)
+        await pilot.press("right")
+        await pilot.pause()
+        chk("right again un-mutes", ce.watcher.sounds_enabled is True)
+        # Next row down is the first sound; changing it is live too.
+        await pilot.press("down")
+        await pilot.pause()
         before = ce.watcher.alert_sound
         await pilot.press("right")
         await pilot.pause()

@@ -219,7 +219,8 @@ def run():
     import dataclasses
     # dump -> load round-trips every managed field (non-default values).
     custom = dataclasses.replace(
-        config.Config(), title_style="hybrid", alert_sound="/a/x.aiff",
+        config.Config(), title_style="hybrid", sounds_enabled=False,
+        alert_sound="/a/x.aiff",
         done_sound="", danger_sound="/a/d.aiff", message_sound="/a/m.aiff",
         stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
         statusbar_enabled=True, danger_preset="paranoid",
@@ -235,6 +236,18 @@ def run():
     config.save(custom, sp)
     ok &= check("save then load equals cfg", config.load(sp)[0] == custom)
     ok &= check("silent sound round-trips as empty", back.done_sound == "")
+
+    # [sounds] enabled: defaults on, parses, and a bad value warns.
+    ok &= check("sounds default to on", config.Config().sounds_enabled is True)
+    p = _write("[sounds]\nenabled = false\nalert = /a/x.aiff\n")
+    cfg, warns = config.load(p)
+    ok &= check("mute parses and keeps the sound choice",
+                cfg.sounds_enabled is False and cfg.alert_sound == "/a/x.aiff")
+    p = _write("[sounds]\nenabled = loud\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad [sounds] enabled -> on + warning",
+                cfg.sounds_enabled is True
+                and any("[sounds] enabled" in w for w in warns))
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

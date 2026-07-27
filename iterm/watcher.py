@@ -182,7 +182,28 @@ def _notify_sound(reason, *, danger, alert):
     return danger if reason == DANGEROUS_COMMAND else alert
 
 
+def _gated_sound(name):
+    """A `<name>` sound attribute that reads as silence while sounds_enabled is
+    False. The chosen file stays intact underneath (so un-muting restores it),
+    and because the gate lives on the attribute, no notify_mac call site - now
+    or later - can forget to honor the mute."""
+    attr = "_" + name
+
+    def get(self):
+        return getattr(self, attr, "") if self.sounds_enabled else ""
+
+    def set_(self, value):
+        setattr(self, attr, value)
+
+    return property(get, set_)
+
+
 class Watcher:
+    alert_sound = _gated_sound("alert_sound")
+    done_sound = _gated_sound("done_sound")
+    danger_sound = _gated_sound("danger_sound")
+    message_sound = _gated_sound("message_sound")
+
     def __init__(self, connection,
                  alert_sound=None,
                  done_sound=None,
@@ -210,6 +231,8 @@ class Watcher:
         if "RELAY_DANGER_PRESET" not in os.environ:
             os.environ["RELAY_DANGER_PRESET"] = getattr(
                 cfg, "danger_preset", "default")
+        # Set the mute BEFORE the four sounds - they read it through the gate.
+        self.sounds_enabled = getattr(cfg, "sounds_enabled", True)
         self.alert_sound = alert_sound or cfg.alert_sound
         self.done_sound = done_sound or cfg.done_sound
         self.danger_sound = danger_sound or cfg.danger_sound

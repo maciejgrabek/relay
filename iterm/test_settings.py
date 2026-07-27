@@ -78,6 +78,18 @@ def run():
     ok &= check("no restart tag for a live (sound) change",
                 "restart" not in txt2)
 
+    # master mute: flips, is live (no restart tag), and marks the sound rows.
+    muted = settings.change(c, "sounds_enabled", +1)
+    ok &= check("sounds_enabled flips and is live",
+                muted.sounds_enabled is False
+                and settings.is_live("sounds_enabled")
+                and not settings.is_app_live("sounds_enabled"))
+    mtxt = settings.render(muted, c, 0, 60)
+    ok &= check("muted render tags the sound rows, not the toggle",
+                mtxt.count("(muted)") == 4 and "restart" not in mtxt)
+    ok &= check("un-muted render has no muted tags",
+                "(muted)" not in settings.render(c, c, 0, 60))
+
     ok &= check("timers settings flip/step",
                 settings.change(c, "timers_require_armed", +1).timers_require_armed
                 is (not c.timers_require_armed)
