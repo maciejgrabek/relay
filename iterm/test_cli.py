@@ -305,6 +305,49 @@ def run():
                 code == 1 and "ITERM_SESSION_ID" in err)
     os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
+    # --- self-scheduling: list + rm -------------------------------------
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer list shows this session's timers",
+                code == 0 and "pr-duty" in out and "clamped" in out)
+
+    # A different tab sees none of them.
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:STRANGER-SID")
+    ok &= check("timer list is scoped to the calling session",
+                code == 0 and "pr-duty" not in out)
+
+    # rm by key.
+    code, _, _ = run_cli("timer", "rm", "--key", "clamped",
+                         iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm --key deletes it",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "clamped") is None)
+
+    # rm by id, from the wrong session, must refuse.
+    victim = db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty")
+    code, _, err = run_cli("timer", "rm", "--id", str(victim["id"]),
+                           iterm_id="w0t1p0:STRANGER-SID")
+    ok &= check("timer rm cannot touch another session's timer",
+                code == 1
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty") is not None)
+
+    # rm of something that isn't there.
+    code, _, err = run_cli("timer", "rm", "--key", "ghost",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm on a missing key errors cleanly", code == 1)
+
+    # rm by id, from the owning session, works.
+    code, _, _ = run_cli("timer", "rm", "--id", str(victim["id"]),
+                         iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm --id works for the owner",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty") is None)
+
+    # Empty list is a friendly message, not a crash.
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:EMPTY-SID")
+    ok &= check("timer list with no timers says so",
+                code == 0 and "no timers" in out.lower())
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
     # spawn: first_prompt content (the iTerm2 side is smoke-tested live)
     import spawn as spawnmod
     fp = spawnmod.first_prompt("be-worker", "webshop", "implement API")

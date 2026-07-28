@@ -356,6 +356,61 @@ def cmd_timer_add(args) -> int:
     return 0
 
 
+def _timer_line(t, now: float) -> str:
+    """One rendered row for `relay timer list`."""
+    left = t["max_fires"] - t["fire_count"] if t["max_fires"] > 0 else None
+    due = (t["last_fired_at"] or 0) + t["interval_min"] * 60 - now
+    when = "due now" if due <= 0 else f"in {int(due // 60)}m{int(due % 60):02d}s"
+    state = "on" if (t["enabled"] and t["active"]) else "off"
+    fires = "unlimited" if left is None else f"{left} left"
+    key = t["key"] or "-"
+    return (f"  {t['id']:>3}  {key:<24}  every {t['interval_min']:>2}m  "
+            f"{state:<3}  {fires:<11}  next {when:<10}  {t['payload'][:60]}")
+
+
+def cmd_timer_list(args) -> int:
+    """List only THIS session's timers - a tab can never see another's."""
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    rows = db.list_timers(db.connect(), sid)
+    if not rows:
+        print("no timers on this session")
+        return 0
+    now = time.time()
+    print(f"  {'id':>3}  {'key':<24}  {'interval':<9}  {'st':<3}  "
+          f"{'fires':<11}  {'next':<15}  payload")
+    for t in rows:
+        print(_timer_line(t, now))
+    return 0
+
+
+def cmd_timer_rm(args) -> int:
+    """Delete one of THIS session's timers, by key or by id.
+
+    The id path re-checks ownership: db.delete_timer takes a raw id, so without
+    the check a guessed integer would delete another tab's timer.
+    """
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    conn = db.connect()
+    if args.key:
+        row = db.get_timer_by_key(conn, sid, args.key.strip())
+        if row is None:
+            return _err(f"no timer with key '{args.key}' on this session")
+    elif args.id:
+        row = next((t for t in db.list_timers(conn, sid)
+                    if str(t["id"]) == str(args.id)), None)
+        if row is None:
+            return _err(f"no timer {args.id} on this session")
+    else:
+        return _err("give --key <slug> or --id <n> (see: relay timer list)")
+    db.delete_timer(conn, row["id"])
+    print(f"timer {row['id']} removed")
+    return 0
+
+
 def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -1022,6 +1077,14 @@ def build_parser() -> argparse.ArgumentParser:
     tma.add_argument("--say",
                      help="the single-line text to inject when it fires")
     tma.set_defaults(fn=cmd_timer_add)
+
+    tml = tmsub.add_parser("list", help="list this session's timers")
+    tml.set_defaults(fn=cmd_timer_list)
+
+    tmr = tmsub.add_parser("rm", help="remove one of this session's timers")
+    tmr.add_argument("--key", help="the timer's key")
+    tmr.add_argument("--id", help="the timer's numeric id (see: timer list)")
+    tmr.set_defaults(fn=cmd_timer_rm)
 
     sp = sub.add_parser("spawn", help="open an iTerm2 tab running claude, "
                                       "pre-registered under --name")
