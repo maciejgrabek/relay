@@ -1010,6 +1010,44 @@ reconfirm_days = 7        ; re-confirm a timer binding older than this (0 = neve
 
 `require_armed` and `reconfirm_days` take effect live, no restart needed.
 
+### Self-scheduling from inside a session
+
+A Claude session can register its own timer, from inside a plain `relay
+timer add` call, no `relay register` needed - timers bind to the iTerm2 tab,
+not to a swarm name. This is how a session takes standing responsibility for
+something ("you own PR review, check every 20 minutes") without a human
+opening the `t` overlay for it. The `relay-self-scheduling` skill carries the
+judgment (should this be a timer at all, what interval is sane, write a
+prompt file instead of a long payload); the CLI carries the mechanics:
+
+```bash
+relay timer add --key pr-duty --every 20 --times 10 \
+  --say "Read .relay/prompts/pr-duty.md and do what it says."
+```
+
+Three guards apply only on this path, because a session scheduling itself is
+a different risk shape than an operator scheduling it from the panel:
+
+- **Mode is always `idle`.** There is no `--mode` flag - a `now`-mode timer
+  firing mid-turn would corrupt the session's own turn, so the option simply
+  doesn't exist here.
+- **The fire cap is mandatory**, clamped to 1-50 - unlike the panel's `0` for
+  unlimited. An unattended session scheduling its own repeated injections
+  needs a hard ceiling; when the cap runs out, a human is back in the loop to
+  re-register it.
+- **`--key` upserts.** Re-running `add` with the same key updates that timer
+  in place instead of stacking a second one, so a session that re-registers
+  every turn (a common failure mode without this) doesn't quietly multiply
+  its own firings.
+
+A timer created this way carries the label `self:<key>`, visible in the `t`
+overlay next to any operator-created rows. It is still an ordinary row in the
+same table, so it is bound by the same restart behavior as every other
+timer: relay does not resume firing anything on its own. On startup every
+saved timer loads with `active = 0` (unless `autostart = true`) and needs the
+operator to select it and press `r` to restore it - a self-registered timer
+is no exception, and does not come back on its own after a relay restart.
+
 ## Project layout
 
 ```
