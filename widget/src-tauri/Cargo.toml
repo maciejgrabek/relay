@@ -10,6 +10,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-fs = "2"
+# Exactly one creature. Without this, every relaunch that did not shut the
+# previous one down stacked another icon in the Dock (observed: 14).
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -2077,6 +2077,23 @@ class RelayApp(App):
     def _mascot_running(self) -> bool:
         return bool(self._mascot_proc) and self._mascot_proc.poll() is None
 
+    @staticmethod
+    def _kill_stray_mascots() -> None:
+        """Kill any widget relay does not own.
+
+        relay tracks only the child IT spawned, so a relay killed without a
+        clean quit leaves an orphan behind. The widget is a singleton, so that
+        orphan would make every later launch exit instantly - relay would think
+        the start failed and 'm' would look broken while a creature sat on
+        screen. Clearing strays first keeps relay authoritative over its
+        lifetime, which is the whole contract."""
+        try:
+            subprocess.run(["pkill", "-x", "relay-widget"],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=3)
+        except Exception:
+            pass
+
     def _start_mascot(self) -> str:
         """Launch it. Returns '' on success, else a human-readable reason."""
         if self._mascot_running():
@@ -2085,6 +2102,9 @@ class RelayApp(App):
         if not exe:
             return ("not built - run: cd widget/src-tauri && "
                     "cargo build --release")
+        # Clear orphans BEFORE spawning: the widget is a singleton, so a stray
+        # would make our new process exit instantly and look like a failure.
+        self._kill_stray_mascots()
         try:
             self._mascot_proc = subprocess.Popen(
                 [exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2101,6 +2121,9 @@ class RelayApp(App):
                 p.terminate()
             except Exception:
                 pass
+        # Also clear anything we did not spawn, so 'm' can always close a
+        # creature on screen rather than leaving one relay cannot reach.
+        self._kill_stray_mascots()
         widgetmod.clear_state()
 
     def action_mascot(self) -> None:
