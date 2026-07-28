@@ -35,6 +35,20 @@ SCENES = [
 ]
 
 
+# The bubble's text row is rendered as "◃ <phrase> │" by app._speech_bubble.
+# Compact mode has no creature to read it from, so the phrase is published as
+# its own field rather than left buried in the art.
+_SPEECH_RE = re.compile(r"◃\s*(.*?)\s*│")
+
+
+def speech(art) -> str:
+    for line in art:
+        m = _SPEECH_RE.search(line)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def frame(tick, band, awaiting, working, armed, paused):
     face = app.mascot_face_big(tick, band, awaiting=awaiting, working=working,
                                armed=armed, approvals=7, paused=paused)
@@ -49,6 +63,7 @@ def frame(tick, band, awaiting, working, armed, paused):
         "state": state,
         "color": app._MASCOT_COLOR[state],
         "art": art,
+        "phrase": speech(art),
         "armed": armed,
         "awaiting": awaiting,
         "working": working,
