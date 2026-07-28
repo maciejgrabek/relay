@@ -646,6 +646,37 @@ def run():
                               ).fetchone() is not None)
     fresh.close()
 
+    # --- R1: _migrate does not swallow non-duplicate-column errors ------------
+    # Only "duplicate column name" (re-running an ALTER TABLE ADD COLUMN that
+    # already landed) is a legitimate swallow. Anything else - a locked DB, an
+    # I/O error, a real bug in a migration statement - must propagate, AND
+    # user_version must not advance past the failing step. If it did, connect()
+    # would stamp a version whose columns don't actually exist, and every
+    # future connect() (TUI, watcher, every CLI verb) would break with "no
+    # such column" forever, with no recovery short of manual sqlite surgery.
+    rpath = _tmpdb()
+    rconn = _sq.connect(rpath)
+    rconn.execute("PRAGMA user_version = 6")
+    rconn.commit()
+    saved_migrations = db._MIGRATIONS
+    db._MIGRATIONS = dict(saved_migrations)
+    # Not a duplicate-column error: this table does not exist at all.
+    db._MIGRATIONS[6] = ("SELECT * FROM no_such_table",)
+    try:
+        try:
+            db._migrate(rconn)
+            ok &= check("_migrate re-raises a non-duplicate-column "
+                        "OperationalError", False)
+        except _sq.OperationalError as e:
+            ok &= check("_migrate re-raises a non-duplicate-column "
+                        "OperationalError",
+                        "duplicate column" not in str(e).lower())
+        ok &= check("user_version is NOT advanced past the failing step",
+                    rconn.execute("PRAGMA user_version").fetchone()[0] == 6)
+    finally:
+        db._MIGRATIONS = saved_migrations
+    rconn.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

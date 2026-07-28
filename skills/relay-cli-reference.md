@@ -45,13 +45,16 @@ inside your session. Errors print to stderr with a non-zero exit.
         the other verbs this needs no `relay register` - timers bind to the tab,
         not to a swarm name, so it works in a plain unregistered Claude session.
         --key is a stable slug: re-running add with the same key UPDATES that
-        timer's interval/payload/cap in place rather than adding a second one -
-        but it never revives a timer that is exhausted (fire cap reached) or
-        that an operator turned off / left pending-restore after a relay
-        restart; only the operator can re-arm it, from the `t` overlay. --times
+        timer's interval/payload in place rather than adding a second one, and
+        its cap too - but ONLY while the timer still has fires left. An
+        exhausted timer (fire cap reached) keeps its existing cap regardless
+        of --times, and re-running add never revives it, nor a timer an
+        operator turned off / left pending-restore after a relay restart;
+        only the operator can re-arm it, from the `t` overlay. --times
         is a mandatory fire cap (1-50, no unlimited). --every must be a whole
         number of minutes - junk (e.g. a typo'd unit like "60m") is rejected,
-        not silently clamped to 1. Limited to 5 timers per tab, checked only
+        not silently clamped to 1. Limited to 5 self-registered timers per tab
+        (operator-created timers on the same tab don't count), checked only
         when registering a brand-new key. Mode is always idle; there is no
         --mode flag, because firing mid-turn would corrupt your own turn.
         Payload is single line (newlines are flattened), so put real

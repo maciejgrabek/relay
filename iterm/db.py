@@ -176,8 +176,21 @@ def _migrate(conn) -> None:
         for stmt in _MIGRATIONS.get(v, ()):
             try:
                 conn.execute(stmt)
-            except sqlite3.OperationalError:
-                pass  # column already present (interrupted earlier migration)
+            except sqlite3.OperationalError as e:
+                # The ONLY tolerated case: re-applying an ALTER TABLE ... ADD
+                # COLUMN that already landed (a fresh DB got the column from
+                # _SCHEMA, or an earlier migration was interrupted after
+                # writing the column but before bumping user_version).
+                # Anything else - a locked DB (relay runs a TUI, a watcher and
+                # CLI invocations against one file, with only a 3s busy
+                # timeout), a full disk, an I/O error - must propagate so this
+                # step is NOT counted as done: re-raising here skips the
+                # `v += 1` / PRAGMA user_version bump below, so the DB is left
+                # at the last known-good version and the next connect() retries
+                # this step instead of limping forward with a version stamped
+                # ahead of the columns that actually exist.
+                if "duplicate column" not in str(e).lower():
+                    raise
         v += 1
         conn.execute(f"PRAGMA user_version = {v}")
     # Migration 7's dedupe is DML, which opens an implicit transaction; commit
