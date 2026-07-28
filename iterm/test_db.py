@@ -29,10 +29,10 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 6",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 6)
+    ok &= check("fresh connect stamps user_version = 8",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 8)
 
-    # v1 -> v5 migration: old sessions table gains arm_request, mode, and the
+    # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.
     import sqlite3 as _sq
@@ -51,12 +51,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 6
+                mig.execute("PRAGMA user_version").fetchone()[0] == 8
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 6
+                mig.execute("PRAGMA user_version").fetchone()[0] == 8
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -343,8 +343,8 @@ def run():
     # --- v5: message kind + worktree_repo ------------------------------------
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
-    ok &= check("fresh DB is schema v6",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 6)
+    ok &= check("fresh DB is schema v8",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 8)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -386,7 +386,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 6)
+                up.execute("PRAGMA user_version").fetchone()[0] == 8)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -481,6 +481,201 @@ def run():
     ok &= check("delete_timer", db.list_timers(conn, "SID1") == [])
     ok &= check("all_timers sees other sessions' timers",
                 any(t["iterm_session_id"] == "SID2" for t in db.all_timers(conn)))
+
+    # --- self-scheduling: key column + lookup ---------------------------
+    t_keyed = db.add_timer(conn, iterm_session_id="KEY-SID", label="self:prs",
+                           interval_min=20, payload="check PRs", mode="idle",
+                           max_fires=10, key="prs")
+    row = db.get_timer_by_key(conn, "KEY-SID", "prs")
+    ok &= check("get_timer_by_key finds the keyed timer",
+                row is not None and row["id"] == t_keyed
+                and row["key"] == "prs")
+
+    ok &= check("get_timer_by_key misses a different key",
+                db.get_timer_by_key(conn, "KEY-SID", "nope") is None)
+
+    ok &= check("get_timer_by_key is scoped to the session",
+                db.get_timer_by_key(conn, "OTHER-SID", "prs") is None)
+
+    # Overlay-authored rows carry key='' and must never be matched by lookup,
+    # or every operator-created timer would collide with the next one.
+    db.add_timer(conn, iterm_session_id="KEY-SID", label="operator",
+                 interval_min=5, payload="ping", mode="now")
+    ok &= check("empty key never matches",
+                db.get_timer_by_key(conn, "KEY-SID", "") is None)
+
+    ok &= check("add_timer defaults key to empty string",
+                db.list_timers(conn, "KEY-SID")[1]["key"] == "")
+
+    # --- v6 -> current: a REAL pre-existing `timers` table --------------------
+    # Every migration test above builds a DB with NO timers table at all, so
+    # connect()'s _SCHEMA creates the full current shape and the ALTERs then
+    # no-op via the swallowed "duplicate column name" - migration 6 (the `key`
+    # column) never actually runs against real data. This hand-builds the
+    # true v6 shape (post migration 5: max_fires/fire_count present, key
+    # absent) with a populated row, so migrations 6 AND 7 (Fix 6's partial
+    # unique index) both run for real.
+    p6 = os.path.join(tempfile.mkdtemp(), "v6.db")
+    old6 = _sq.connect(p6)
+    old6.executescript("""
+      CREATE TABLE timers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        iterm_session_id TEXT,
+        label TEXT NOT NULL DEFAULT '',
+        interval_min INTEGER NOT NULL DEFAULT 5,
+        payload TEXT NOT NULL DEFAULT '',
+        mode TEXT NOT NULL DEFAULT 'idle',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        last_fired_at REAL NOT NULL DEFAULT 0,
+        bound_at REAL NOT NULL DEFAULT 0,
+        max_fires INTEGER NOT NULL DEFAULT 10,
+        fire_count INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL DEFAULT 0
+      );
+      PRAGMA user_version = 6;
+    """)
+    old6.execute(
+        "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
+        "mode, enabled, active, last_fired_at, bound_at, max_fires, "
+        "fire_count, created_at) VALUES('LEGACY-SID', 'legacy', 5, 'ping', "
+        "'idle', 1, 1, 100.0, 100.0, 10, 7, 100.0)")
+    old6.commit()
+    old6.close()
+    up6 = db.connect(p6)
+    ok &= check("v6 timers table migrates to the current version",
+                up6.execute("PRAGMA user_version").fetchone()[0] == 8)
+    cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
+    ok &= check("v6 -> current adds the key column", "key" in cols_t)
+    legacy = up6.execute(
+        "SELECT * FROM timers WHERE iterm_session_id='LEGACY-SID'").fetchone()
+    ok &= check("legacy row gets key='' and keeps its fire_count",
+                legacy["key"] == "" and legacy["fire_count"] == 7)
+    ok &= check("get_timer_by_key never matches the legacy empty-key row",
+                db.get_timer_by_key(up6, "LEGACY-SID", "") is None)
+    # Migration 7 (the partial unique index) must also apply cleanly on this
+    # path: a second empty-key row on the same session is fine (the index
+    # excludes key=''), but a second row with the SAME non-empty key on the
+    # same session must be rejected.
+    up6.execute(
+        "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
+        "mode, key) VALUES('LEGACY-SID', 'overlay2', 5, 'p2', 'idle', '')")
+    up6.commit()
+    ok &= check("a second empty-key row on the same session is allowed",
+                len(db.list_timers(up6, "LEGACY-SID")) == 2)
+    db.add_timer(up6, iterm_session_id="LEGACY-SID", label="self:x",
+                interval_min=5, payload="p", mode="idle", key="dup")
+    try:
+        up6.execute(
+            "INSERT INTO timers(iterm_session_id, label, interval_min, "
+            "payload, mode, key) VALUES('LEGACY-SID', 'x2', 5, 'p', 'idle', "
+            "'dup')")
+        up6.commit()
+        ok &= check("unique index rejects a duplicate (session, key)", False)
+    except _sq.IntegrityError:
+        ok &= check("unique index rejects a duplicate (session, key)", True)
+    up6.close()
+
+    # --- v7 -> v8 with duplicates already in the table ------------------------
+    # cmd_timer_add's lookup-then-insert is not atomic, so a DB written while
+    # v7 was current can hold duplicate (iterm_session_id, key) rows. Creating
+    # the unique index over those raises IntegrityError, which _migrate does
+    # NOT swallow - db.connect() would then raise for the TUI, the watcher and
+    # every CLI verb, with no way out. Migration 7 must dedupe first.
+    p7 = os.path.join(tempfile.mkdtemp(), "v7dup.db")
+    old7 = _sq.connect(p7)
+    old7.executescript("""
+      CREATE TABLE timers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        iterm_session_id TEXT,
+        label TEXT NOT NULL DEFAULT '',
+        interval_min INTEGER NOT NULL DEFAULT 5,
+        payload TEXT NOT NULL DEFAULT '',
+        mode TEXT NOT NULL DEFAULT 'idle',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        last_fired_at REAL NOT NULL DEFAULT 0,
+        bound_at REAL NOT NULL DEFAULT 0,
+        max_fires INTEGER NOT NULL DEFAULT 10,
+        fire_count INTEGER NOT NULL DEFAULT 0,
+        key TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL DEFAULT 0
+      );
+      PRAGMA user_version = 7;
+    """)
+    for lbl, k in (("first", "prs"), ("racy dup", "prs"), ("third", "prs"),
+                   ("other key", "docs"), ("overlay a", ""), ("overlay b", "")):
+        old7.execute(
+            "INSERT INTO timers(iterm_session_id, label, interval_min, "
+            "payload, mode, key) VALUES('DUP-SID', ?, 5, 'p', 'idle', ?)",
+            (lbl, k))
+    # a same-key row on ANOTHER session must survive: the group is (sid, key)
+    old7.execute(
+        "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
+        "mode, key) VALUES('OTHER-SID', 'elsewhere', 5, 'p', 'idle', 'prs')")
+    old7.commit()
+    old7.close()
+    up7 = db.connect(p7)                  # must NOT raise
+    ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
+                up7.execute("PRAGMA user_version").fetchone()[0] == 8)
+    dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
+    ok &= check("dedupe keeps exactly one row per (session, key) group",
+                len(dup_rows) == 1 and dup_rows[0]["label"] == "first")
+    ok &= check("dedupe keeps other keys and both empty-key operator rows",
+                len(db.list_timers(up7, "DUP-SID")) == 4)
+    ok &= check("dedupe is scoped per session, not per key",
+                len(db.list_timers(up7, "OTHER-SID")) == 1)
+    ok &= check("the unique index exists after the dedupe migration",
+                up7.execute("SELECT name FROM sqlite_master WHERE type='index' "
+                            "AND name='timers_sid_key'").fetchone() is not None)
+    up7.close()
+    # ...and it really is committed, not sitting in an open transaction.
+    re7 = db.connect(p7)
+    ok &= check("the dedupe is committed (survives reopening the DB)",
+                len([r for r in db.list_timers(re7, "DUP-SID")
+                     if r["key"] == "prs"]) == 1)
+    re7.close()
+
+    # A FRESH DB gets the index too, even though _SCHEMA no longer carries it
+    # (_INDEXES runs after _migrate's v == 0 early return).
+    pfresh = os.path.join(tempfile.mkdtemp(), "fresh.db")
+    fresh = db.connect(pfresh)
+    ok &= check("a fresh DB gets timers_sid_key from _INDEXES",
+                fresh.execute("SELECT name FROM sqlite_master WHERE "
+                              "type='index' AND name='timers_sid_key'"
+                              ).fetchone() is not None)
+    fresh.close()
+
+    # --- R1: _migrate does not swallow non-duplicate-column errors ------------
+    # Only "duplicate column name" (re-running an ALTER TABLE ADD COLUMN that
+    # already landed) is a legitimate swallow. Anything else - a locked DB, an
+    # I/O error, a real bug in a migration statement - must propagate, AND
+    # user_version must not advance past the failing step. If it did, connect()
+    # would stamp a version whose columns don't actually exist, and every
+    # future connect() (TUI, watcher, every CLI verb) would break with "no
+    # such column" forever, with no recovery short of manual sqlite surgery.
+    rpath = _tmpdb()
+    rconn = _sq.connect(rpath)
+    rconn.execute("PRAGMA user_version = 6")
+    rconn.commit()
+    saved_migrations = db._MIGRATIONS
+    db._MIGRATIONS = dict(saved_migrations)
+    # Not a duplicate-column error: this table does not exist at all.
+    db._MIGRATIONS[6] = ("SELECT * FROM no_such_table",)
+    try:
+        try:
+            db._migrate(rconn)
+            ok &= check("_migrate re-raises a non-duplicate-column "
+                        "OperationalError", False)
+        except _sq.OperationalError as e:
+            ok &= check("_migrate re-raises a non-duplicate-column "
+                        "OperationalError",
+                        "duplicate column" not in str(e).lower())
+        ok &= check("user_version is NOT advanced past the failing step",
+                    rconn.execute("PRAGMA user_version").fetchone()[0] == 6)
+    finally:
+        db._MIGRATIONS = saved_migrations
+    rconn.close()
 
     conn.close()
     print()

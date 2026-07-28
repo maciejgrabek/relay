@@ -94,3 +94,7 @@ like progress. Do not assume no news is good news.
 - Do NOT implement epic work yourself; your output is specs, tasks, messages.
 - One epic per worker at a time - queue the rest as todo tasks.
 - Keep spec paths ABSOLUTE so any worker in any cwd can read them.
+
+**Standing interval duties:** if you are asked to own something on a repeating
+schedule ("check PRs every 20 minutes"), use the `relay-self-scheduling` skill -
+do not hand-roll a loop.
