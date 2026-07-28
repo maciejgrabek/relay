@@ -54,6 +54,12 @@
     text-shadow: 0 0 10px color-mix(in srgb, var(--ink) 70%, transparent);
   }
   body.compact #dot { cursor: pointer; }
+  /* The creature becomes a target only when there is somewhere to go. A
+     hover state on a dead click is a lie. */
+  body.has-target #art { cursor: pointer; }
+  body.has-target #art:hover {
+    text-shadow: 0 0 14px color-mix(in srgb, var(--ink) 75%, transparent);
+  }
   #right { display: flex; gap: 7px; min-width: 0; overflow: hidden; }
   /* The hint replaces the status text on hover: discoverable when you go
      looking, invisible the rest of the time. A thing you glance at should not
@@ -150,7 +156,7 @@ const $counts = document.getElementById("counts");
 let currentArt = ["  connecting..."];
 let latest = null;
 
-const HOT = "#close, #grip, #brand, body.compact #dot";   // clickable, not draggable
+const HOT = "#close, #grip, #brand, body.compact #dot, body.has-target #art";  // clickable, not draggable
 
 // --- two sizes --------------------------------------------------------------
 // FULL: the creature plus its bubble. COMPACT: the sentence only, for when you
@@ -203,14 +209,23 @@ document.addEventListener("mousedown", (e) => {
 // Back to the panel. Navigation, not control: this cannot arm, approve, pause
 // or inject anything, so the widget stays read-only. relay publishes its own
 // session id; without one we just raise iTerm2.
-function goToRelay(e) {
-  e.stopPropagation();
-  window.__TAURI__.core.invoke("focus_iterm",
-                               { sid: (latest && latest.panel_sid) || null });
+function focus(sid, e) {
+  if (e) e.stopPropagation();
+  window.__TAURI__.core.invoke("focus_iterm", { sid: sid || null });
 }
+// The wordmark is a fixed destination: back to the panel. The creature is the
+// contextual one: whatever is actually waiting on you. Keeping them separate
+// means neither button ever surprises you about where it lands.
+const goToRelay = (e) => focus(latest && latest.panel_sid, e);
+const goToAttention = (e) =>
+  focus((latest && (latest.attention_sid || latest.panel_sid)), e);
+
 document.getElementById("brand").addEventListener("click", goToRelay);
 document.getElementById("dot").addEventListener("click", (e) => {
-  if (compact) goToRelay(e);
+  if (compact) goToAttention(e);
+});
+$art.addEventListener("click", (e) => {
+  if (document.body.classList.contains("has-target")) goToAttention(e);
 });
 
 document.getElementById("close").addEventListener("click", (e) => {
@@ -247,7 +262,7 @@ function paint(art) {
 
 function offline() {
   document.body.classList.add("stale");
-  document.body.classList.remove("alarmed");
+  document.body.classList.remove("alarmed", "has-target");
   paint(compact ? ["relay off"] : OFFLINE_ART);
   $status.textContent = "offline";
   $counts.textContent = "";
@@ -259,6 +274,7 @@ function render(d) {
   document.body.classList.remove("stale");
   document.body.classList.toggle(
     "alarmed", d.state === "alarmed" || d.state === "critical");
+  document.body.classList.toggle("has-target", !!d.attention_sid);
   document.documentElement.style.setProperty("--ink", d.color || "#6effa0");
   // Compact renders the published phrase; full renders the whole creature.
   // Both go through the same grid-fitting path, so scaling behaves identically.

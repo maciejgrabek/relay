@@ -53,6 +53,7 @@ def speech(art) -> str:
 def payload(state: str, color: str, art: List[str], *, armed: int,
             awaiting: int, working: bool, paused: bool, band: str,
             sessions: int, panel_sid: Optional[str] = None,
+            attention_sid: Optional[str] = None,
             now: Optional[float] = None) -> dict:
     """Build what the widget reads.
 
@@ -61,8 +62,11 @@ def payload(state: str, color: str, art: List[str], *, armed: int,
     with no duplication on the widget side), while `state`/`color`/the counts
     drive the window's frame, tint and alarm pulse.
 
-    `panel_sid` is relay's own iTerm2 session id, which the widget's focus
-    button uses to bring you back to the panel.
+    `panel_sid` is relay's own iTerm2 session id, which the widget's wordmark
+    uses to bring you back to the panel. `attention_sid` is the session that
+    needs a human right now, if any - so clicking the creature while it is
+    alarmed takes you to the thing it is alarmed about, rather than making you
+    go to the panel and hunt for it.
     """
     clean = [_MARKUP_RE.sub("", l).rstrip() for l in (art or ())]
     return {
@@ -78,6 +82,7 @@ def payload(state: str, color: str, art: List[str], *, armed: int,
         "band": band,
         "sessions": int(sessions),
         "panel_sid": panel_sid,
+        "attention_sid": attention_sid,
     }
 
 

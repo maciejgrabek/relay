@@ -2036,6 +2036,12 @@ class RelayApp(App):
             label, _color, _pulse = reactor_band(self._temp)
             awaiting = attention_count(self.watcher.sessions.values(),
                                        self._own_sid)
+            # The first session actually waiting on a human, so the widget can
+            # send you straight there instead of to the panel to go looking.
+            att = next((i.session_id for i in self.watcher.sessions.values()
+                        if i.session_id != self._own_sid
+                        and needs_action(i.state, getattr(i, "stale", False))),
+                       None)
             armed_n = sum(1 for i in self.watcher.sessions.values()
                           if i.active and i.session_id != self._own_sid)
             paused = getattr(self.watcher, "paused", False)
@@ -2059,7 +2065,7 @@ class RelayApp(App):
                 armed=armed_n, awaiting=awaiting, working=working,
                 paused=paused, band=label,
                 sessions=len(self.watcher.sessions),
-                panel_sid=self._own_sid))
+                panel_sid=self._own_sid, attention_sid=att))
         except Exception:
             pass   # an ambient widget must never break the panel
 

@@ -52,6 +52,14 @@ def run():
                 p["armed"] == 3 and p["awaiting"] == 0 and p["sessions"] == 7)
     ok &= check("payload carries panel_sid for the focus button",
                 p["panel_sid"] == "ABC-123")
+    ok &= check("payload carries attention_sid (None when nothing waits)",
+                "attention_sid" in p and p["attention_sid"] is None)
+
+    p3 = widget.payload("alarmed", "#f55", ART, armed=1, awaiting=2,
+                        working=False, paused=False, band="calm", sessions=2,
+                        panel_sid="PANEL", attention_sid="NEEDS-ME", now=1.0)
+    ok &= check("payload carries the session that needs a human",
+                p3["attention_sid"] == "NEEDS-ME")
 
     # The widget renders `art` into a <pre>. Textual markup leaking through
     # would show up as literal "[bold]" text in the creature.
