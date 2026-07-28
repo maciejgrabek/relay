@@ -4,6 +4,7 @@ Run: python3 iterm/test_cli.py    or    ./test/run.sh
 """
 import io
 import os
+import re
 import sys
 import tempfile
 from contextlib import redirect_stdout, redirect_stderr
@@ -858,6 +859,23 @@ def run():
         cli._repo_root = real_root
         os.environ.pop("RELAY_UPDATE_STAMP", None)
         os.environ.pop("RELAY_NO_AUTOUPDATE", None)
+
+    # --- bin/relay routes every CLI verb ---------------------------------
+    # bin/relay dispatches on a hardcoded case list; a verb missing from it does
+    # NOT error, it falls through and launches a second TUI. That is how `relay
+    # timer add` shipped broken once - every other test calls cli.main() in
+    # process and never touches the launcher. This compares the two lists.
+    launcher = os.path.join(os.path.dirname(__file__), "..", "bin", "relay")
+    with open(launcher) as f:
+        launcher_src = f.read()
+    m = re.search(r"^\s*((?:[a-z]+\|)+[a-z]+)\)\s*$", launcher_src, re.M)
+    routed = set(m.group(1).split("|")) if m else set()
+    verbs = set()
+    for act in cli.build_parser()._subparsers._group_actions:
+        verbs |= set(act.choices)
+    missing = sorted(verbs - routed)
+    ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
+                bool(routed) and not missing)
 
     conn.close()
     print()
