@@ -39,6 +39,26 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay task list [--project <p>] [--mine]
         Epics with nested subtasks, states, owners, blockers.
 
+    relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
+        Register a timer on YOUR OWN tab: every <every> minutes, when you are
+        idle at a ready prompt, <say> is typed into you and submitted. Unlike
+        the other verbs this needs no `relay register` - timers bind to the tab,
+        not to a swarm name, so it works in a plain unregistered Claude session.
+        --key is a stable slug: re-running add with the same key UPDATES that
+        timer rather than adding a second one. --times is a mandatory fire cap
+        (1-50, no unlimited) - when it runs out the timer stops and a human can
+        re-register it. Mode is always idle; there is no --mode flag, because
+        firing mid-turn would corrupt your own turn. Payload is single line
+        (newlines are flattened), so put real instructions in a file and make
+        the payload a pointer to it - see the relay-self-scheduling skill.
+
+    relay timer list
+        Your own timers only: id, key, interval, on/off, fires left, next-fire
+        countdown, payload. You cannot see another session's timers.
+
+    relay timer rm --key <slug> | --id <n>
+        Remove one of your own timers. --id only works for a timer on your tab.
+
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
                 [--role worker|coordinator] [--arm off|safe|wild|insane]
                 [--worktree]
