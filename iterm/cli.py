@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -599,6 +600,26 @@ def cmd_doctor(args) -> int:
     print(f"  DB: {db.default_path()} (schema v{v})")
     print(f"  config: title_style={cfg.title_style} spawn_arm={cfg.spawn_arm} "
           f"stale_minutes={cfg.stale_minutes:g}")
+
+    # The widget is the one part of relay that needs compiling, and its target/
+    # dir is gitignored - so a fresh clone has the source but no binary, and 'm'
+    # in the panel can only report that from a feed line you may not be looking
+    # at. Doctor is where you look when something is silently not working.
+    _wroot = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "widget", "src-tauri", "target")
+    _wbin = next((p for p in (os.path.join(_wroot, "release", "relay-widget"),
+                              os.path.join(_wroot, "debug", "relay-widget"))
+                  if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    if _wbin:
+        print(f"  widget: built ({os.path.basename(os.path.dirname(_wbin))}), "
+              f"[widget] enabled={'yes' if cfg.widget_enabled else 'no'} - "
+              f"press m in the panel")
+    else:
+        print("  widget: NOT BUILT - 'm' in the panel will do nothing")
+        print("    -> cd widget/src-tauri && cargo build --release")
+        if not shutil.which("cargo"):
+            print("    -> needs Rust first: "
+                  "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
 
     sessions = db.list_sessions(conn)
     if not sessions:
