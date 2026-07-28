@@ -311,12 +311,13 @@ def cmd_timer_add(args) -> int:
       - mode is always 'idle' ('now' would inject mid-turn into our own tab)
       - the fire cap is mandatory (unattended self-injection needs a ceiling)
       - --key upserts (stops the fire -> re-register -> duplicate cascade)
-      - upsert never revives an exhausted timer's fire_count, and never
-        touches enabled/active - only a fresh registration goes live
-        immediately; an exhausted or operator-disabled/pending-restore timer
-        stays that way until an operator re-arms it from the `t` overlay
+      - upsert never revives an exhausted timer: neither its fire_count nor
+        its max_fires is written, and enabled/active are never touched - only
+        a fresh registration goes live immediately; an exhausted or
+        operator-disabled/pending-restore timer stays that way until an
+        operator re-arms it from the `t` overlay
       - a fresh registration (not an upsert) is capped at
-        _MAX_TIMERS_PER_SESSION per tab
+        _MAX_TIMERS_PER_SESSION self-registered timers per tab
     """
     sid = my_iterm_id()
     if not sid:
@@ -356,49 +357,67 @@ def cmd_timer_add(args) -> int:
     exhausted = False
     if existing is not None:
         exhausted = timers.capped(existing)
-        fields = dict(interval_min=interval, payload=payload, mode="idle",
-                      max_fires=times, last_fired_at=now, bound_at=now)
-        # fire_count and enabled/active are deliberately NOT reset here except
-        # as noted: resetting fire_count on an exhausted timer would let a
-        # session revive its own capped timer just by re-registering it, and
-        # touching enabled/active would let it silently re-arm a timer an
-        # operator turned off or left pending-restore after a relay restart.
+        fields = dict(interval_min=interval, payload=payload, mode="idle")
+        # An exhausted row gets its text and schedule updated and NOTHING that
+        # bears on whether it fires again: not fire_count, not max_fires, not
+        # the clock. Resetting fire_count would revive it outright; writing the
+        # new max_fires would revive it just as effectively, since a larger
+        # --times raises the cap above the count and capped() goes false again.
+        # enabled/active are never touched on any upsert, so a timer an
+        # operator turned off or left pending-restore stays that way.
         if not exhausted:
-            fields["fire_count"] = 0
+            fields.update(max_fires=times, fire_count=0,
+                          last_fired_at=now, bound_at=now)
         db.update_timer(conn, existing["id"], **fields)
         tid = existing["id"]
         verb = "updated"
+        # Independent ifs, not an elif chain: a row can be exhausted AND
+        # operator-disabled at once, and the session needs to hear both facts.
         if exhausted:
             notes.append(
                 f"already reached its fire cap "
                 f"({existing['fire_count']}/{existing['max_fires']}) - it is "
-                f"exhausted, not revived. An operator must restart it from "
-                f"the `t` overlay (select it, press r).")
-        elif not existing["enabled"]:
+                f"exhausted, not revived. --times {times} was NOT applied; "
+                f"raising the cap would revive it. An operator must restart "
+                f"it from the `t` overlay (select it, press r).")
+        if not existing["enabled"]:
             notes.append(
                 "currently OFF - left that way. Only an operator can turn "
                 "it back on (space in the `t` overlay); re-registering "
                 "never does this automatically.")
-        elif not existing["active"]:
+        if not existing["active"]:
             notes.append(
                 "pending restore (relay restarted since it last ran) - left "
                 "that way. Only an operator can restore it (r in the `t` "
                 "overlay); re-registering never does this automatically.")
     else:
-        existing_count = len(db.list_timers(conn, sid))
+        # Count only CLI-created rows (non-empty key). Operator rows added in
+        # the `t` overlay carry key='' and must not consume this budget: the
+        # guard exists to bound a session that invents a new key every turn
+        # (design §9), and counting the human's timers would both lock a busy
+        # tab out of self-scheduling entirely and point the session at `relay
+        # timer rm`, which would happily delete the operator's row.
+        existing_count = len([t for t in db.list_timers(conn, sid) if t["key"]])
         if existing_count >= _MAX_TIMERS_PER_SESSION:
             return _err(
-                f"this session already has {existing_count} timer(s) - the "
-                f"per-session limit is {_MAX_TIMERS_PER_SESSION}. See `relay "
-                f"timer list` and remove one with `relay timer rm` first.")
+                f"this session already has {existing_count} self-registered "
+                f"timer(s) - the per-session limit is "
+                f"{_MAX_TIMERS_PER_SESSION}. See `relay timer list` and "
+                f"remove one with `relay timer rm` first.")
         tid = db.add_timer(conn, iterm_session_id=sid, label=f"self:{key}",
                            interval_min=interval, payload=payload,
                            mode="idle", max_fires=times, key=key, now=now)
         verb = "registered"
 
-    tail = "exhausted - not firing again" if exhausted else f"first in {interval}m"
-    print(f"timer {tid} {verb}: '{key}' every {interval}m, {times} fire(s), "
-          f"{tail}")
+    if exhausted:
+        # The cap is deliberately NOT raised to `times`, so report the cap the
+        # row actually still carries - anything else would promise more fires
+        # than this row will ever produce.
+        print(f"timer {tid} {verb}: '{key}' every {interval}m, cap left at "
+              f"{existing['max_fires']} fire(s) - exhausted, not firing again")
+    else:
+        print(f"timer {tid} {verb}: '{key}' every {interval}m, {times} "
+              f"fire(s), first in {interval}m")
     for n in notes:
         print(f"note: timer {tid} {n}")
     if len(payload) > _PAYLOAD_WARN_LEN:
