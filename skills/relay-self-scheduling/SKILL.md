@@ -72,17 +72,22 @@ should not make.
 Multiply before you commit: `--every 2 --times 50` is over an hour and a half
 of near-continuous unattended token burn.
 
-You are also limited to 5 timers per tab, checked only when you register a
-brand-new `--key` (re-running `add` with an existing key is always allowed,
-even at the limit). `relay timer list` / `relay timer rm` free up a slot.
+You are also limited to 5 self-registered timers per tab - operator-created
+timers on the same tab do not count against it - checked only when you
+register a brand-new `--key` (re-running `add` with an existing key is always
+allowed, even at the limit). `relay timer list` / `relay timer rm` free up a
+slot.
 
 **Re-registering does not revive a stopped timer.** If the fire cap has been
 reached, or an operator turned the timer off, or it is pending restore after
 a relay restart, running `add` again with the same key updates its
-interval/payload/cap but leaves it stopped - it does not silently start
-firing again. `relay timer add` tells you when this happens; only an
-operator can re-arm it, from the `t` overlay (`space` to turn it back on,
-`r` to restore or restart it).
+interval/payload but leaves it stopped - it does not silently start firing
+again. The cap is only updated while the timer still has fires left: an
+exhausted timer (fire cap reached) keeps its existing cap no matter what
+`--times` you pass, so a session cannot revive its own spent timer that way.
+`relay timer add` tells you when this happens; only an operator can re-arm
+it, from the `t` overlay (`space` to turn it back on, `r` to restore or
+restart it).
 
 ## Tell the human what you did
 
