@@ -679,10 +679,10 @@ async def go():
     _trows = [
         {"id": 1, "interval_min": 5, "payload": "check PRs", "mode": "idle",
          "enabled": 1, "active": 1, "last_fired_at": 1000.0,
-         "max_fires": 10, "fire_count": 3},
+         "max_fires": 10, "fire_count": 3, "label": "self:pr-duty"},
         {"id": 2, "interval_min": 9, "payload": "second", "mode": "now",
          "enabled": 1, "active": 1, "last_fired_at": 1000.0,
-         "max_fires": 0, "fire_count": 0}]
+         "max_fires": 0, "fire_count": 0, "label": ""}]
     _tv = appmod.timers_view_text(_trows, now=1000.0, session_title="api",
                                   width=90, cursor=1)
     chk("timers_view_text lists interval + payload", "5m" in _tv
@@ -691,21 +691,29 @@ async def go():
         "3/10" in _tv and "∞" in _tv)
     chk("timers_view_text marks the cursor row (▸ on row index 1)",
         "▸" in _tv and _tv.count("▸") == 1)
+    chk("timers_view_text renders a self-registered timer's label",
+        "self:pr-duty" in _tv)
     # a disabled (off) timer shows no countdown and is greyed out
-    _off = appmod.timers_view_text(
-        [{"id": 1, "interval_min": 5, "payload": "paused one", "mode": "now",
-          "enabled": 0, "active": 1, "last_fired_at": 500.0,
-          "max_fires": 10, "fire_count": 0}],
-        now=1000.0, session_title="api", width=90, cursor=99)   # not selected
+    _off_row = {"id": 1, "interval_min": 5, "payload": "paused one",
+                "mode": "now", "enabled": 0, "active": 1,
+                "last_fired_at": 500.0, "max_fires": 10, "fire_count": 0,
+                "label": ""}
+    _off = appmod.timers_view_text([_off_row], now=1000.0, session_title="api",
+                                   width=90, cursor=99)          # not selected
     chk("off timer shows no countdown", "in " not in _off
         and "○ off" in _off)
     chk("off timer row is greyed out",
         f"[{appmod.DIM}]" in _off)
+    # an empty label must not change the row at all: no tag, payload sits
+    # directly after the 'next' column exactly as it did before this field
+    # existed (Fix: label rendering must not disturb the pre-existing case).
+    chk("empty label inserts no tag - payload follows the 'next' column bare",
+        f"{'-':<18} paused one" in _off)
     # payload with a '[' must be escaped (view renders with markup on)
     _esc = appmod.timers_view_text(
         [{"id": 1, "interval_min": 5, "payload": "sed 's/[a-z]/x/'",
           "mode": "now", "enabled": 1, "active": 1, "last_fired_at": 1000.0,
-          "max_fires": 10, "fire_count": 0}],
+          "max_fires": 10, "fire_count": 0, "label": ""}],
         now=1000.0, session_title="api", width=90)
     chk("timers_view_text escapes '[' in the payload", "\\[a-z]" in _esc)
     # live-feed header timers summary (one line, plain text)

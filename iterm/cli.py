@@ -83,6 +83,12 @@ _TIMER_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 # error: a long one-liner still works, it just ages badly across compaction.
 _PAYLOAD_WARN_LEN = 200
 
+# Per-session cap on CLI-created timers, checked only on a fresh INSERT (an
+# upsert of an existing key is always allowed - a session at the limit must
+# still be able to update its own timer). Bounds the aggregate damage of a
+# session that invents a new --key every turn instead of upserting.
+_MAX_TIMERS_PER_SESSION = 5
+
 
 # --- verb handlers (each returns an exit code) --------------------------------
 
@@ -300,11 +306,17 @@ def cmd_timer_add(args) -> int:
 
     Deliberately does NOT use _require_me: timers bind to an iTerm session id,
     not to a swarm name, so this must work in a plain unregistered Claude tab.
-    Three guards live here and nowhere else - the engine treats these rows as
+    Guards live here and nowhere else - the engine treats these rows as
     ordinary timers:
       - mode is always 'idle' ('now' would inject mid-turn into our own tab)
       - the fire cap is mandatory (unattended self-injection needs a ceiling)
       - --key upserts (stops the fire -> re-register -> duplicate cascade)
+      - upsert never revives an exhausted timer's fire_count, and never
+        touches enabled/active - only a fresh registration goes live
+        immediately; an exhausted or operator-disabled/pending-restore timer
+        stays that way until an operator re-arms it from the `t` overlay
+      - a fresh registration (not an upsert) is capped at
+        _MAX_TIMERS_PER_SESSION per tab
     """
     sid = my_iterm_id()
     if not sid:
@@ -330,25 +342,65 @@ def cmd_timer_add(args) -> int:
                     "always needs a fire cap. Try --times 10.")
     times = min(50, times)
 
-    interval = timers.clamp_interval(args.every)
+    try:
+        every = int(args.every)
+    except (TypeError, ValueError):
+        return _err(f"--every must be a whole number of minutes (1-90), got "
+                    f"{args.every!r}. Try --every 20.")
+    interval = timers.clamp_interval(every)
+
     conn = db.connect()
     existing = db.get_timer_by_key(conn, sid, key)
     now = time.time()
+    notes = []
+    exhausted = False
     if existing is not None:
-        db.update_timer(conn, existing["id"], interval_min=interval,
-                        payload=payload, mode="idle", max_fires=times,
-                        fire_count=0, enabled=1, active=1,
-                        last_fired_at=now, bound_at=now)
+        exhausted = timers.capped(existing)
+        fields = dict(interval_min=interval, payload=payload, mode="idle",
+                      max_fires=times, last_fired_at=now, bound_at=now)
+        # fire_count and enabled/active are deliberately NOT reset here except
+        # as noted: resetting fire_count on an exhausted timer would let a
+        # session revive its own capped timer just by re-registering it, and
+        # touching enabled/active would let it silently re-arm a timer an
+        # operator turned off or left pending-restore after a relay restart.
+        if not exhausted:
+            fields["fire_count"] = 0
+        db.update_timer(conn, existing["id"], **fields)
         tid = existing["id"]
         verb = "updated"
+        if exhausted:
+            notes.append(
+                f"already reached its fire cap "
+                f"({existing['fire_count']}/{existing['max_fires']}) - it is "
+                f"exhausted, not revived. An operator must restart it from "
+                f"the `t` overlay (select it, press r).")
+        elif not existing["enabled"]:
+            notes.append(
+                "currently OFF - left that way. Only an operator can turn "
+                "it back on (space in the `t` overlay); re-registering "
+                "never does this automatically.")
+        elif not existing["active"]:
+            notes.append(
+                "pending restore (relay restarted since it last ran) - left "
+                "that way. Only an operator can restore it (r in the `t` "
+                "overlay); re-registering never does this automatically.")
     else:
+        existing_count = len(db.list_timers(conn, sid))
+        if existing_count >= _MAX_TIMERS_PER_SESSION:
+            return _err(
+                f"this session already has {existing_count} timer(s) - the "
+                f"per-session limit is {_MAX_TIMERS_PER_SESSION}. See `relay "
+                f"timer list` and remove one with `relay timer rm` first.")
         tid = db.add_timer(conn, iterm_session_id=sid, label=f"self:{key}",
                            interval_min=interval, payload=payload,
                            mode="idle", max_fires=times, key=key, now=now)
         verb = "registered"
 
-    print(f"timer {tid} {verb}: '{key}' every {interval}m, "
-          f"{times} fire(s), first in {interval}m")
+    tail = "exhausted - not firing again" if exhausted else f"first in {interval}m"
+    print(f"timer {tid} {verb}: '{key}' every {interval}m, {times} fire(s), "
+          f"{tail}")
+    for n in notes:
+        print(f"note: timer {tid} {n}")
     if len(payload) > _PAYLOAD_WARN_LEN:
         print("note: that payload is long. Prefer writing the instructions to "
               ".relay/prompts/<key>.md and using a short pointer payload - it "
@@ -358,7 +410,7 @@ def cmd_timer_add(args) -> int:
 
 def _timer_line(t, now: float) -> str:
     """One rendered row for `relay timer list`."""
-    left = t["max_fires"] - t["fire_count"] if t["max_fires"] > 0 else None
+    left = timers.fires_left(t)
     due = (t["last_fired_at"] or 0) + t["interval_min"] * 60 - now
     when = "due now" if due <= 0 else f"in {int(due // 60)}m{int(due % 60):02d}s"
     state = "on" if (t["enabled"] and t["active"]) else "off"

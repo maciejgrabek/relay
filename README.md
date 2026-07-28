@@ -1025,7 +1025,7 @@ relay timer add --key pr-duty --every 20 --times 10 \
   --say "Read .relay/prompts/pr-duty.md and do what it says."
 ```
 
-Three guards apply only on this path, because a session scheduling itself is
+Guards apply only on this path, because a session scheduling itself is
 a different risk shape than an operator scheduling it from the panel:
 
 - **Mode is always `idle`.** There is no `--mode` flag - a `now`-mode timer
@@ -1033,12 +1033,24 @@ a different risk shape than an operator scheduling it from the panel:
   doesn't exist here.
 - **The fire cap is mandatory**, clamped to 1-50 - unlike the panel's `0` for
   unlimited. An unattended session scheduling its own repeated injections
-  needs a hard ceiling; when the cap runs out, a human is back in the loop to
-  re-register it.
-- **`--key` upserts.** Re-running `add` with the same key updates that timer
-  in place instead of stacking a second one, so a session that re-registers
-  every turn (a common failure mode without this) doesn't quietly multiply
-  its own firings.
+  needs a hard ceiling; when the cap runs out, re-running `add` does **not**
+  revive it - the row is left exhausted with its `fire_count` untouched, and
+  only an operator can restart it, from the `t` overlay (select it, press
+  `r`).
+- **`--key` upserts.** Re-running `add` with the same key updates that
+  timer's interval/payload/cap in place instead of stacking a second one, so
+  a session that re-registers every turn (a common failure mode without this)
+  doesn't quietly multiply its own firings. The upsert never touches
+  `enabled`/`active`, though - see below.
+- **A per-session cap of 5 timers**, checked only when registering a
+  brand-new key (an upsert of an existing key always goes through, even at
+  the limit - otherwise a session at the cap could never update its own
+  timer). A session that invents a new key every turn instead of upserting
+  hits this quickly; `relay timer list` / `relay timer rm` free up a slot.
+- **`--every` rejects junk instead of clamping it.** A typo like `--every
+  60m` errors out naming the flag, rather than silently becoming a 1-minute
+  timer - a silent clamp there would be 60x more aggressive than intended,
+  on exactly the path this design treats as a token-bonfire risk.
 
 A timer created this way carries the label `self:<key>`, visible in the `t`
 overlay next to any operator-created rows. It is still an ordinary row in the
@@ -1047,6 +1059,11 @@ timer: relay does not resume firing anything on its own. On startup every
 saved timer loads with `active = 0` (unless `autostart = true`) and needs the
 operator to select it and press `r` to restore it - a self-registered timer
 is no exception, and does not come back on its own after a relay restart.
+Re-registering it in the meantime does not change that: the UPDATE path
+never sets `enabled` or `active` - only a brand-new registration goes live
+immediately. If the existing timer is off or pending restore, `relay timer
+add` says so in its output, so the fact lands in the session's transcript
+instead of staying silent.
 
 ## Project layout
 

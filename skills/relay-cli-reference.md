@@ -45,16 +45,23 @@ inside your session. Errors print to stderr with a non-zero exit.
         the other verbs this needs no `relay register` - timers bind to the tab,
         not to a swarm name, so it works in a plain unregistered Claude session.
         --key is a stable slug: re-running add with the same key UPDATES that
-        timer rather than adding a second one. --times is a mandatory fire cap
-        (1-50, no unlimited) - when it runs out the timer stops and a human can
-        re-register it. Mode is always idle; there is no --mode flag, because
-        firing mid-turn would corrupt your own turn. Payload is single line
-        (newlines are flattened), so put real instructions in a file and make
-        the payload a pointer to it - see the relay-self-scheduling skill.
+        timer's interval/payload/cap in place rather than adding a second one -
+        but it never revives a timer that is exhausted (fire cap reached) or
+        that an operator turned off / left pending-restore after a relay
+        restart; only the operator can re-arm it, from the `t` overlay. --times
+        is a mandatory fire cap (1-50, no unlimited). --every must be a whole
+        number of minutes - junk (e.g. a typo'd unit like "60m") is rejected,
+        not silently clamped to 1. Limited to 5 timers per tab, checked only
+        when registering a brand-new key. Mode is always idle; there is no
+        --mode flag, because firing mid-turn would corrupt your own turn.
+        Payload is single line (newlines are flattened), so put real
+        instructions in a file and make the payload a pointer to it - see the
+        relay-self-scheduling skill.
 
     relay timer list
         Your own timers only: id, key, interval, on/off, fires left, next-fire
-        countdown, payload. You cannot see another session's timers.
+        countdown, payload. This verb has no flag to list another session's
+        timers - it is scoped to your own tab, not a security boundary.
 
     relay timer rm --key <slug> | --id <n>
         Remove one of your own timers. --id only works for a timer on your tab.

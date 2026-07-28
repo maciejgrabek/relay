@@ -72,6 +72,18 @@ should not make.
 Multiply before you commit: `--every 2 --times 50` is over an hour and a half
 of near-continuous unattended token burn.
 
+You are also limited to 5 timers per tab, checked only when you register a
+brand-new `--key` (re-running `add` with an existing key is always allowed,
+even at the limit). `relay timer list` / `relay timer rm` free up a slot.
+
+**Re-registering does not revive a stopped timer.** If the fire cap has been
+reached, or an operator turned the timer off, or it is pending restore after
+a relay restart, running `add` again with the same key updates its
+interval/payload/cap but leaves it stopped - it does not silently start
+firing again. `relay timer add` tells you when this happens; only an
+operator can re-arm it, from the `t` overlay (`space` to turn it back on,
+`r` to restore or restart it).
+
 ## Tell the human what you did
 
 After registering, state the key, interval, cap, and total wall-clock span in
@@ -87,10 +99,14 @@ relay timer list                 # this session's timers only
 relay timer rm --key pr-duty
 ```
 
-## Two things you cannot do
+## Two things these verbs don't do
 
-- **Schedule into another session.** Timers bind to your own tab. Use
-  `relay send` to reach another session.
+- **Reach another session.** `relay timer add/list/rm` always act on your own
+  tab, resolved from `$ITERM_SESSION_ID` - there is no flag to target another
+  session's timers. This is a convenience boundary, not a security one:
+  `$ITERM_SESSION_ID` is an ordinary environment variable and
+  `~/.relay/relay.db` is a plain file readable by anything running as you.
+  Use `relay send` to actually reach another session.
 - **Use `now` mode.** It injects mid-turn, which would corrupt your own turn.
   It is operator-only in the `t` overlay, and the flag does not exist on the
   CLI.

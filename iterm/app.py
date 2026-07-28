@@ -697,9 +697,18 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
         else:
             secs = max(0, _timers.next_due_in(r, now))
             when = f"in {int(secs) // 60}m{int(secs) % 60:02d}s"
-        payload = escape(str(r["payload"])[:max(10, w - 50)])
+        # A non-empty label (currently only "self:<key>", set by `relay timer
+        # add`) gets a compact tag ahead of the payload, so the operator can
+        # tell a session-registered row from their own at a glance. Payload's
+        # budget shrinks to make room; an empty label changes nothing, so a
+        # pre-existing overlay-created row (label == '') renders exactly as
+        # it did before this tag existed.
+        label = r["label"] or ""
+        tag = f"{escape(label)} " if label else ""
+        budget = w - 50 - (len(label) + 1 if label else 0)
+        payload = escape(str(r["payload"])[:max(10, budget)])
         line = (f" {mark} {str(r['interval_min']) + 'm':<4} {r['mode']:<4} "
-                f"{onoff}  {cap:<7} {when:<18} {payload}")
+                f"{onoff}  {cap:<7} {when:<18} {tag}{payload}")
         if sel:
             # Full-width highlight bar, matching the main list's cursor row
             # (bright text on the cursor background) so the selection is
