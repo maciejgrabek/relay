@@ -53,7 +53,7 @@ session, `timer add` is.
   Cross-session instruction is already covered by `relay send`, which is queued
   rather than scheduled - the correct shape for that job.
 
-## 3. The four guards
+## 3. The three guards
 
 All four live in the CLI verb. The engine, the watcher, and `timers.py` are
 unchanged; these rows are indistinguishable from overlay-authored rows once
@@ -64,7 +64,17 @@ written.
 | **Forced idle mode** | `mode` is always `"idle"`. `--mode` is not exposed; `--mode now` is an error naming the overlay as the operator-only route. | `now` injects mid-turn (timers v1 §9). A session scheduling an interrupt for *itself* mid-turn produces garbled input at best and a corrupted turn at worst. |
 | **Mandatory fire cap** | `--times` is required, clamped to `[1, 50]`. `--times 0` (unlimited) is rejected. | `db.add_timer` already defaults `max_fires = 10`; this path makes the ceiling non-negotiable. Unbounded self-injection with no human present is a token bonfire. A session that wants more must come back and re-register. |
 | **Upsert by key** | `--key <slug>` is required. `(iterm_session_id, key)` is unique; re-running `add` with the same key updates the existing row in place. | The duplicate cascade: timer fires, session does the work, session helpfully registers another timer. Now there are two, then four. The key makes re-registration idempotent. |
-| **Own-panel refusal** | Reject when the resolved sid is relay's own panel tab. | Same guard the overlay and the engine already enforce (timers v1 §9). |
+
+**No own-panel guard, deliberately.** The overlay rejects relay's own tab, but
+the CLI cannot: `_own_sid` is derived from the panel process's own
+`$ITERM_SESSION_ID` (`app.py:893`) and is never persisted, so a CLI running in
+any other tab has no way to learn it. Persisting it just for this would be a new
+surface for a case that cannot occur in practice - the panel tab runs the TUI,
+not a shell where anyone could type `relay timer add`. And the engine already
+covers it unconditionally: `_fire_timers` returns on
+`info.session_id == self.own_sid` (`watcher.py:818`) before any timer is
+considered. Engine skip is the real protection; the editor check was only ever
+a courtesy.
 
 Everything downstream is inherited unchanged: pause freezes, `require_armed`
 policy, dry-run would-fire, `needs_reconfirm` bind-age deactivation, audit
@@ -166,9 +176,13 @@ One migration, extending the timers table from timers v1 §2:
 6: ("ALTER TABLE timers ADD COLUMN key TEXT NOT NULL DEFAULT ''",)
 ```
 
-Consistent with the existing numbered `_MIGRATIONS` ladder in `db.py` (currently
-at 5). Fresh DBs get the column from `_SCHEMA`; "column already present" is
-swallowed by `_migrate`, as with migration 5.
+plus `_CURRENT_VERSION` bumped `6 -> 7` and `key TEXT NOT NULL DEFAULT ''`
+added to the `timers` block of `_SCHEMA`. Consistent with the existing numbered
+`_MIGRATIONS` ladder in `db.py` (last key 5, `_CURRENT_VERSION` 6). Fresh DBs
+get the column from `_SCHEMA`; "column already present" is swallowed by
+`_migrate`, as with migration 5. (`key` is a non-reserved keyword in SQLite and
+works unquoted in column position, including in `update_timer`'s generated
+`f"{k}=?"` clause - verified.)
 
 Uniqueness of `(iterm_session_id, key)` is enforced in the CLI verb (lookup then
 insert-or-update), not by a DB constraint - overlay-authored rows keep
@@ -227,8 +241,9 @@ That is the point of the design: this is an authoring surface, not an engine.
 - `test_cli.py` - interval clamping at both bounds; forced idle mode
   (`--mode now` rejected); `--times` required and clamped to `[1, 50]`,
   `--times 0` rejected; `--key` required and format-validated; upsert by key
-  updates rather than inserts; own-panel sid refused; `rm` cannot touch another
-  session's row; `list` shows only own rows; long `--say` warns but succeeds.
+  updates rather than inserts; `rm` cannot touch another session's row; `list`
+  shows only own rows; long `--say` warns but succeeds; no `$ITERM_SESSION_ID`
+  is a clean error.
 - `test_db.py` - migration 6 applies to a pre-migration DB and is idempotent;
   `key` round-trips; fresh-schema DBs have the column.
 - No `test_timers.py` or `test_watcher.py` changes - the engine is untouched,
