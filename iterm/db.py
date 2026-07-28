@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS timers(
   key TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL DEFAULT 0
 );
+CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers(iterm_session_id, key)
+  WHERE key != '';
 """
 
 
@@ -97,7 +99,19 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=3000")
-    conn.executescript(_SCHEMA)
+    try:
+        conn.executescript(_SCHEMA)
+    except sqlite3.OperationalError:
+        # A DB from before the timers.key column (pre-migration-6) fails on
+        # _SCHEMA's CREATE UNIQUE INDEX ...(iterm_session_id, key)... line:
+        # every CREATE TABLE IF NOT EXISTS before it already no-opped
+        # harmlessly (the tables exist), but the index statement runs
+        # unconditionally and references a column that is not there yet on
+        # that old table. _migrate() below adds the column first (migration
+        # 6) and then the index (migration 7), in the right order - so this
+        # is safe to swallow, same spirit as the "duplicate column name"
+        # swallow in _migrate.
+        pass
     # Schema versioning: 0 = fresh (CREATEs above built the current schema),
     # otherwise migrate step by step. v2 added sessions.arm_request, v3 added
     # sessions.mode (persisted arm level, so a relay restart doesn't disarm a
@@ -108,7 +122,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 7
+_CURRENT_VERSION = 8
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -130,6 +144,13 @@ _MIGRATIONS = {
     # stacking duplicates. Overlay-created rows keep key='' and are never
     # matched by get_timer_by_key.
     6: ("ALTER TABLE timers ADD COLUMN key TEXT NOT NULL DEFAULT ''",),
+    # v8: partial unique index on (iterm_session_id, key), so the upsert-by-
+    # key invariant the CLI relies on (session self-scheduling design §7) is
+    # a DB-level guarantee, not just a CLI-level convention. Partial (`WHERE
+    # key != ''`) because overlay-created rows all carry key='' and must not
+    # collide with each other.
+    7: ("CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers"
+        "(iterm_session_id, key) WHERE key != ''",),
 }
 
 

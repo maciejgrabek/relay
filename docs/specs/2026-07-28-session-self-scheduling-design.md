@@ -53,17 +53,19 @@ session, `timer add` is.
   Cross-session instruction is already covered by `relay send`, which is queued
   rather than scheduled - the correct shape for that job.
 
-## 3. The three guards
+## 3. The guards
 
-All four live in the CLI verb. The engine, the watcher, and `timers.py` are
-unchanged; these rows are indistinguishable from overlay-authored rows once
-written.
+All of these live in the CLI verb. The engine, the watcher, and `timers.py`
+are unchanged; these rows are indistinguishable from overlay-authored rows
+once written.
 
 | Guard | Rule | Why |
 | --- | --- | --- |
 | **Forced idle mode** | `mode` is always `"idle"`. `--mode` is not exposed; `--mode now` is an error naming the overlay as the operator-only route. | `now` injects mid-turn (timers v1 §9). A session scheduling an interrupt for *itself* mid-turn produces garbled input at best and a corrupted turn at worst. |
-| **Mandatory fire cap** | `--times` is required, clamped to `[1, 50]`. `--times 0` (unlimited) is rejected. | `db.add_timer` already defaults `max_fires = 10`; this path makes the ceiling non-negotiable. Unbounded self-injection with no human present is a token bonfire. A session that wants more must come back and re-register. |
-| **Upsert by key** | `--key <slug>` is required. `(iterm_session_id, key)` is unique; re-running `add` with the same key updates the existing row in place. | The duplicate cascade: timer fires, session does the work, session helpfully registers another timer. Now there are two, then four. The key makes re-registration idempotent. |
+| **Mandatory fire cap** | `--times` is required, clamped to `[1, 50]`. `--times 0` (unlimited) is rejected. Re-registering an *exhausted* timer (`fire_count >= max_fires`) does not reset the counter. | `db.add_timer` already defaults `max_fires = 10`; this path makes the ceiling non-negotiable. Unbounded self-injection with no human present is a token bonfire. A session that wants more must come back - and an operator must actually restart it from the `t` overlay, not just re-run `add`. |
+| **Upsert by key never re-arms** | `--key <slug>` is required. `(iterm_session_id, key)` is unique, now enforced by a DB index too (§7); re-running `add` with the same key updates the row's interval/payload/cap in place, but never touches `enabled`/`active`. | The duplicate cascade: timer fires, session does the work, session helpfully registers another timer. Now there are two, then four. The key makes re-registration idempotent - but idempotent must not mean "silently re-arms whatever the operator turned off." Only a fresh INSERT goes live immediately; an operator-disabled or restart-pending row stays that way until the operator acts. |
+| **Per-session timer limit** | A session may create at most 5 timers through this path, checked only on a fresh key (an upsert of an existing key is always allowed, even at the limit). | Bounds the aggregate damage of a session that invents a new key every turn instead of upserting - the `--key` guard alone only makes *one* responsibility idempotent. |
+| **`--every` validated, not silently clamped** | `--every` must parse as an integer; a junk value (e.g. a typo'd unit like `60m`) is rejected outright. `clamp_interval` still squeezes any in-range integer into `[1, 90]`. | A silent clamp of junk to the 1-minute floor would make a plausible typo 60x more aggressive than intended - exactly the token-bonfire risk this design exists to bound. |
 
 **No own-panel guard, deliberately.** The overlay rejects relay's own tab, but
 the CLI cannot: `_own_sid` is derived from the panel process's own
@@ -170,23 +172,35 @@ It covers only what the CLI cannot check:
 
 ## 7. Data model
 
-One migration, extending the timers table from timers v1 §2:
+Two migrations, extending the timers table from timers v1 §2:
 
 ```python
 6: ("ALTER TABLE timers ADD COLUMN key TEXT NOT NULL DEFAULT ''",)
+7: ("CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers"
+    "(iterm_session_id, key) WHERE key != ''",)
 ```
 
-plus `_CURRENT_VERSION` bumped `6 -> 7` and `key TEXT NOT NULL DEFAULT ''`
-added to the `timers` block of `_SCHEMA`. Consistent with the existing numbered
-`_MIGRATIONS` ladder in `db.py` (last key 5, `_CURRENT_VERSION` 6). Fresh DBs
-get the column from `_SCHEMA`; "column already present" is swallowed by
-`_migrate`, as with migration 5. (`key` is a non-reserved keyword in SQLite and
-works unquoted in column position, including in `update_timer`'s generated
-`f"{k}=?"` clause - verified.)
+plus `_CURRENT_VERSION` bumped `6 -> 8`, and both the `key TEXT NOT NULL
+DEFAULT ''` column and the same `CREATE UNIQUE INDEX ...` statement added to
+the `timers` block of `_SCHEMA` so fresh databases get the index too, not
+just the column. Consistent with the existing numbered `_MIGRATIONS` ladder
+in `db.py` (last key 5, `_CURRENT_VERSION` 6 before this feature). Fresh DBs
+get the column and the index from `_SCHEMA`; on an upgrading DB, `connect()`
+swallows the `OperationalError` `_SCHEMA`'s index statement raises when the
+`key` column does not exist yet (a DB from before migration 6) - `_migrate`
+then runs migration 6 (add the column) and migration 7 (create the index) in
+that order, same "already present" swallow pattern as migration 5. (`key` is
+a non-reserved keyword in SQLite and works unquoted in column position,
+including in `update_timer`'s generated `f"{k}=?"` clause - verified.)
 
-Uniqueness of `(iterm_session_id, key)` is enforced in the CLI verb (lookup then
-insert-or-update), not by a DB constraint - overlay-authored rows keep
-`key = ''` and would otherwise all collide.
+Uniqueness of `(iterm_session_id, key)` is enforced by a partial unique
+index, `timers_sid_key`, scoped `WHERE key != ''` - overlay-authored rows all
+carry `key = ''` and are exempt, so they never collide with each other. The
+CLI's lookup-then-insert-or-update in `cmd_timer_add` is still what makes a
+given key idempotent from the session's point of view; the index is the
+backstop that makes the invariant a DB-level guarantee rather than only a
+CLI-level convention that a bug (or a future write path) could quietly
+violate.
 
 Self-registered rows also set `label = "self:<key>"`. This gives the operator a
 free visual marker in the `t` overlay and the preview TIMERS block: "the session
@@ -201,10 +215,19 @@ with `x` in the `t` overlay exactly as they would their own.
 
 ## 9. Safety and edge cases
 
-- **Runaway self-registration:** the `--key` upsert makes re-registration
-  idempotent; the mandatory cap bounds the damage even if a session invents a
-  new key each time (each run is bounded, and every row is visible in the
-  overlay).
+- **Runaway self-registration:** the `--key` upsert makes re-registration of
+  the *same* responsibility idempotent; a per-session cap of 5 timers
+  (checked on the INSERT path only) bounds a session that invents a new key
+  every turn instead of upserting. Every row is visible in the overlay and in
+  `relay timer list`.
+- **Re-registering an exhausted or operator-disabled timer:** the upsert path
+  never revives what it did not itself set live. An exhausted timer
+  (`fire_count >= max_fires`) keeps its count and does not restart; a timer
+  an operator turned off, or that is pending restore after a relay restart,
+  stays off/pending - `enabled`/`active` are untouched by the UPDATE path,
+  only ever set live by a fresh INSERT. `relay timer add`'s own output says
+  so when either happens, so the fact lands in the session's transcript
+  instead of being silent.
 - **Relay not running:** the row is written and simply waits; on relay's next
   start it goes through the normal pending-restore flow (timers v1 §6).
 - **Session unregistered in the swarm:** fine by design (§2). `label` falls back
@@ -214,7 +237,10 @@ with `x` in the `t` overlay exactly as they would their own.
   (timers v1 §5).
 - **Pathologically short interval:** `clamp_interval` permits 1 minute. We do
   **not** add a higher floor in code; the skill says a self-firing 1-minute
-  timer is pathological. Code enforces bounds, prose enforces taste.
+  timer is pathological. Code enforces bounds, prose enforces taste. A junk
+  `--every` (not parseable as an integer, e.g. a typo'd unit like `60m`) is
+  rejected outright rather than silently clamped, so a typo does not quietly
+  become a 1-minute timer - 60x more aggressive than intended.
 - **Payload referencing a file that never gets written:** the fire still
   happens; the session reads a missing file and says so. Cheap, visible,
   self-correcting - not worth a pre-flight check in the CLI.
