@@ -2023,7 +2023,14 @@ class RelayApp(App):
         inputs, so the creature in the window and the creature in the panel
         cannot disagree.
         """
-        if not self._mascot_running() or not self.watcher:
+        # Deliberately NOT gated on _mascot_running(): that only means "a widget
+        # relay spawned". A widget started any other way - or one orphaned by a
+        # hard-killed relay - is still a real consumer, and gating on ownership
+        # made relay go quiet while a live creature sat on screen reporting
+        # "relay off". Publishing is one small atomic write per second; the
+        # consumer decides whether it cares. clear_state() on quit still flips
+        # it to off immediately.
+        if not self.watcher:
             return
         try:
             label, _color, _pulse = reactor_band(self._temp)
