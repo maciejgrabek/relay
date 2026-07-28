@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import db      # noqa: E402
 import swarm   # noqa: E402
+import timers  # noqa: E402
 
 
 def my_iterm_id():
@@ -73,6 +74,14 @@ def _ago(ts: float) -> str:
 # Custom message kinds are allowed but kept machine-friendly: one short
 # lowercase token. Known kinds (db.MESSAGE_KINDS) get dedicated rendering.
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{0,19}$")
+
+# Self-scheduling timer key: one short lowercase slug, stable across
+# re-registrations so a session upserts its timer instead of stacking copies.
+_TIMER_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+
+# Inline payloads longer than this get a nudge toward a prompt file. Not an
+# error: a long one-liner still works, it just ages badly across compaction.
+_PAYLOAD_WARN_LEN = 200
 
 
 # --- verb handlers (each returns an exit code) --------------------------------
@@ -283,6 +292,67 @@ def cmd_task_list(args) -> int:
     for t in rows:                      # orphans (parent outside the filter)
         if t["id"] not in listed:
             print(fmt(t))
+    return 0
+
+
+def cmd_timer_add(args) -> int:
+    """Register (or update) a timer bound to THIS tab.
+
+    Deliberately does NOT use _require_me: timers bind to an iTerm session id,
+    not to a swarm name, so this must work in a plain unregistered Claude tab.
+    Three guards live here and nowhere else - the engine treats these rows as
+    ordinary timers:
+      - mode is always 'idle' ('now' would inject mid-turn into our own tab)
+      - the fire cap is mandatory (unattended self-injection needs a ceiling)
+      - --key upserts (stops the fire -> re-register -> duplicate cascade)
+    """
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+
+    key = (args.key or "").strip()
+    if not _TIMER_KEY_RE.match(key):
+        return _err("--key must be a short slug: lowercase letter first, then "
+                    "letters/digits/-/_ (max 24), e.g. --key pr-duty. It is "
+                    "what makes re-registering update the timer instead of "
+                    "adding another one.")
+
+    payload = timers.sanitize_payload(args.say)
+    if not payload:
+        return _err("--say cannot be empty")
+
+    try:
+        times = int(args.times)
+    except (TypeError, ValueError):
+        times = 0
+    if times < 1:
+        return _err("--times must be at least 1 - a self-registered timer "
+                    "always needs a fire cap. Try --times 10.")
+    times = min(50, times)
+
+    interval = timers.clamp_interval(args.every)
+    conn = db.connect()
+    existing = db.get_timer_by_key(conn, sid, key)
+    now = time.time()
+    if existing is not None:
+        db.update_timer(conn, existing["id"], interval_min=interval,
+                        payload=payload, mode="idle", max_fires=times,
+                        fire_count=0, enabled=1, active=1,
+                        last_fired_at=now, bound_at=now)
+        tid = existing["id"]
+        verb = "updated"
+    else:
+        tid = db.add_timer(conn, iterm_session_id=sid, label=f"self:{key}",
+                           interval_min=interval, payload=payload,
+                           mode="idle", max_fires=times, key=key, now=now)
+        verb = "registered"
+
+    print(f"timer {tid} {verb}: '{key}' every {interval}m, "
+          f"{times} fire(s), first in {interval}m")
+    if len(payload) > _PAYLOAD_WARN_LEN:
+        print("note: that payload is long. Prefer writing the instructions to "
+              ".relay/prompts/<key>.md and using a short pointer payload - it "
+              "survives context compaction and stays editable.")
     return 0
 
 
@@ -932,6 +1002,26 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    tm = sub.add_parser("timer", help="timers bound to THIS session")
+    tmsub = tm.add_subparsers(dest="timer_cmd", required=True)
+
+    tma = tmsub.add_parser("add", help="register/update a timer on this tab")
+    # --key/--times/--say are deliberately NOT argparse-required: the handler
+    # rejects them with a message that explains WHY they exist (the duplicate
+    # cascade, the mandatory cap), which argparse's terse "the following
+    # arguments are required" cannot. --every has no such lesson, and a missing
+    # --every would silently clamp to 1 minute, so it stays required here.
+    tma.add_argument("--key",
+                     help="stable slug, e.g. pr-duty; re-running with the same "
+                          "key updates that timer instead of adding another")
+    tma.add_argument("--every", required=True,
+                     help="interval in minutes (clamped to 1-90)")
+    tma.add_argument("--times",
+                     help="fire cap, 1-50 - mandatory; there is no unlimited")
+    tma.add_argument("--say",
+                     help="the single-line text to inject when it fires")
+    tma.set_defaults(fn=cmd_timer_add)
 
     sp = sub.add_parser("spawn", help="open an iTerm2 tab running claude, "
                                       "pre-registered under --name")
