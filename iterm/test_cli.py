@@ -211,6 +211,100 @@ def run():
     ok &= check("task list --mine filters", f"#{dep_id}" in out
                 and f"#{sub_id}" not in out)
 
+    # --- self-scheduling: relay timer add -------------------------------
+    code, out, err = run_cli("timer", "add", "--key", "pr-duty",
+                             "--every", "20", "--times", "10",
+                             "--say", "Read .relay/prompts/pr-duty.md and "
+                                      "do what it says.",
+                             iterm_id="w0t1p0:TIMER-SID")
+    trows = db.list_timers(db.connect(), "TIMER-SID")
+    ok &= check("timer add creates one row", code == 0 and len(trows) == 1)
+    ok &= check("timer add forces idle mode", trows[0]["mode"] == "idle")
+    ok &= check("timer add stores interval + cap",
+                trows[0]["interval_min"] == 20 and trows[0]["max_fires"] == 10)
+    ok &= check("timer add labels the row self:<key>",
+                trows[0]["label"] == "self:pr-duty")
+    ok &= check("timer add is live immediately",
+                trows[0]["enabled"] == 1 and trows[0]["active"] == 1)
+
+    # Upsert: same key updates in place, never stacks.
+    code, _, _ = run_cli("timer", "add", "--key", "pr-duty",
+                         "--every", "30", "--times", "5", "--say", "new text",
+                         iterm_id="w0t1p0:TIMER-SID")
+    trows = db.list_timers(db.connect(), "TIMER-SID")
+    ok &= check("timer add upserts by key (still one row)",
+                code == 0 and len(trows) == 1)
+    ok &= check("timer add upsert applies new values",
+                trows[0]["interval_min"] == 30 and trows[0]["payload"] == "new text"
+                and trows[0]["max_fires"] == 5)
+
+    # Interval clamps to [1, 90]; cap clamps to [1, 50]. Both bounds.
+    run_cli("timer", "add", "--key", "clamped", "--every", "999",
+            "--times", "999", "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "clamped")
+    ok &= check("timer add clamps interval to 90 and cap to 50",
+                r["interval_min"] == 90 and r["max_fires"] == 50)
+
+    run_cli("timer", "add", "--key", "lowclamp", "--every", "0",
+            "--times", "1", "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "lowclamp")
+    ok &= check("timer add clamps interval up to the 1m floor",
+                r["interval_min"] == 1 and r["max_fires"] == 1)
+
+    run_cli("timer", "add", "--key", "junk", "--every", "abc",
+            "--times", "5", "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "junk")
+    ok &= check("timer add survives a junk interval (clamp_interval -> 1)",
+                r is not None and r["interval_min"] == 1)
+
+    # Guards. Missing flags must produce OUR message, not argparse's, so the
+    # session learns why the flag exists.
+    code, _, err = run_cli("timer", "add", "--every", "20", "--times", "5",
+                           "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("missing --key gives the teaching error",
+                code == 1 and "--key" in err and "instead of" in err)
+
+    code, _, err = run_cli("timer", "add", "--key", "nocap", "--every", "20",
+                           "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("missing --times gives the teaching error",
+                code == 1 and "--times" in err)
+
+    code, _, err = run_cli("timer", "add", "--key", "capless", "--every", "20",
+                           "--times", "0", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects --times 0", code == 1 and "cap" in err.lower())
+
+    code, _, err = run_cli("timer", "add", "--key", "BadKey!", "--every", "20",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects a malformed key", code == 1 and "key" in err.lower())
+
+    code, _, err = run_cli("timer", "add", "--key", "empty", "--every", "20",
+                           "--times", "5", "--say", "   ",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects an empty payload", code == 1)
+
+    # Newlines are collapsed so a payload can never submit early.
+    run_cli("timer", "add", "--key", "multi", "--every", "20", "--times", "5",
+            "--say", "line one\nline two", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "multi")
+    ok &= check("timer add sanitizes newlines out of the payload",
+                "\n" not in r["payload"] and r["payload"] == "line one line two")
+
+    # A long inline payload warns but still succeeds.
+    code, out, err = run_cli("timer", "add", "--key", "longish", "--every", "20",
+                             "--times", "5", "--say", "y" * 250,
+                             iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("long inline payload warns but succeeds",
+                code == 0 and ".relay/prompts" in (out + err))
+
+    # No iTerm identity at all -> clean error, not a traceback.
+    code, _, err = run_cli("timer", "add", "--key", "k", "--every", "5",
+                           "--times", "5", "--say", "x", iterm_id="")
+    ok &= check("timer add without ITERM_SESSION_ID errors cleanly",
+                code == 1 and "ITERM_SESSION_ID" in err)
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
     # spawn: first_prompt content (the iTerm2 side is smoke-tested live)
     import spawn as spawnmod
     fp = spawnmod.first_prompt("be-worker", "webshop", "implement API")
