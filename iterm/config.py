@@ -18,7 +18,7 @@
     name = crt             ; crt | invader | owl | cat | core | ... (see MASCOT_NAMES)
 
     [widget]
-    enabled = false        ; the floating desktop mascot (a second process)
+    enabled = true         ; the floating desktop mascot (a second process)
 
 Precedence: defaults < config file < environment variable. Env always wins,
 so existing setups keep working. A missing file, section, or key silently
@@ -69,9 +69,11 @@ class Config:
     timers_require_armed: bool = False
     timers_autostart: bool = False
     timers_reconfirm_days: float = 7.0
-    # Off by default: enabling it launches a second process (the floating
-    # mascot window), which is not something a config file should do quietly.
-    widget_enabled: bool = False
+    # On by default: the floating mascot is the whole point of relay being
+    # trustworthy while you are in another app. It is a second process, but a
+    # read-only one relay starts and kills itself, and 'm' closes it any time.
+    # When the binary is not built, startup says so once rather than no-opping.
+    widget_enabled: bool = True
 
 
 def default_path() -> str:
@@ -146,8 +148,8 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                                   fallback=d.widget_enabled)
     except ValueError:
         warns.append("config: [widget] enabled must be true/false - "
-                     "using false")
-        widget_on = False
+                     "using true")
+        widget_on = True
 
     preset = cp.get("danger", "preset",
                     fallback=d.danger_preset).strip().lower()
