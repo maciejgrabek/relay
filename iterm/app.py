@@ -30,6 +30,7 @@ import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
 import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
+import widget as widgetmod  # noqa: E402
 from watcher import Watcher  # noqa: E402
 
 # Retro phosphor-green CRT terminal aesthetic. Big block logo (ANSI Shadow figlet).
@@ -854,6 +855,7 @@ class RelayApp(App):
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
+        Binding("m", "mascot", "Mascot widget", show=False),
         Binding("v", "audit_view", "Audit view", show=False),
         Binding("f", "toggle_preview", "Feed on/off", show=False),
         Binding("t", "timers", "Timers", show=False),
@@ -871,6 +873,7 @@ class RelayApp(App):
         self.watcher: Watcher | None = None
         self._connection = None
         self._caffeinate = None
+        self._mascot_proc = None   # the floating mascot window, if launched
         self._row_sids: list[str] = []
         self._temp = 0.0          # reactor temperature (integrates toward pressure)
         self._tick = 0            # frame counter for the CRITICAL pulse
@@ -973,6 +976,13 @@ class RelayApp(App):
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
+        # The floating mascot, when the operator has asked for it always-on.
+        # 'm' toggles it either way; this is only the launch-with-relay switch.
+        try:
+            if cfgmod.load()[0].widget_enabled:
+                self._start_mascot()
+        except Exception:
+            pass
         # Launch the iTerm2 connection in the background; it shares this loop.
         self._conn_worker = self.run_worker(self._connect(), exclusive=True)
         self.set_interval(1.0, self._refresh)  # periodic repaint (ages, etc.)
@@ -1238,6 +1248,35 @@ class RelayApp(App):
         if ev and (time.time() - ev[1]) <= REACTION_TTL:
             reaction = ev[0]
         approvals = getattr(self.watcher, "_approvals", 0)   # monotonic tally
+        armed_n = sum(1 for i in self.watcher.sessions.values()
+                      if i.active and i.session_id != self._own_sid)
+        paused = getattr(self.watcher, "paused", False)
+        # Publish for the floating widget from the SAME inputs the banner
+        # renders from, so the two can never disagree. mascot_face_big and
+        # effective_mascot_state are pure, so recomputing here is free of any
+        # divergence risk - it is the same function on the same arguments.
+        if self._mascot_running():
+            try:
+                w_state = effective_mascot_state(
+                    label, awaiting=awaiting,
+                    working=self._tick < getattr(self, "_mascot_active_until", 0),
+                    armed=armed_n, reaction=reaction, paused=paused)
+                widgetmod.write_state(widgetmod.payload(
+                    w_state, _MASCOT_COLOR[w_state],
+                    mascot_face_big(
+                        self._tick, label, awaiting=awaiting,
+                        working=self._tick < getattr(self, "_mascot_active_until", 0),
+                        armed=armed_n, approvals=approvals, reaction=reaction,
+                        paused=paused,
+                        timers_on=getattr(self, "_timers_fleet_n", 0),
+                        timer_next=getattr(self, "_timers_fleet_next", None)),
+                    armed=armed_n, awaiting=awaiting,
+                    working=self._tick < getattr(self, "_mascot_active_until", 0),
+                    paused=paused, band=label,
+                    sessions=len(self.watcher.sessions),
+                    panel_sid=self._own_sid))
+            except Exception:
+                pass   # an ambient widget must never break the panel's render
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
@@ -1995,6 +2034,63 @@ class RelayApp(App):
             pass
         return quit_stakes_text(n_armed, n_queued, n_doing)
 
+    # --- the floating mascot widget -----------------------------------------
+    # A separate process, so relay owns its lifetime: started here, killed on
+    # quit. The README's "quit (q) === everything stops" promise is the whole
+    # reason this is not a thing you launch yourself - a creature left on
+    # screen cheerfully reporting a relay that died is exactly the failure
+    # statusbar's OFFLINE_LABEL exists to prevent.
+
+    def _mascot_binary(self):
+        """The built widget binary, or None if it has not been built yet.
+        Release wins over debug so a packaged build is preferred."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base = os.path.join(root, "widget", "src-tauri", "target")
+        for profile in ("release", "debug"):
+            p = os.path.join(base, profile, "relay-widget")
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        return None
+
+    def _mascot_running(self) -> bool:
+        return bool(self._mascot_proc) and self._mascot_proc.poll() is None
+
+    def _start_mascot(self) -> str:
+        """Launch it. Returns '' on success, else a human-readable reason."""
+        if self._mascot_running():
+            return "already running"
+        exe = self._mascot_binary()
+        if not exe:
+            return ("not built - run: cd widget/src-tauri && "
+                    "cargo build --release")
+        try:
+            self._mascot_proc = subprocess.Popen(
+                [exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return f"failed to launch ({e.__class__.__name__})"
+        return ""
+
+    def _stop_mascot(self) -> None:
+        """Terminate it and drop the published state, so if anything survives
+        us it greys out at once instead of waiting out the stale window."""
+        p, self._mascot_proc = self._mascot_proc, None
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        widgetmod.clear_state()
+
+    def action_mascot(self) -> None:
+        log = self.query_one(Log)
+        if self._mascot_running():
+            self._stop_mascot()
+            log.write_line("mascot widget closed")
+            return
+        err = self._start_mascot()
+        log.write_line("mascot widget opened"
+                       if not err else f"mascot widget: {err}")
+
     async def action_quit(self) -> None:
         # Double-press guard, but ONLY when quitting abandons something live
         # (same confirm pattern as R/W). An idle panel quits on a single q.
@@ -2025,6 +2121,7 @@ class RelayApp(App):
                 await asyncio.wait_for(worker.wait(), timeout=3.0)
             except Exception:
                 pass
+        self._stop_mascot()
         if self._caffeinate:
             try:
                 self._caffeinate.terminate()

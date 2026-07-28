@@ -3,9 +3,10 @@
 
     python3 widget/make-icons.py
 
-The mark is relay's own visual language: the beacon from the mascot's head
-(`((⌖))` in MASCOT_SKINS) - a dot with two signal arcs opening upward. It is
-the one shape in relay that still reads at 16px, which a face does not.
+The mark is the R from relay's own banner - the ANSI-Shadow block letterform in
+app.BANNER, drop shadow and all - so the Dock icon and the panel logo are
+visibly the same typeface rather than two unrelated marks. A block letter also
+survives 16px, which a mascot face does not.
 
 Rendered once at 4x into a supersample buffer and box-downsampled to each
 target size, so edges are antialiased without an imaging library.
@@ -25,12 +26,35 @@ BASE = 512 * SS
 
 BG = (13, 21, 18)            # near-black, matches the widget's panel
 INK = (110, 255, 160)        # relay green
-INK_DIM = (47, 200, 102)     # the guarding tint, for the outer arc
+SHADOW = (24, 105, 58)       # the banner's bevel, one step down from INK
+
+# The R from app.BANNER as a bitmap. The banner draws it in ANSI-Shadow, whose
+# whole character is a heavy slab with a hard offset bevel - so the glyph is
+# defined here and the bevel is applied below by sampling it at an offset,
+# exactly as the figlet font does with its shadow column.
+GLYPH = [
+    "XXXXX.",
+    "X....X",
+    "X....X",
+    "XXXXX.",
+    "X..X..",
+    "X...X.",
+    "X....X",
+]
+GW, GH = len(GLYPH[0]), len(GLYPH)
+BEVEL = 0.55                 # bevel offset, in glyph cells
 
 
 def squircle(nx, ny, r, n=4.0):
     """Superellipse coverage test - the macOS-style rounded square."""
     return (abs(nx / r) ** n + abs(ny / r) ** n) <= 1.0
+
+
+def _on(gx, gy):
+    """Is glyph cell (gx, gy) filled? Out of bounds reads as empty."""
+    if 0 <= gy < GH and 0 <= gx < GW:
+        return GLYPH[gy][gx] == "X"
+    return False
 
 
 def render():
@@ -40,29 +64,25 @@ def render():
     buf = [None] * (n * n)
 
     r_sq = n * 0.46                      # squircle half-extent
-    dot_r = n * 0.085                    # beacon dot
-    dot_cy = c + n * 0.17                # sits low, arcs rise above it
-    arcs = [(n * 0.20, n * 0.045, INK),        # inner arc
-            (n * 0.32, n * 0.042, INK_DIM)]    # outer arc, dimmer
+    # Fit the glyph into the squircle with optical padding, keeping its aspect.
+    cell = min(n * 0.60 / GW, n * 0.62 / GH)
+    ox = c - (GW * cell) / 2.0
+    oy = c - (GH * cell) / 2.0
 
     for y in range(n):
         dy = y - c
         row = y * n
+        gy = (y - oy) / cell
         for x in range(n):
-            dx = x - c
             px = (0, 0, 0, 0)
-            if squircle(dx, dy, r_sq):
+            if squircle(x - c, dy, r_sq):
                 px = BG + (255,)
-                ddy = y - dot_cy
-                d = math.hypot(dx, ddy)
-                if d <= dot_r:
+                gx = (x - ox) / cell
+                if _on(int(gx), int(gy)) and gx >= 0 and gy >= 0:
                     px = INK + (255,)
-                else:
-                    for rad, w, col in arcs:
-                        # Annulus, upper half only: a signal fanning upward.
-                        if abs(d - rad) <= w / 2 and ddy < -rad * 0.30:
-                            px = col + (255,)
-                            break
+                elif (_on(int(gx - BEVEL), int(gy - BEVEL))
+                      and gx >= BEVEL and gy >= BEVEL):
+                    px = SHADOW + (255,)
             buf[row + x] = px
     return buf
 

@@ -17,6 +17,9 @@
     [mascot]
     name = crt             ; crt | invader | owl | cat | core | ... (see MASCOT_NAMES)
 
+    [widget]
+    enabled = false        ; the floating desktop mascot (a second process)
+
 Precedence: defaults < config file < environment variable. Env always wins,
 so existing setups keep working. A missing file, section, or key silently
 yields defaults; a malformed file or value yields defaults plus a warning
@@ -66,6 +69,9 @@ class Config:
     timers_require_armed: bool = False
     timers_autostart: bool = False
     timers_reconfirm_days: float = 7.0
+    # Off by default: enabling it launches a second process (the floating
+    # mascot window), which is not something a config file should do quietly.
+    widget_enabled: bool = False
 
 
 def default_path() -> str:
@@ -134,6 +140,14 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         warns.append("config: [statusbar] enabled must be true/false - "
                      "using false")
         statusbar = False
+
+    try:
+        widget_on = cp.getboolean("widget", "enabled",
+                                  fallback=d.widget_enabled)
+    except ValueError:
+        warns.append("config: [widget] enabled must be true/false - "
+                     "using false")
+        widget_on = False
 
     preset = cp.get("danger", "preset",
                     fallback=d.danger_preset).strip().lower()
@@ -211,6 +225,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         theme=theme,
         mascot=mascot,
         preview_panel=preview,
+        widget_enabled=widget_on,
         timers_require_armed=t_armed,
         timers_autostart=t_auto,
         timers_reconfirm_days=t_recon,
@@ -242,6 +257,8 @@ def dump(cfg: Config) -> str:
         f"name = {cfg.theme}\n\n"
         "[mascot]\n"
         f"name = {cfg.mascot}\n\n"
+        "[widget]\n"
+        f"enabled = {'true' if cfg.widget_enabled else 'false'}\n\n"
         "[layout]\n"
         f"preview = {'true' if cfg.preview_panel else 'false'}\n"
         "\n[timers]\n"
