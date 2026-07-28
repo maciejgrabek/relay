@@ -26,7 +26,7 @@ else
 fi
 
 skills_removed=0
-for s in relay-worker relay-coordinator relay-cli-reference.md; do
+for s in relay-worker relay-coordinator relay-self-scheduling relay-cli-reference.md; do
   if [ -L "$SKILLS_DST/$s" ]; then
     rm "$SKILLS_DST/$s"
     echo "✓ removed $SKILLS_DST/$s"

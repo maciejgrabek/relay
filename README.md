@@ -469,11 +469,27 @@ relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
     Open a new iTerm2 tab running claude, pre-registered under <name>.
     --worktree (with --dir <repo>): spawn in a fresh git worktree of that
     repo instead of the repo itself.
+
+relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
+    Register a timer on YOUR OWN tab: <say> is typed in and submitted every
+    <every> minutes, but only while you are idle at a ready prompt. Needs no
+    `relay register` - timers bind to the tab, not to a swarm name. --key is
+    stable: re-running with the same key updates that timer instead of adding
+    a second. --times is a mandatory fire cap (no unlimited); an exhausted
+    timer cannot raise its own cap by re-registering - only the operator can
+    restart it. Mode is always idle (there is no --mode flag). Max 5
+    self-registered timers per tab. See "Self-scheduling from inside a
+    session" below.
+
+relay timer list
+relay timer rm --key <slug> | --id <n>
+    Your own timers only (id, key, interval, on/off, fires left, next fire,
+    payload), and removing one of them.
 ```
 
 Identity-free verbs (`relay task list`, `relay msgs`) work anywhere. The
-identity-bound verbs (`register`, `status`, `send`, `inbox`) resolve "me" from
-`$ITERM_SESSION_ID`, so they need an iTerm2 session to run. Delivery
+identity-bound verbs (`register`, `status`, `send`, `inbox`, `timer`) resolve
+"me" from `$ITERM_SESSION_ID`, so they need an iTerm2 session to run. Delivery
 additionally requires the TUI running against a real iTerm2 session.
 
 ### Delivery
@@ -668,8 +684,19 @@ coordinator when done or blocked) and what a coordinator does (write specs,
 create epics with `--owner` and `--spec`, spawn or address named workers,
 monitor via `relay task list`). Both skills share one CLI verb reference,
 [`skills/relay-cli-reference.md`](skills/relay-cli-reference.md), copied
-above. `./install.sh` offers to symlink them into `~/.claude/skills/` so
-they version with the repo instead of drifting.
+above.
+
+[`skills/relay-self-scheduling`](skills/relay-self-scheduling/SKILL.md) is
+the third, and is not swarm-scoped: it loads in any tab told to own something
+on a repeating schedule ("you're responsible for PRs"). It deliberately
+carries no flag syntax - the CLI's own errors teach that, whether or not a
+skill loaded. What it carries is the judgment the CLI cannot check: when a
+standing timer is the wrong tool, how to write a payload that still makes
+sense after the session has been compacted three times, and what intervals
+and caps are sane.
+
+`./install.sh` offers to symlink all three into `~/.claude/skills/` so they
+version with the repo instead of drifting.
 
 ### Security posture (read this)
 
