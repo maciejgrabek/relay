@@ -29,10 +29,10 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 6",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 6)
+    ok &= check("fresh connect stamps user_version = 7",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 7)
 
-    # v1 -> v5 migration: old sessions table gains arm_request, mode, and the
+    # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.
     import sqlite3 as _sq
@@ -51,12 +51,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 6
+                mig.execute("PRAGMA user_version").fetchone()[0] == 7
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 6
+                mig.execute("PRAGMA user_version").fetchone()[0] == 7
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -343,8 +343,8 @@ def run():
     # --- v5: message kind + worktree_repo ------------------------------------
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
-    ok &= check("fresh DB is schema v6",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 6)
+    ok &= check("fresh DB is schema v7",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 7)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -386,7 +386,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 6)
+                up.execute("PRAGMA user_version").fetchone()[0] == 7)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -481,6 +481,31 @@ def run():
     ok &= check("delete_timer", db.list_timers(conn, "SID1") == [])
     ok &= check("all_timers sees other sessions' timers",
                 any(t["iterm_session_id"] == "SID2" for t in db.all_timers(conn)))
+
+    # --- self-scheduling: key column + lookup ---------------------------
+    t_keyed = db.add_timer(conn, iterm_session_id="KEY-SID", label="self:prs",
+                           interval_min=20, payload="check PRs", mode="idle",
+                           max_fires=10, key="prs")
+    row = db.get_timer_by_key(conn, "KEY-SID", "prs")
+    ok &= check("get_timer_by_key finds the keyed timer",
+                row is not None and row["id"] == t_keyed
+                and row["key"] == "prs")
+
+    ok &= check("get_timer_by_key misses a different key",
+                db.get_timer_by_key(conn, "KEY-SID", "nope") is None)
+
+    ok &= check("get_timer_by_key is scoped to the session",
+                db.get_timer_by_key(conn, "OTHER-SID", "prs") is None)
+
+    # Overlay-authored rows carry key='' and must never be matched by lookup,
+    # or every operator-created timer would collide with the next one.
+    db.add_timer(conn, iterm_session_id="KEY-SID", label="operator",
+                 interval_min=5, payload="ping", mode="now")
+    ok &= check("empty key never matches",
+                db.get_timer_by_key(conn, "KEY-SID", "") is None)
+
+    ok &= check("add_timer defaults key to empty string",
+                db.list_timers(conn, "KEY-SID")[1]["key"] == "")
 
     conn.close()
     print()
