@@ -38,9 +38,29 @@
     padding-top: 6px;
     font-size: 9px; letter-spacing: .09em; text-transform: uppercase;
     color: color-mix(in srgb, var(--ink) 62%, transparent);
-    display: flex; justify-content: space-between; gap: 8px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px;
     white-space: nowrap; overflow: hidden;
   }
+  /* The wordmark IS the button back to the panel. One affordance doing two
+     jobs beats a separate icon competing for space in a 300px window. */
+  #brand {
+    font-weight: 700; letter-spacing: .22em;
+    color: color-mix(in srgb, var(--ink) 92%, transparent);
+    cursor: pointer; transition: text-shadow .15s, color .15s;
+  }
+  #brand:hover {
+    color: var(--ink);
+    text-shadow: 0 0 10px color-mix(in srgb, var(--ink) 70%, transparent);
+  }
+  body.compact #dot { cursor: pointer; }
+  #right { display: flex; gap: 7px; min-width: 0; overflow: hidden; }
+  /* The hint replaces the status text on hover: discoverable when you go
+     looking, invisible the rest of the time. A thing you glance at should not
+     permanently spend pixels explaining itself. */
+  #hint { display: none; color: color-mix(in srgb, var(--ink) 50%, transparent); }
+  #frame:hover #status, #frame:hover #counts { display: none; }
+  #frame:hover #hint { display: inline; }
 
   /* Chrome that stays out of the way until you go looking for it. */
   #close {
@@ -104,7 +124,11 @@
     <div id="dot" data-tauri-drag-region></div>
     <pre id="art" data-tauri-drag-region>  connecting...</pre>
     <div id="meta" data-tauri-drag-region>
-      <span id="state">-</span><span id="counts"></span>
+      <span id="brand" title="Go to the relay panel">RELAY</span>
+      <span id="right" data-tauri-drag-region>
+        <span id="status">-</span><span id="counts"></span>
+        <span id="hint">double-click to resize</span>
+      </span>
     </div>
     <div id="grip" title="Resize"></div>
   </div>
@@ -120,11 +144,13 @@ const MIN_PT = 6, MAX_PT = 44;
 const W = window.__TAURI__.window.getCurrentWindow();
 const $frame = document.getElementById("frame");
 const $art = document.getElementById("art");
-const $state = document.getElementById("state");
+const $status = document.getElementById("status");
 const $counts = document.getElementById("counts");
 
 let currentArt = ["  connecting..."];
 let latest = null;
+
+const HOT = "#close, #grip, #brand, body.compact #dot";   // clickable, not draggable
 
 // --- two sizes --------------------------------------------------------------
 // FULL: the creature plus its bubble. COMPACT: the sentence only, for when you
@@ -160,7 +186,7 @@ async function applyMode(persistFull) {
 }
 
 document.addEventListener("dblclick", (e) => {
-  if (e.target.closest("#close") || e.target.closest("#grip")) return;
+  if (e.target.closest(HOT)) return;
   compact = !compact;
   applyMode(true);
 });
@@ -170,8 +196,21 @@ document.addEventListener("dblclick", (e) => {
 // drag handle and can never be clicked.
 document.addEventListener("mousedown", (e) => {
   if (e.buttons !== 1) return;
-  if (e.target.closest("#close") || e.target.closest("#grip")) return;
+  if (e.target.closest(HOT)) return;
   W.startDragging();
+});
+
+// Back to the panel. Navigation, not control: this cannot arm, approve, pause
+// or inject anything, so the widget stays read-only. relay publishes its own
+// session id; without one we just raise iTerm2.
+function goToRelay(e) {
+  e.stopPropagation();
+  window.__TAURI__.core.invoke("focus_iterm",
+                               { sid: (latest && latest.panel_sid) || null });
+}
+document.getElementById("brand").addEventListener("click", goToRelay);
+document.getElementById("dot").addEventListener("click", (e) => {
+  if (compact) goToRelay(e);
 });
 
 document.getElementById("close").addEventListener("click", (e) => {
@@ -210,7 +249,7 @@ function offline() {
   document.body.classList.add("stale");
   document.body.classList.remove("alarmed");
   paint(compact ? ["relay off"] : OFFLINE_ART);
-  $state.textContent = "offline";
+  $status.textContent = "offline";
   $counts.textContent = "";
 }
 
@@ -224,7 +263,7 @@ function render(d) {
   // Compact renders the published phrase; full renders the whole creature.
   // Both go through the same grid-fitting path, so scaling behaves identically.
   paint(compact ? [d.phrase || d.state || ""] : (d.art || []));
-  $state.textContent = d.state || "-";
+  $status.textContent = d.state || "-";
   const bits = [];
   if (d.armed) bits.push(d.armed + " armed");
   if (d.awaiting) bits.push(d.awaiting + " waiting");

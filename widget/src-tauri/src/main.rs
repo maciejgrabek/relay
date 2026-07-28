@@ -4,9 +4,96 @@
 // and derives nothing. See docs/specs/2026-07-28-desktop-widget-design.md.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::Manager;
+
+/// Make the window survive another app going fullscreen.
+///
+/// `alwaysOnTop` + `visibleOnAllWorkspaces` is not enough on its own: tao's
+/// `set_visible_on_all_workspaces` sets only `CanJoinAllSpaces`
+/// (tao-0.34.5/src/platform_impl/macos/window.rs:1534), which follows you
+/// between normal Spaces but does not put the window over another app's
+/// fullscreen Space. `FullScreenAuxiliary` is the bit that does, and nothing in
+/// Tauri's API surface exposes it - hence going straight at NSWindow.
+///
+/// This matters more than it sounds: a fullscreen browser or editor is exactly
+/// when you are away from the terminal and most want to see the creature. A
+/// widget that vanishes precisely then is a widget with no purpose.
+#[cfg(target_os = "macos")]
+fn float_above_fullscreen(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+
+    let Ok(ptr) = window.ns_window() else { return };
+    if ptr.is_null() {
+        return;
+    }
+    // Safety: Tauri hands back a live NSWindow for this webview, and setup runs
+    // on the main thread, which is where AppKit requires this call.
+    let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    ns.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Stationary,
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+fn float_above_fullscreen(_window: &tauri::WebviewWindow) {}
+
+/// Raise iTerm2, and the specific session if we were given one.
+///
+/// Navigation, not control: this cannot arm, approve, pause or inject anything,
+/// so it does not breach the widget's read-only contract. It is the other half
+/// of an alarm - the creature says "2 need you" and this is how you get there.
+///
+/// The AppleScript mirrors iterm/focus_session.sh (which relay's notifications
+/// already use). It is inlined rather than shelling out to that script so the
+/// widget stays self-contained and never executes a path handed to it by a file
+/// on disk. `sid` is validated as an iTerm2 GUID for the same reason: nothing
+/// from widget.json reaches a shell uninspected.
+#[tauri::command]
+fn focus_iterm(sid: Option<String>) {
+    let sid = sid.filter(|s| {
+        s.len() == 36 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+    });
+    let script = match sid {
+        Some(s) => format!(
+            r#"tell application "iTerm2"
+                 repeat with w in windows
+                   repeat with t in tabs of w
+                     repeat with ss in sessions of t
+                       if id of ss is "{s}" then
+                         select t
+                         select ss
+                         set index of w to 1
+                         activate
+                         return
+                       end if
+                     end repeat
+                   end repeat
+                 end repeat
+                 activate
+               end tell"#
+        ),
+        None => r#"tell application "iTerm2" to activate"#.to_string(),
+    };
+    // Best-effort and silent, exactly like focus_session.sh: a closed tab or an
+    // AppleScript hiccup must never surface an error in an ambient widget.
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output();
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
+        .invoke_handler(tauri::generate_handler![focus_iterm])
+        .setup(|app| {
+            if let Some(w) = app.get_webview_window("main") {
+                float_above_fullscreen(&w);
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("relay widget failed to start");
 }

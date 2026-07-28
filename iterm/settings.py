@@ -24,6 +24,9 @@ SETTINGS = [
     ("APPEARANCE", "mascot", "enum", _config.MASCOT_NAMES),
     ("APPEARANCE", "title_style", "enum", _config.TITLE_STYLES),
     ("APPEARANCE", "preview_panel", "toggle", None),
+    # Not _LIVE: toggling this starts or stops a real second process, so it
+    # takes effect on the next relay start rather than mid-run.
+    ("APPEARANCE", "widget_enabled", "toggle", None),
     ("BEHAVIOR", "statusbar_enabled", "toggle", None),
     ("BEHAVIOR", "spawn_arm", "enum", _config.SPAWN_ARM_MODES),
     ("BEHAVIOR", "stale_minutes", "number", (1.0, 1.0)),
