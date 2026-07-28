@@ -697,9 +697,21 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
         else:
             secs = max(0, _timers.next_due_in(r, now))
             when = f"in {int(secs) // 60}m{int(secs) % 60:02d}s"
-        payload = escape(str(r["payload"])[:max(10, w - 50)])
+        # A CLI-registered row (`relay timer add`) gets a compact "self:<key>"
+        # tag ahead of the payload, so the operator can tell a
+        # session-registered row from their own at a glance. The discriminator
+        # is the `key` column, NOT the label: rows added here with `a` also
+        # carry a label (the tab title, app.py's timer editor), so gating on
+        # the label would tag every operator row with a duplicate of the
+        # overlay header - and a raw session GUID when there is no SessionInfo,
+        # which is wide enough to push the line past `w`. Payload's budget
+        # shrinks by exactly the string that gets rendered, so the columns
+        # never drift.
+        tag = f"self:{escape(str(r['key']))} " if r["key"] else ""
+        budget = w - 50 - len(tag)
+        payload = escape(str(r["payload"])[:max(10, budget)])
         line = (f" {mark} {str(r['interval_min']) + 'm':<4} {r['mode']:<4} "
-                f"{onoff}  {cap:<7} {when:<18} {payload}")
+                f"{onoff}  {cap:<7} {when:<18} {tag}{payload}")
         if sel:
             # Full-width highlight bar, matching the main list's cursor row
             # (bright text on the cursor background) so the selection is

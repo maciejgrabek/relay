@@ -77,8 +77,23 @@ CREATE TABLE IF NOT EXISTS timers(
   bound_at REAL NOT NULL DEFAULT 0,
   max_fires INTEGER NOT NULL DEFAULT 10,
   fire_count INTEGER NOT NULL DEFAULT 0,
+  key TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL DEFAULT 0
 );
+"""
+
+# Indexes live OUTSIDE _SCHEMA and run AFTER _migrate, never inside it.
+# _SCHEMA is `CREATE TABLE IF NOT EXISTS` only, so it is a no-op on an existing
+# DB - but an index over a column that a migration adds (timers.key, migration
+# 6) would NOT be a no-op there: on a pre-migration DB it references a column
+# that does not exist yet and raises OperationalError, aborting executescript
+# and silently skipping every statement after it. Keeping indexes here means
+# _SCHEMA stays loud about real failures, new tables can keep being appended to
+# _SCHEMA with no migration (the established idiom - see _MIGRATIONS[5]), and
+# both fresh and migrated DBs get the indexes.
+_INDEXES = """
+CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers(iterm_session_id, key)
+  WHERE key != '';
 """
 
 
@@ -96,18 +111,21 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=3000")
-    conn.executescript(_SCHEMA)
+    conn.executescript(_SCHEMA)     # tables only, and deliberately not caught:
+                                    # a failure here is a real one (locked DB,
+                                    # I/O error, a typo in _SCHEMA).
     # Schema versioning: 0 = fresh (CREATEs above built the current schema),
     # otherwise migrate step by step. v2 added sessions.arm_request, v3 added
     # sessions.mode (persisted arm level, so a relay restart doesn't disarm a
     # live swarm), v4 added sessions.workdir/spawn_prompt/closed_at (restore
     # context for a dead session, and whether it's closed), v5 added
     # messages.kind and sessions.worktree_repo.
-    _migrate(conn)
+    _migrate(conn)                  # guarantees timers.key exists
+    conn.executescript(_INDEXES)    # fresh and migrated DBs both get it
     return conn
 
 
-_CURRENT_VERSION = 6
+_CURRENT_VERSION = 8
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -124,6 +142,27 @@ _MIGRATIONS = {
     # got the columns from _SCHEMA before this bump migrates harmlessly.
     5: ("ALTER TABLE timers ADD COLUMN max_fires INTEGER NOT NULL DEFAULT 10",
         "ALTER TABLE timers ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0"),
+    # v7: self-scheduling. CLI-created timers carry a stable per-session `key`
+    # so a session re-registering the same responsibility upserts instead of
+    # stacking duplicates. Overlay-created rows keep key='' and are never
+    # matched by get_timer_by_key.
+    6: ("ALTER TABLE timers ADD COLUMN key TEXT NOT NULL DEFAULT ''",),
+    # v8: partial unique index on (iterm_session_id, key), so the upsert-by-
+    # key invariant the CLI relies on (session self-scheduling design §7) is
+    # a DB-level guarantee, not just a CLI-level convention. Partial (`WHERE
+    # key != ''`) because overlay-created rows all carry key='' and must not
+    # collide with each other.
+    # The DELETE runs FIRST and is not optional: cmd_timer_add's lookup-then-
+    # insert is not atomic, so a DB written while v7 was current can already
+    # hold duplicate (iterm_session_id, key) rows. CREATE UNIQUE INDEX over
+    # those raises IntegrityError, which _migrate does NOT swallow - that
+    # would make every db.connect() (TUI, watcher, every CLI verb) raise with
+    # no way out. Keep the lowest id per group, drop the rest.
+    7: ("DELETE FROM timers WHERE key != '' AND id NOT IN ("
+        "SELECT MIN(id) FROM timers WHERE key != '' "
+        "GROUP BY iterm_session_id, key)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers"
+        "(iterm_session_id, key) WHERE key != ''"),
 }
 
 
@@ -137,10 +176,26 @@ def _migrate(conn) -> None:
         for stmt in _MIGRATIONS.get(v, ()):
             try:
                 conn.execute(stmt)
-            except sqlite3.OperationalError:
-                pass  # column already present (interrupted earlier migration)
+            except sqlite3.OperationalError as e:
+                # The ONLY tolerated case: re-applying an ALTER TABLE ... ADD
+                # COLUMN that already landed (a fresh DB got the column from
+                # _SCHEMA, or an earlier migration was interrupted after
+                # writing the column but before bumping user_version).
+                # Anything else - a locked DB (relay runs a TUI, a watcher and
+                # CLI invocations against one file, with only a 3s busy
+                # timeout), a full disk, an I/O error - must propagate so this
+                # step is NOT counted as done: re-raising here skips the
+                # `v += 1` / PRAGMA user_version bump below, so the DB is left
+                # at the last known-good version and the next connect() retries
+                # this step instead of limping forward with a version stamped
+                # ahead of the columns that actually exist.
+                if "duplicate column" not in str(e).lower():
+                    raise
         v += 1
         conn.execute(f"PRAGMA user_version = {v}")
+    # Migration 7's dedupe is DML, which opens an implicit transaction; commit
+    # so it cannot be rolled back by a connection that closes without writing.
+    conn.commit()
 
 
 def _now(now: Optional[float]) -> float:
@@ -378,13 +433,13 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
 # --- session timers ----------------------------------------------------------
 
 def add_timer(conn, *, iterm_session_id, label, interval_min, payload, mode,
-              active=1, max_fires=10, now: Optional[float] = None) -> int:
+              active=1, max_fires=10, key="", now: Optional[float] = None) -> int:
     cur = conn.execute(
         "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
         "mode, enabled, active, last_fired_at, bound_at, max_fires, "
-        "fire_count, created_at) VALUES(?,?,?,?,?,1,?,?,?,?,0,?)",
+        "fire_count, key, created_at) VALUES(?,?,?,?,?,1,?,?,?,?,0,?,?)",
         (iterm_session_id, label, int(interval_min), payload, mode,
-         int(active), _now(now), _now(now), int(max_fires), _now(now)))
+         int(active), _now(now), _now(now), int(max_fires), key, _now(now)))
     conn.commit()
     return cur.lastrowid
 
@@ -393,6 +448,19 @@ def list_timers(conn, iterm_session_id) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM timers WHERE iterm_session_id=? ORDER BY id",
         (iterm_session_id,)).fetchall()
+
+
+def get_timer_by_key(conn, iterm_session_id, key) -> Optional[sqlite3.Row]:
+    """The one CLI-created timer for this session under this key, or None.
+
+    An empty key never matches: overlay-created timers all carry key='' and
+    must not be treated as the same timer as each other.
+    """
+    if not key:
+        return None
+    return conn.execute(
+        "SELECT * FROM timers WHERE iterm_session_id=? AND key=?",
+        (iterm_session_id, key)).fetchone()
 
 
 def all_timers(conn) -> List[sqlite3.Row]:

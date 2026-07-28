@@ -39,6 +39,36 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay task list [--project <p>] [--mine]
         Epics with nested subtasks, states, owners, blockers.
 
+    relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
+        Register a timer on YOUR OWN tab: every <every> minutes, when you are
+        idle at a ready prompt, <say> is typed into you and submitted. Unlike
+        the other verbs this needs no `relay register` - timers bind to the tab,
+        not to a swarm name, so it works in a plain unregistered Claude session.
+        --key is a stable slug: re-running add with the same key UPDATES that
+        timer's interval/payload in place rather than adding a second one, and
+        its cap too - but ONLY while the timer still has fires left. An
+        exhausted timer (fire cap reached) keeps its existing cap regardless
+        of --times, and re-running add never revives it, nor a timer an
+        operator turned off / left pending-restore after a relay restart;
+        only the operator can re-arm it, from the `t` overlay. --times
+        is a mandatory fire cap (1-50, no unlimited). --every must be a whole
+        number of minutes - junk (e.g. a typo'd unit like "60m") is rejected,
+        not silently clamped to 1. Limited to 5 self-registered timers per tab
+        (operator-created timers on the same tab don't count), checked only
+        when registering a brand-new key. Mode is always idle; there is no
+        --mode flag, because firing mid-turn would corrupt your own turn.
+        Payload is single line (newlines are flattened), so put real
+        instructions in a file and make the payload a pointer to it - see the
+        relay-self-scheduling skill.
+
+    relay timer list
+        Your own timers only: id, key, interval, on/off, fires left, next-fire
+        countdown, payload. This verb has no flag to list another session's
+        timers - it is scoped to your own tab, not a security boundary.
+
+    relay timer rm --key <slug> | --id <n>
+        Remove one of your own timers. --id only works for a timer on your tab.
+
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
                 [--role worker|coordinator] [--arm off|safe|wild|insane]
                 [--worktree]

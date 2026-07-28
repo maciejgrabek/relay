@@ -15,8 +15,9 @@ _TMP = tempfile.mkdtemp()
 os.environ["RELAY_DB"] = os.path.join(_TMP, "relay.db")
 os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
-import cli  # noqa: E402
-import db   # noqa: E402
+import cli     # noqa: E402
+import db      # noqa: E402
+import timers  # noqa: E402
 
 
 def check(msg, cond):
@@ -210,6 +211,276 @@ def run():
     code, out, _ = run_cli("task", "list", "--mine", iterm_id="w0t0p0:CO-ID")
     ok &= check("task list --mine filters", f"#{dep_id}" in out
                 and f"#{sub_id}" not in out)
+
+    # --- self-scheduling: relay timer add -------------------------------
+    code, out, err = run_cli("timer", "add", "--key", "pr-duty",
+                             "--every", "20", "--times", "10",
+                             "--say", "Read .relay/prompts/pr-duty.md and "
+                                      "do what it says.",
+                             iterm_id="w0t1p0:TIMER-SID")
+    trows = db.list_timers(db.connect(), "TIMER-SID")
+    ok &= check("timer add creates one row", code == 0 and len(trows) == 1)
+    ok &= check("timer add forces idle mode", trows[0]["mode"] == "idle")
+    ok &= check("timer add stores interval + cap",
+                trows[0]["interval_min"] == 20 and trows[0]["max_fires"] == 10)
+    ok &= check("timer add labels the row self:<key>",
+                trows[0]["label"] == "self:pr-duty")
+    ok &= check("timer add is live immediately",
+                trows[0]["enabled"] == 1 and trows[0]["active"] == 1)
+
+    # Upsert: same key updates in place, never stacks.
+    code, _, _ = run_cli("timer", "add", "--key", "pr-duty",
+                         "--every", "30", "--times", "5", "--say", "new text",
+                         iterm_id="w0t1p0:TIMER-SID")
+    trows = db.list_timers(db.connect(), "TIMER-SID")
+    ok &= check("timer add upserts by key (still one row)",
+                code == 0 and len(trows) == 1)
+    ok &= check("timer add upsert applies new values",
+                trows[0]["interval_min"] == 30 and trows[0]["payload"] == "new text"
+                and trows[0]["max_fires"] == 5)
+
+    # Re-registering an EXHAUSTED timer must not revive it - and the only
+    # re-registration that can revive one is a LARGER --times, which would
+    # raise max_fires above fire_count and make capped() false again. Same
+    # --times keeps the row capped no matter what the code does, so it proves
+    # nothing; this re-registers 1-fire-exhausted with --times 10.
+    run_cli("timer", "add", "--key", "x", "--every", "20", "--times", "1",
+            "--say", "x", iterm_id="w0t1p0:EXHAUST-SID")
+    exhaust_row = db.get_timer_by_key(db.connect(), "EXHAUST-SID", "x")
+    db.mark_timer_fired(db.connect(), exhaust_row["id"])   # fire_count -> cap
+    code, out, _ = run_cli("timer", "add", "--key", "x", "--every", "25",
+                           "--times", "10", "--say", "revive me",
+                           iterm_id="w0t1p0:EXHAUST-SID")
+    r = db.get_timer_by_key(db.connect(), "EXHAUST-SID", "x")
+    ok &= check("re-registering an exhausted timer does not reset fire_count",
+                code == 0 and r["fire_count"] == 1)
+    ok &= check("a larger --times does NOT raise an exhausted timer's cap",
+                r["max_fires"] == 1)
+    ok &= check("an exhausted timer stays exhausted after re-registration",
+                timers.capped(r))
+    ok &= check("re-registering an exhausted timer still updates text/interval",
+                r["interval_min"] == 25 and r["payload"] == "revive me")
+    ok &= check("re-registering an exhausted timer says it is exhausted",
+                "exhausted" in out.lower())
+    ok &= check("re-registering an exhausted timer points at the t overlay",
+                "overlay" in out.lower())
+    ok &= check("exhausted output reports the surviving cap, not the request",
+                "10 fire" not in out)
+
+    # Exhausted AND operator-disabled at once: the session must hear BOTH
+    # facts, not just the first one an elif chain happened to match.
+    run_cli("timer", "add", "--key", "both", "--every", "20", "--times", "1",
+            "--say", "x", iterm_id="w0t1p0:BOTH-SID")
+    both_row = db.get_timer_by_key(db.connect(), "BOTH-SID", "both")
+    db.mark_timer_fired(db.connect(), both_row["id"])      # fire_count -> cap
+    db.update_timer(db.connect(), both_row["id"], enabled=0)
+    code, out, _ = run_cli("timer", "add", "--key", "both", "--every", "20",
+                           "--times", "5", "--say", "y",
+                           iterm_id="w0t1p0:BOTH-SID")
+    ok &= check("an exhausted AND off timer reports both facts",
+                code == 0 and "exhausted" in out.lower()
+                and "off" in out.lower())
+
+    # Upsert must never touch enabled/active - an operator-disabled or
+    # pending-restore timer stays that way across re-registration, and the
+    # fact is visible in the printed output.
+    run_cli("timer", "add", "--key", "x", "--every", "20", "--times", "5",
+            "--say", "x", iterm_id="w0t1p0:OPOFF-SID")
+    opoff_row = db.get_timer_by_key(db.connect(), "OPOFF-SID", "x")
+    db.update_timer(db.connect(), opoff_row["id"], enabled=0)
+    code, out, _ = run_cli("timer", "add", "--key", "x", "--every", "25",
+                           "--times", "5", "--say", "y",
+                           iterm_id="w0t1p0:OPOFF-SID")
+    r = db.get_timer_by_key(db.connect(), "OPOFF-SID", "x")
+    ok &= check("upsert of an OFF timer leaves it off but updates other fields",
+                code == 0 and r["enabled"] == 0 and r["interval_min"] == 25
+                and r["payload"] == "y")
+    ok &= check("upsert of an OFF timer says so in the output",
+                "off" in out.lower())
+
+    run_cli("timer", "add", "--key", "x", "--every", "20", "--times", "5",
+            "--say", "x", iterm_id="w0t1p0:PENDING-SID")
+    pending_row = db.get_timer_by_key(db.connect(), "PENDING-SID", "x")
+    db.update_timer(db.connect(), pending_row["id"], active=0)
+    code, out, _ = run_cli("timer", "add", "--key", "x", "--every", "20",
+                           "--times", "5", "--say", "z",
+                           iterm_id="w0t1p0:PENDING-SID")
+    r = db.get_timer_by_key(db.connect(), "PENDING-SID", "x")
+    ok &= check("upsert of a pending-restore timer leaves active untouched",
+                code == 0 and r["active"] == 0)
+    ok &= check("upsert of a pending-restore timer says so in the output",
+                "restore" in out.lower())
+
+    # Per-session cap of 5 timers, enforced only on a fresh INSERT.
+    for i in range(5):
+        code, _, _ = run_cli("timer", "add", "--key", f"cap{i}", "--every", "20",
+                             "--times", "5", "--say", "x",
+                             iterm_id="w0t1p0:CAP-SID")
+        ok &= check(f"per-session cap: timer {i + 1} of 5 succeeds", code == 0)
+    code, _, err = run_cli("timer", "add", "--key", "cap5", "--every", "20",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:CAP-SID")
+    ok &= check("per-session cap rejects a 6th distinct key",
+                code == 1 and "5" in err and "timer list" in err
+                and "timer rm" in err)
+    ok &= check("per-session cap left exactly 5 timers",
+                len(db.list_timers(db.connect(), "CAP-SID")) == 5)
+    # An upsert of an EXISTING key is always allowed, even at the cap - a
+    # session at the limit must still be able to update its own timer.
+    code, _, _ = run_cli("timer", "add", "--key", "cap0", "--every", "45",
+                         "--times", "5", "--say", "updated",
+                         iterm_id="w0t1p0:CAP-SID")
+    ok &= check("upsert of an existing key still works at the per-session cap",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "CAP-SID", "cap0")
+                    ["interval_min"] == 45)
+    # The cap counts SELF-registered rows only. Operator rows added in the `t`
+    # overlay carry key='' - five of them must not lock the session out of
+    # self-scheduling (and must not get it told to `relay timer rm` a human's
+    # timer to make room).
+    _opc = db.connect()
+    for i in range(5):
+        db.add_timer(_opc, iterm_session_id="OPCAP-SID", label="relay",
+                     interval_min=5, payload=f"operator {i}", mode="idle")
+    code, _, err = run_cli("timer", "add", "--key", "mine", "--every", "20",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:OPCAP-SID")
+    ok &= check("5 operator rows (key='') do not block self-registration",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "OPCAP-SID", "mine")
+                    is not None)
+    ok &= check("operator rows survive a self-registration next to them",
+                len(db.list_timers(db.connect(), "OPCAP-SID")) == 6)
+
+    # Interval clamps to [1, 90]; cap clamps to [1, 50]. Both bounds.
+    run_cli("timer", "add", "--key", "clamped", "--every", "999",
+            "--times", "999", "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "clamped")
+    ok &= check("timer add clamps interval to 90 and cap to 50",
+                r["interval_min"] == 90 and r["max_fires"] == 50)
+
+    run_cli("timer", "add", "--key", "lowclamp", "--every", "0",
+            "--times", "1", "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "lowclamp")
+    ok &= check("timer add clamps interval up to the 1m floor",
+                r["interval_min"] == 1 and r["max_fires"] == 1)
+
+    # A junk --every (e.g. a typo'd unit like "60m") must be REJECTED, not
+    # silently clamped to the 1-minute floor - a silent clamp would make a
+    # plausible typo 60x more aggressive than intended.
+    code, _, err = run_cli("timer", "add", "--key", "junk", "--every", "abc",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "junk")
+    ok &= check("timer add rejects a junk interval instead of clamping to 1",
+                code == 1 and r is None and "--every" in err)
+
+    code, _, err = run_cli("timer", "add", "--key", "junk2", "--every", "60m",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects a unit-suffixed --every (e.g. '60m')",
+                code == 1 and "--every" in err)
+
+    # Guards. Missing flags must produce OUR message, not argparse's, so the
+    # session learns why the flag exists.
+    code, _, err = run_cli("timer", "add", "--every", "20", "--times", "5",
+                           "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("missing --key gives the teaching error",
+                code == 1 and "--key" in err and "instead of" in err)
+
+    code, _, err = run_cli("timer", "add", "--key", "nocap", "--every", "20",
+                           "--say", "x", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("missing --times gives the teaching error",
+                code == 1 and "--times" in err)
+
+    code, _, err = run_cli("timer", "add", "--key", "capless", "--every", "20",
+                           "--times", "0", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects --times 0", code == 1 and "cap" in err.lower())
+
+    code, _, err = run_cli("timer", "add", "--key", "BadKey!", "--every", "20",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects a malformed key", code == 1 and "key" in err.lower())
+
+    code, _, err = run_cli("timer", "add", "--key", "empty", "--every", "20",
+                           "--times", "5", "--say", "   ",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer add rejects an empty payload", code == 1)
+
+    # Newlines are collapsed so a payload can never submit early.
+    run_cli("timer", "add", "--key", "multi", "--every", "20", "--times", "5",
+            "--say", "line one\nline two", iterm_id="w0t1p0:TIMER-SID")
+    r = db.get_timer_by_key(db.connect(), "TIMER-SID", "multi")
+    ok &= check("timer add sanitizes newlines out of the payload",
+                "\n" not in r["payload"] and r["payload"] == "line one line two")
+
+    # A long inline payload warns but still succeeds.
+    code, out, err = run_cli("timer", "add", "--key", "longish", "--every", "20",
+                             "--times", "5", "--say", "y" * 250,
+                             iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("long inline payload warns but succeeds",
+                code == 0 and ".relay/prompts" in (out + err))
+
+    # No iTerm identity at all -> clean error, not a traceback.
+    code, _, err = run_cli("timer", "add", "--key", "k", "--every", "5",
+                           "--times", "5", "--say", "x", iterm_id="")
+    ok &= check("timer add without ITERM_SESSION_ID errors cleanly",
+                code == 1 and "ITERM_SESSION_ID" in err)
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- self-scheduling: list + rm -------------------------------------
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer list shows this session's timers",
+                code == 0 and "pr-duty" in out and "clamped" in out)
+
+    # A different tab sees none of them.
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:STRANGER-SID")
+    ok &= check("timer list is scoped to the calling session",
+                code == 0 and "pr-duty" not in out)
+
+    # _timer_line's fires-left must be clamped at 0 like timers.fires_left -
+    # reachable via the overlay's '[' key lowering max_fires below fire_count.
+    over_id = db.add_timer(db.connect(), iterm_session_id="OVERCAP-SID",
+                           label="", interval_min=5, payload="p", mode="idle",
+                           max_fires=2)
+    db.update_timer(db.connect(), over_id, fire_count=5, max_fires=1)
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:OVERCAP-SID")
+    ok &= check("timer list clamps fires-left at 0, never negative",
+                code == 0 and "-1 left" not in out and "0 left" in out)
+
+    # rm by key.
+    code, _, _ = run_cli("timer", "rm", "--key", "clamped",
+                         iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm --key deletes it",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "clamped") is None)
+
+    # rm by id, from the wrong session, must refuse.
+    victim = db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty")
+    code, _, err = run_cli("timer", "rm", "--id", str(victim["id"]),
+                           iterm_id="w0t1p0:STRANGER-SID")
+    ok &= check("timer rm cannot touch another session's timer",
+                code == 1
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty") is not None)
+
+    # rm of something that isn't there.
+    code, _, err = run_cli("timer", "rm", "--key", "ghost",
+                           iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm on a missing key errors cleanly", code == 1)
+
+    # rm by id, from the owning session, works.
+    code, _, _ = run_cli("timer", "rm", "--id", str(victim["id"]),
+                         iterm_id="w0t1p0:TIMER-SID")
+    ok &= check("timer rm --id works for the owner",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "TIMER-SID", "pr-duty") is None)
+
+    # Empty list is a friendly message, not a crash.
+    code, out, _ = run_cli("timer", "list", iterm_id="w0t1p0:EMPTY-SID")
+    ok &= check("timer list with no timers says so",
+                code == 0 and "no timers" in out.lower())
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
     # spawn: first_prompt content (the iTerm2 side is smoke-tested live)
     import spawn as spawnmod

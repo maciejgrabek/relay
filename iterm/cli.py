@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import db      # noqa: E402
 import swarm   # noqa: E402
+import timers  # noqa: E402
 
 
 def my_iterm_id():
@@ -73,6 +74,20 @@ def _ago(ts: float) -> str:
 # Custom message kinds are allowed but kept machine-friendly: one short
 # lowercase token. Known kinds (db.MESSAGE_KINDS) get dedicated rendering.
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{0,19}$")
+
+# Self-scheduling timer key: one short lowercase slug, stable across
+# re-registrations so a session upserts its timer instead of stacking copies.
+_TIMER_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+
+# Inline payloads longer than this get a nudge toward a prompt file. Not an
+# error: a long one-liner still works, it just ages badly across compaction.
+_PAYLOAD_WARN_LEN = 200
+
+# Per-session cap on CLI-created timers, checked only on a fresh INSERT (an
+# upsert of an existing key is always allowed - a session at the limit must
+# still be able to update its own timer). Bounds the aggregate damage of a
+# session that invents a new --key every turn instead of upserting.
+_MAX_TIMERS_PER_SESSION = 5
 
 
 # --- verb handlers (each returns an exit code) --------------------------------
@@ -283,6 +298,187 @@ def cmd_task_list(args) -> int:
     for t in rows:                      # orphans (parent outside the filter)
         if t["id"] not in listed:
             print(fmt(t))
+    return 0
+
+
+def cmd_timer_add(args) -> int:
+    """Register (or update) a timer bound to THIS tab.
+
+    Deliberately does NOT use _require_me: timers bind to an iTerm session id,
+    not to a swarm name, so this must work in a plain unregistered Claude tab.
+    Guards live here and nowhere else - the engine treats these rows as
+    ordinary timers:
+      - mode is always 'idle' ('now' would inject mid-turn into our own tab)
+      - the fire cap is mandatory (unattended self-injection needs a ceiling)
+      - --key upserts (stops the fire -> re-register -> duplicate cascade)
+      - upsert never revives an exhausted timer: neither its fire_count nor
+        its max_fires is written, and enabled/active are never touched - only
+        a fresh registration goes live immediately; an exhausted or
+        operator-disabled/pending-restore timer stays that way until an
+        operator re-arms it from the `t` overlay
+      - a fresh registration (not an upsert) is capped at
+        _MAX_TIMERS_PER_SESSION self-registered timers per tab
+    """
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+
+    key = (args.key or "").strip()
+    if not _TIMER_KEY_RE.match(key):
+        return _err("--key must be a short slug: lowercase letter first, then "
+                    "letters/digits/-/_ (max 24), e.g. --key pr-duty. It is "
+                    "what makes re-registering update the timer instead of "
+                    "adding another one.")
+
+    payload = timers.sanitize_payload(args.say)
+    if not payload:
+        return _err("--say cannot be empty")
+
+    try:
+        times = int(args.times)
+    except (TypeError, ValueError):
+        times = 0
+    if times < 1:
+        return _err("--times must be at least 1 - a self-registered timer "
+                    "always needs a fire cap. Try --times 10.")
+    times = min(50, times)
+
+    try:
+        every = int(args.every)
+    except (TypeError, ValueError):
+        return _err(f"--every must be a whole number of minutes (1-90), got "
+                    f"{args.every!r}. Try --every 20.")
+    interval = timers.clamp_interval(every)
+
+    conn = db.connect()
+    existing = db.get_timer_by_key(conn, sid, key)
+    now = time.time()
+    notes = []
+    exhausted = False
+    if existing is not None:
+        exhausted = timers.capped(existing)
+        fields = dict(interval_min=interval, payload=payload, mode="idle")
+        # An exhausted row gets its text and schedule updated and NOTHING that
+        # bears on whether it fires again: not fire_count, not max_fires, not
+        # the clock. Resetting fire_count would revive it outright; writing the
+        # new max_fires would revive it just as effectively, since a larger
+        # --times raises the cap above the count and capped() goes false again.
+        # enabled/active are never touched on any upsert, so a timer an
+        # operator turned off or left pending-restore stays that way.
+        if not exhausted:
+            fields.update(max_fires=times, fire_count=0,
+                          last_fired_at=now, bound_at=now)
+        db.update_timer(conn, existing["id"], **fields)
+        tid = existing["id"]
+        verb = "updated"
+        # Independent ifs, not an elif chain: a row can be exhausted AND
+        # operator-disabled at once, and the session needs to hear both facts.
+        if exhausted:
+            notes.append(
+                f"already reached its fire cap "
+                f"({existing['fire_count']}/{existing['max_fires']}) - it is "
+                f"exhausted, not revived. --times {times} was NOT applied; "
+                f"raising the cap would revive it. An operator must restart "
+                f"it from the `t` overlay (select it, press r).")
+        if not existing["enabled"]:
+            notes.append(
+                "currently OFF - left that way. Only an operator can turn "
+                "it back on (space in the `t` overlay); re-registering "
+                "never does this automatically.")
+        if not existing["active"]:
+            notes.append(
+                "pending restore (relay restarted since it last ran) - left "
+                "that way. Only an operator can restore it (r in the `t` "
+                "overlay); re-registering never does this automatically.")
+    else:
+        # Count only CLI-created rows (non-empty key). Operator rows added in
+        # the `t` overlay carry key='' and must not consume this budget: the
+        # guard exists to bound a session that invents a new key every turn
+        # (design §9), and counting the human's timers would both lock a busy
+        # tab out of self-scheduling entirely and point the session at `relay
+        # timer rm`, which would happily delete the operator's row.
+        existing_count = len([t for t in db.list_timers(conn, sid) if t["key"]])
+        if existing_count >= _MAX_TIMERS_PER_SESSION:
+            return _err(
+                f"this session already has {existing_count} self-registered "
+                f"timer(s) - the per-session limit is "
+                f"{_MAX_TIMERS_PER_SESSION}. See `relay timer list` and "
+                f"remove one with `relay timer rm` first.")
+        tid = db.add_timer(conn, iterm_session_id=sid, label=f"self:{key}",
+                           interval_min=interval, payload=payload,
+                           mode="idle", max_fires=times, key=key, now=now)
+        verb = "registered"
+
+    if exhausted:
+        # The cap is deliberately NOT raised to `times`, so report the cap the
+        # row actually still carries - anything else would promise more fires
+        # than this row will ever produce.
+        print(f"timer {tid} {verb}: '{key}' every {interval}m, cap left at "
+              f"{existing['max_fires']} fire(s) - exhausted, not firing again")
+    else:
+        print(f"timer {tid} {verb}: '{key}' every {interval}m, {times} "
+              f"fire(s), first in {interval}m")
+    for n in notes:
+        print(f"note: timer {tid} {n}")
+    if len(payload) > _PAYLOAD_WARN_LEN:
+        print("note: that payload is long. Prefer writing the instructions to "
+              ".relay/prompts/<key>.md and using a short pointer payload - it "
+              "survives context compaction and stays editable.")
+    return 0
+
+
+def _timer_line(t, now: float) -> str:
+    """One rendered row for `relay timer list`."""
+    left = timers.fires_left(t)
+    due = (t["last_fired_at"] or 0) + t["interval_min"] * 60 - now
+    when = "due now" if due <= 0 else f"in {int(due // 60)}m{int(due % 60):02d}s"
+    state = "on" if (t["enabled"] and t["active"]) else "off"
+    fires = "unlimited" if left is None else f"{left} left"
+    key = t["key"] or "-"
+    return (f"  {t['id']:>3}  {key:<24}  every {t['interval_min']:>2}m  "
+            f"{state:<3}  {fires:<11}  next {when:<10}  {t['payload'][:60]}")
+
+
+def cmd_timer_list(args) -> int:
+    """List only THIS session's timers - a tab can never see another's."""
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    rows = db.list_timers(db.connect(), sid)
+    if not rows:
+        print("no timers on this session")
+        return 0
+    now = time.time()
+    print(f"  {'id':>3}  {'key':<24}  {'interval':<9}  {'st':<3}  "
+          f"{'fires':<11}  {'next':<15}  payload")
+    for t in rows:
+        print(_timer_line(t, now))
+    return 0
+
+
+def cmd_timer_rm(args) -> int:
+    """Delete one of THIS session's timers, by key or by id.
+
+    The id path re-checks ownership: db.delete_timer takes a raw id, so without
+    the check a guessed integer would delete another tab's timer.
+    """
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    conn = db.connect()
+    if args.key:
+        row = db.get_timer_by_key(conn, sid, args.key.strip())
+        if row is None:
+            return _err(f"no timer with key '{args.key}' on this session")
+    elif args.id:
+        row = next((t for t in db.list_timers(conn, sid)
+                    if str(t["id"]) == str(args.id)), None)
+        if row is None:
+            return _err(f"no timer {args.id} on this session")
+    else:
+        return _err("give --key <slug> or --id <n> (see: relay timer list)")
+    db.delete_timer(conn, row["id"])
+    print(f"timer {row['id']} removed")
     return 0
 
 
@@ -932,6 +1128,34 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    tm = sub.add_parser("timer", help="timers bound to THIS session")
+    tmsub = tm.add_subparsers(dest="timer_cmd", required=True)
+
+    tma = tmsub.add_parser("add", help="register/update a timer on this tab")
+    # --key/--times/--say are deliberately NOT argparse-required: the handler
+    # rejects them with a message that explains WHY they exist (the duplicate
+    # cascade, the mandatory cap), which argparse's terse "the following
+    # arguments are required" cannot. --every has no such lesson, and a missing
+    # --every would silently clamp to 1 minute, so it stays required here.
+    tma.add_argument("--key",
+                     help="stable slug, e.g. pr-duty; re-running with the same "
+                          "key updates that timer instead of adding another")
+    tma.add_argument("--every", required=True,
+                     help="interval in minutes (clamped to 1-90)")
+    tma.add_argument("--times",
+                     help="fire cap, 1-50 - mandatory; there is no unlimited")
+    tma.add_argument("--say",
+                     help="the single-line text to inject when it fires")
+    tma.set_defaults(fn=cmd_timer_add)
+
+    tml = tmsub.add_parser("list", help="list this session's timers")
+    tml.set_defaults(fn=cmd_timer_list)
+
+    tmr = tmsub.add_parser("rm", help="remove one of this session's timers")
+    tmr.add_argument("--key", help="the timer's key")
+    tmr.add_argument("--id", help="the timer's numeric id (see: timer list)")
+    tmr.set_defaults(fn=cmd_timer_rm)
 
     sp = sub.add_parser("spawn", help="open an iTerm2 tab running claude, "
                                       "pre-registered under --name")
