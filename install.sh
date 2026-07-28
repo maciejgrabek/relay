@@ -1,8 +1,9 @@
 #!/bin/bash
 # Relay setup check. Verifies relay's prerequisites and, if bin/ isn't on
-# your PATH, offers to add it to your shell rc. It never installs packages or
-# edits anything else - the only change it can make is appending one PATH line,
-# and only after you say yes.
+# your PATH, offers to add it to your shell rc. It changes nothing without an
+# explicit yes: appending one PATH line, symlinking the skills and the iTerm2
+# provider, and - for the desktop widget only - installing Rust via rustup and
+# compiling it. Answer no to any of those and relay still works.
 #
 #   ./install.sh           # check prerequisites, offer to add bin to PATH
 #   ./install.sh --check   # check only, never edit anything
@@ -196,10 +197,39 @@ WIDGET_BIN_D="$WIDGET_SRC/target/debug/relay-widget"
 echo
 if [ -x "$WIDGET_BIN_R" ] || [ -x "$WIDGET_BIN_D" ]; then
   pass "mascot widget built (press m in the panel)"
+elif [ "$CHECK_ONLY" != 1 ] && ! command -v cargo >/dev/null 2>&1; then
+  # Rust is the widget's only hard requirement and the one thing a fresh macOS
+  # box will not have. Telling people to go get it themselves is where this
+  # stalled in practice, so offer to do it - but only on an explicit yes, since
+  # installing a toolchain is a bigger step than anything else here.
+  echo "The mascot widget ('m' in the panel) is compiled, and Rust is not"
+  echo "installed. rustup puts it in ~/.cargo and touches nothing else."
+  read -r -p "Install Rust with rustup and build the widget? [y/N] " r_ans
+  case "$r_ans" in
+    y|Y|yes|YES)
+      if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
+        # rustup only edits shell rc files, so cargo is not on PATH in THIS
+        # shell yet; source its env or the build below cannot find it.
+        [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+      fi
+      if command -v cargo >/dev/null 2>&1; then
+        echo "  building the widget (first build is slow)..."
+        if (cd "$WIDGET_SRC" && cargo build --release); then
+          pass "mascot widget built"
+        else
+          note "widget build failed - relay works fine without it"
+        fi
+      else
+        note "rustup did not complete - relay works fine without the widget"
+      fi
+      ;;
+    *)
+      note "skipped - relay works fine without the widget"
+      note "  later:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+      ;;
+  esac
 elif ! command -v cargo >/dev/null 2>&1; then
-  note "mascot widget needs Rust to build (optional)"
-  echo "     install:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-  echo "     then rerun ./install.sh - everything else works without it."
+  note "mascot widget not built (needs Rust) - run ./install.sh to set it up"
 elif [ "$CHECK_ONLY" = 1 ]; then
   note "mascot widget not built - run ./install.sh (without --check) to build"
 else
