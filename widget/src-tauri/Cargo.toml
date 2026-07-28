@@ -1,0 +1,19 @@
+[package]
+name = "relay-widget"
+version = "0.1.0"
+edition = "2021"
+description = "Relay's mascot, floating outside the terminal"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

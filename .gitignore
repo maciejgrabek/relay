@@ -10,6 +10,10 @@ __pycache__/
 .DS_Store
 *.swp
 
+# Widget build artifacts (Rust/Tauri) - 1GB+, fully regenerable
+widget/src-tauri/target/
+widget/src-tauri/gen/
+
 # Internal design/planning docs - kept locally, not published
 docs/superpowers/
 

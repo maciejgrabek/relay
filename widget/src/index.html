@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Relay</title>
+<style>
+  :root { --ink: #6effa0; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: transparent; overflow: hidden;
+    cursor: default; user-select: none;
+    font-family: "SF Mono", Menlo, monospace;
+  }
+  #frame {
+    position: relative;
+    box-sizing: border-box;
+    height: 100%;
+    padding: 12px 14px 10px;
+    border-radius: 14px;
+    background: rgba(8, 12, 10, 0.82);
+    border: 1px solid color-mix(in srgb, var(--ink) 40%, transparent);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--ink) 18%, transparent),
+                0 8px 30px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(14px);
+    display: flex; flex-direction: column;
+    transition: border-color .25s, box-shadow .25s;
+  }
+  #art {
+    margin: 0; flex: 1; min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink);
+    line-height: 1.25;
+    white-space: pre;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--ink) 45%, transparent);
+  }
+  #meta {
+    flex: 0 0 auto;
+    padding-top: 6px;
+    font-size: 9px; letter-spacing: .09em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--ink) 62%, transparent);
+    display: flex; justify-content: space-between; gap: 8px;
+    white-space: nowrap; overflow: hidden;
+  }
+
+  /* Chrome that stays out of the way until you go looking for it. */
+  #close {
+    position: absolute; top: 7px; right: 9px;
+    width: 15px; height: 15px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 9px; line-height: 1;
+    color: rgba(255, 255, 255, .55);
+    background: rgba(255, 255, 255, .09);
+    opacity: 0; transition: opacity .15s, background .15s, color .15s;
+    cursor: pointer;
+  }
+  #frame:hover #close { opacity: 1; }
+  #close:hover { background: #ef4444; color: #fff; }
+
+  /* Frameless windows have no resize handles, so we draw one. */
+  #grip {
+    position: absolute; right: 2px; bottom: 2px;
+    width: 16px; height: 16px;
+    opacity: 0; transition: opacity .15s;
+    cursor: nwse-resize;
+  }
+  #grip::after {
+    content: ""; position: absolute; right: 4px; bottom: 4px;
+    width: 7px; height: 7px;
+    border-right: 2px solid color-mix(in srgb, var(--ink) 70%, transparent);
+    border-bottom: 2px solid color-mix(in srgb, var(--ink) 70%, transparent);
+    border-bottom-right-radius: 3px;
+  }
+  #frame:hover #grip { opacity: 1; }
+
+  body.stale { --ink: #6b7280; }
+  body.stale #art { text-shadow: none; opacity: .8; }
+  body.alarmed #frame { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 22px color-mix(in srgb, var(--ink) 18%, transparent), 0 8px 30px rgba(0,0,0,.45); }
+    50%      { box-shadow: 0 0 40px color-mix(in srgb, var(--ink) 55%, transparent), 0 8px 30px rgba(0,0,0,.45); }
+  }
+</style>
+</head>
+<body data-tauri-drag-region>
+  <div id="frame" data-tauri-drag-region>
+    <div id="close" title="Close">✕</div>
+    <pre id="art" data-tauri-drag-region>  connecting...</pre>
+    <div id="meta" data-tauri-drag-region>
+      <span id="state">-</span><span id="counts"></span>
+    </div>
+    <div id="grip" title="Resize"></div>
+  </div>
+
+<script>
+const OFFLINE_ART = ["   ____", "  (x  x)", "   \\__/", "  relay off"];
+const STALE_S = 5.0;
+// SF Mono advance width and our line-height, used to solve for the largest
+// font size whose whole character grid still fits the box.
+const CHAR_W = 0.60, LINE_H = 1.25;
+const MIN_PT = 6, MAX_PT = 44;
+
+const W = window.__TAURI__.window.getCurrentWindow();
+const $frame = document.getElementById("frame");
+const $art = document.getElementById("art");
+const $state = document.getElementById("state");
+const $counts = document.getElementById("counts");
+
+let currentArt = ["  connecting..."];
+
+// --- window chrome ----------------------------------------------------------
+// Drag from anywhere EXCEPT the controls, or the close button becomes a
+// drag handle and can never be clicked.
+document.addEventListener("mousedown", (e) => {
+  if (e.buttons !== 1) return;
+  if (e.target.closest("#close") || e.target.closest("#grip")) return;
+  W.startDragging();
+});
+
+document.getElementById("close").addEventListener("click", (e) => {
+  e.stopPropagation();
+  W.close();
+});
+
+document.getElementById("grip").addEventListener("mousedown", (e) => {
+  e.stopPropagation();
+  e.preventDefault();
+  W.startResizeDragging("SouthEast");
+});
+
+// --- fit the character grid to the window -----------------------------------
+// The art is a fixed grid, so resizing scales the type rather than reflowing.
+function fit() {
+  const cols = Math.max(1, ...currentArt.map((l) => [...l].length));
+  const rows = Math.max(1, currentArt.length);
+  const cs = getComputedStyle($frame);
+  const boxW = $frame.clientWidth
+    - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const boxH = $art.clientHeight;
+  const pt = Math.min(boxW / (cols * CHAR_W), boxH / (rows * LINE_H));
+  $art.style.fontSize = Math.max(MIN_PT, Math.min(MAX_PT, pt)) + "px";
+}
+new ResizeObserver(fit).observe($frame);
+
+// --- state ------------------------------------------------------------------
+function paint(art) {
+  currentArt = art.length ? art : [" "];
+  $art.textContent = currentArt.join("\n");
+  fit();
+}
+
+function offline() {
+  document.body.classList.add("stale");
+  document.body.classList.remove("alarmed");
+  paint(OFFLINE_ART);
+  $state.textContent = "offline";
+  $counts.textContent = "";
+}
+
+function render(d) {
+  if ((Date.now() / 1000) - (d.ts || 0) > STALE_S) return offline();
+  document.body.classList.remove("stale");
+  document.body.classList.toggle(
+    "alarmed", d.state === "alarmed" || d.state === "critical");
+  document.documentElement.style.setProperty("--ink", d.color || "#6effa0");
+  paint(d.art || []);
+  $state.textContent = d.state || "-";
+  const bits = [];
+  if (d.armed) bits.push(d.armed + " armed");
+  if (d.awaiting) bits.push(d.awaiting + " waiting");
+  $counts.textContent = bits.join("  ");
+}
+
+async function tick() {
+  try {
+    const { readTextFile, BaseDirectory } = window.__TAURI__.fs;
+    const txt = await readTextFile(".relay/widget.json",
+                                   { baseDir: BaseDirectory.Home });
+    render(JSON.parse(txt));
+  } catch (e) {
+    offline();
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

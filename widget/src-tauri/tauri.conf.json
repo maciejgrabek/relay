@@ -1,0 +1,40 @@
+{
+  "productName": "Relay Widget",
+  "version": "0.1.0",
+  "identifier": "com.relay.widget",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Relay",
+        "width": 300,
+        "height": 190,
+        "minWidth": 160,
+        "minHeight": 110,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
