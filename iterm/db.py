@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS timers(
   bound_at REAL NOT NULL DEFAULT 0,
   max_fires INTEGER NOT NULL DEFAULT 10,
   fire_count INTEGER NOT NULL DEFAULT 0,
+  key TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL DEFAULT 0
 );
 """
@@ -107,7 +108,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 6
+_CURRENT_VERSION = 7
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -124,6 +125,11 @@ _MIGRATIONS = {
     # got the columns from _SCHEMA before this bump migrates harmlessly.
     5: ("ALTER TABLE timers ADD COLUMN max_fires INTEGER NOT NULL DEFAULT 10",
         "ALTER TABLE timers ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0"),
+    # v7: self-scheduling. CLI-created timers carry a stable per-session `key`
+    # so a session re-registering the same responsibility upserts instead of
+    # stacking duplicates. Overlay-created rows keep key='' and are never
+    # matched by get_timer_by_key.
+    6: ("ALTER TABLE timers ADD COLUMN key TEXT NOT NULL DEFAULT ''",),
 }
 
 
@@ -378,13 +384,13 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
 # --- session timers ----------------------------------------------------------
 
 def add_timer(conn, *, iterm_session_id, label, interval_min, payload, mode,
-              active=1, max_fires=10, now: Optional[float] = None) -> int:
+              active=1, max_fires=10, key="", now: Optional[float] = None) -> int:
     cur = conn.execute(
         "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
         "mode, enabled, active, last_fired_at, bound_at, max_fires, "
-        "fire_count, created_at) VALUES(?,?,?,?,?,1,?,?,?,?,0,?)",
+        "fire_count, key, created_at) VALUES(?,?,?,?,?,1,?,?,?,?,0,?,?)",
         (iterm_session_id, label, int(interval_min), payload, mode,
-         int(active), _now(now), _now(now), int(max_fires), _now(now)))
+         int(active), _now(now), _now(now), int(max_fires), key, _now(now)))
     conn.commit()
     return cur.lastrowid
 
@@ -393,6 +399,19 @@ def list_timers(conn, iterm_session_id) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM timers WHERE iterm_session_id=? ORDER BY id",
         (iterm_session_id,)).fetchall()
+
+
+def get_timer_by_key(conn, iterm_session_id, key) -> Optional[sqlite3.Row]:
+    """The one CLI-created timer for this session under this key, or None.
+
+    An empty key never matches: overlay-created timers all carry key='' and
+    must not be treated as the same timer as each other.
+    """
+    if not key:
+        return None
+    return conn.execute(
+        "SELECT * FROM timers WHERE iterm_session_id=? AND key=?",
+        (iterm_session_id, key)).fetchone()
 
 
 def all_timers(conn) -> List[sqlite3.Row]:
