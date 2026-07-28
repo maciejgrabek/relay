@@ -111,11 +111,12 @@ if [ "$CHECK_ONLY" != 1 ]; then
   esac
 fi
 
-# --- Claude Code skills (worker/coordinator protocol) -----------------------
+# --- Claude Code skills (worker/coordinator protocol, self-scheduling) ------
 SKILLS_SRC="$REPO/skills"
 SKILLS_DST="$HOME/.claude/skills"
 echo
-echo "Relay ships Claude Code skills (relay-worker, relay-coordinator)."
+echo "Relay ships Claude Code skills (relay-worker, relay-coordinator,"
+echo "relay-self-scheduling)."
 if [ "$CHECK_ONLY" = 1 ]; then
   echo "To symlink them, run ./install.sh (without --check) and answer yes."
 else
@@ -123,7 +124,7 @@ else
   case "$skills_ans" in
     y|Y|yes|YES)
       mkdir -p "$SKILLS_DST"
-      for s in relay-worker relay-coordinator; do
+      for s in relay-worker relay-coordinator relay-self-scheduling; do
         ln -sfn "$SKILLS_SRC/$s" "$SKILLS_DST/$s"
         echo "  linked $SKILLS_DST/$s"
       done
