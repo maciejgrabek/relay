@@ -86,6 +86,18 @@ fn focus_iterm(sid: Option<String>) {
 
 fn main() {
     tauri::Builder::default()
+        // Singleton, for the same reason relay's TUI takes a lock: a second
+        // copy is never what anyone wants, and orphans accumulate silently.
+        // relay only tracks the child IT spawned, so a relay killed without a
+        // clean quit leaves a widget behind that the next launch knows nothing
+        // about. Here a second process raises the existing window and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![focus_iterm])
         .setup(|app| {
