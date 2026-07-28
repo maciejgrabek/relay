@@ -20,7 +20,7 @@ use tauri::Manager;
 /// widget that vanishes precisely then is a widget with no purpose.
 #[cfg(target_os = "macos")]
 fn float_above_fullscreen(window: &tauri::WebviewWindow) {
-    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask};
 
     let Ok(ptr) = window.ns_window() else { return };
     if ptr.is_null() {
@@ -34,6 +34,11 @@ fn float_above_fullscreen(window: &tauri::WebviewWindow) {
             | NSWindowCollectionBehavior::FullScreenAuxiliary
             | NSWindowCollectionBehavior::Stationary,
     );
+    // Never steal the keyboard. An always-on-top window that can become key
+    // takes your keystrokes the moment it appears - which made typing anywhere
+    // else miserable while it was launching. It has no text input and nothing
+    // to type into; clicks still work, focus does not move.
+    ns.setStyleMask(ns.styleMask() | NSWindowStyleMask::NonactivatingPanel);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -101,6 +106,12 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![focus_iterm])
         .setup(|app| {
+            // Accessory, not a regular app: no Dock icon, never becomes the
+            // frontmost application, never takes focus on launch. An ambient
+            // read-only display should be furniture, not something you have to
+            // click out of - and it is why a pile of these was so intrusive.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             if let Some(w) = app.get_webview_window("main") {
                 float_above_fullscreen(&w);
             }
