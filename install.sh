@@ -184,4 +184,44 @@ else
   esac
 fi
 
+# --- the desktop widget (Tauri) ---------------------------------------------
+# The one part of relay that needs compiling. Everything else is bash + python3
+# and runs straight from the checkout; widget/src-tauri/target/ is gitignored
+# (over 1GB), so a fresh clone has source but no binary and 'm' in the panel
+# just reports "not built". Install is the right place to fix that, rather than
+# leaving people to discover a cargo command from a feed line.
+WIDGET_SRC="$REPO/widget/src-tauri"
+WIDGET_BIN_R="$WIDGET_SRC/target/release/relay-widget"
+WIDGET_BIN_D="$WIDGET_SRC/target/debug/relay-widget"
+echo
+if [ -x "$WIDGET_BIN_R" ] || [ -x "$WIDGET_BIN_D" ]; then
+  pass "mascot widget built (press m in the panel)"
+elif ! command -v cargo >/dev/null 2>&1; then
+  note "mascot widget needs Rust to build (optional)"
+  echo "     install:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  echo "     then rerun ./install.sh - everything else works without it."
+elif [ "$CHECK_ONLY" = 1 ]; then
+  note "mascot widget not built - run ./install.sh (without --check) to build"
+else
+  echo "The mascot widget (floating desktop creature, 'm' in the panel) is not"
+  echo "built yet. First build pulls a lot of crates and takes a few minutes;"
+  echo "after that it is seconds."
+  read -r -p "Build it now? [Y/n] " w_ans
+  case "$w_ans" in
+    n|N|no|NO)
+      note "skipped - build later with: cd widget/src-tauri && cargo build --release"
+      ;;
+    *)
+      echo "  building (this is the slow one)..."
+      if (cd "$WIDGET_SRC" && cargo build --release); then
+        pass "mascot widget built"
+      else
+        # Never fail the whole install for an optional extra.
+        note "widget build failed - relay works fine without it"
+        note "retry with: cd widget/src-tauri && cargo build --release"
+      fi
+      ;;
+  esac
+fi
+
 exit 0
