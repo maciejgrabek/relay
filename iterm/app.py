@@ -611,6 +611,7 @@ def help_text() -> str:
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
+        row("m", "mascot: float the creature on your desktop, above other apps"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
         row(",", "settings editor - up/down move, left/right change, p plays a sound"),
@@ -855,7 +856,7 @@ class RelayApp(App):
         Binding("a", "all", "Arm all"),
         Binding("d", "none", "Disarm all"),
         Binding("x", "hide", "Hide/show"),
-        Binding("m", "mascot", "Mascot widget", show=False),
+        Binding("m", "mascot", "Mascot"),
         Binding("v", "audit_view", "Audit view", show=False),
         Binding("f", "toggle_preview", "Feed on/off", show=False),
         Binding("t", "timers", "Timers", show=False),
@@ -2099,6 +2100,13 @@ class RelayApp(App):
         widgetmod.clear_state()
 
     def action_mascot(self) -> None:
+        # The timers overlay binds 'm' to its mode cycle and stops the event,
+        # so this should be unreachable while it is open. Guarding anyway:
+        # correctness here should not rest on Textual's dispatch order, and
+        # toggling a desktop window from inside a full-screen overlay is not
+        # something the operator meant either way.
+        if self._any_overlay_open():
+            return
         log = self.query_one(Log)
         if self._mascot_running():
             self._stop_mascot()
