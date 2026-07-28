@@ -981,7 +981,11 @@ class RelayApp(App):
         # 'm' toggles it either way; this is only the launch-with-relay switch.
         try:
             if cfgmod.load()[0].widget_enabled:
-                self._start_mascot()
+                err = self._start_mascot()
+                if err:
+                    # On by default, so a missing build would otherwise be a
+                    # silent no-op every launch with no clue why. Say it once.
+                    self.query_one(Log).write_line(f"mascot widget: {err}")
         except Exception:
             pass
         # Launch the iTerm2 connection in the background; it shares this loop.
