@@ -986,6 +986,7 @@ class RelayApp(App):
         # Launch the iTerm2 connection in the background; it shares this loop.
         self._conn_worker = self.run_worker(self._connect(), exclusive=True)
         self.set_interval(1.0, self._refresh)  # periodic repaint (ages, etc.)
+        self.set_interval(1.0, self._publish_mascot)   # widget state feed
         if not self.reactor_off:
             self.set_interval(0.5, self._tick_reactor)  # smooth heat + pulse
 
@@ -1248,35 +1249,6 @@ class RelayApp(App):
         if ev and (time.time() - ev[1]) <= REACTION_TTL:
             reaction = ev[0]
         approvals = getattr(self.watcher, "_approvals", 0)   # monotonic tally
-        armed_n = sum(1 for i in self.watcher.sessions.values()
-                      if i.active and i.session_id != self._own_sid)
-        paused = getattr(self.watcher, "paused", False)
-        # Publish for the floating widget from the SAME inputs the banner
-        # renders from, so the two can never disagree. mascot_face_big and
-        # effective_mascot_state are pure, so recomputing here is free of any
-        # divergence risk - it is the same function on the same arguments.
-        if self._mascot_running():
-            try:
-                w_state = effective_mascot_state(
-                    label, awaiting=awaiting,
-                    working=self._tick < getattr(self, "_mascot_active_until", 0),
-                    armed=armed_n, reaction=reaction, paused=paused)
-                widgetmod.write_state(widgetmod.payload(
-                    w_state, _MASCOT_COLOR[w_state],
-                    mascot_face_big(
-                        self._tick, label, awaiting=awaiting,
-                        working=self._tick < getattr(self, "_mascot_active_until", 0),
-                        armed=armed_n, approvals=approvals, reaction=reaction,
-                        paused=paused,
-                        timers_on=getattr(self, "_timers_fleet_n", 0),
-                        timer_next=getattr(self, "_timers_fleet_next", None)),
-                    armed=armed_n, awaiting=awaiting,
-                    working=self._tick < getattr(self, "_mascot_active_until", 0),
-                    paused=paused, band=label,
-                    sessions=len(self.watcher.sessions),
-                    panel_sid=self._own_sid))
-            except Exception:
-                pass   # an ambient widget must never break the panel's render
         try:
             self.query_one("#reactor", Static).update(
                 f"[{c}]CORE TEMP[/] [{color}]{bar}[/]  [{c}]{label}[/]")
@@ -2033,6 +2005,51 @@ class RelayApp(App):
         except Exception:
             pass
         return quit_stakes_text(n_armed, n_queued, n_doing)
+
+    def _publish_mascot(self) -> None:
+        """Publish state for the floating widget.
+
+        Deliberately on its OWN interval rather than inside _tick_reactor:
+        that method early-returns when the reactor is off (RELAY_NO_REACTOR),
+        which would leave an open widget frozen forever. The widget polls at
+        1s, so publishing at 1s matches it.
+
+        Uses the same pure mascot functions the banner does, on the same
+        inputs, so the creature in the window and the creature in the panel
+        cannot disagree.
+        """
+        if not self._mascot_running() or not self.watcher:
+            return
+        try:
+            label, _color, _pulse = reactor_band(self._temp)
+            awaiting = attention_count(self.watcher.sessions.values(),
+                                       self._own_sid)
+            armed_n = sum(1 for i in self.watcher.sessions.values()
+                          if i.active and i.session_id != self._own_sid)
+            paused = getattr(self.watcher, "paused", False)
+            working = self._tick < getattr(self, "_mascot_active_until", 0)
+            reaction = None
+            ev = getattr(self.watcher, "_last_event", None)
+            if ev and (time.time() - ev[1]) <= 1.5:
+                reaction = ev[0]
+            state = effective_mascot_state(
+                label, awaiting=awaiting, working=working, armed=armed_n,
+                reaction=reaction, paused=paused)
+            widgetmod.write_state(widgetmod.payload(
+                state, _MASCOT_COLOR[state],
+                mascot_face_big(
+                    self._tick, label, awaiting=awaiting, working=working,
+                    armed=armed_n,
+                    approvals=getattr(self.watcher, "_approvals", 0),
+                    reaction=reaction, paused=paused,
+                    timers_on=getattr(self, "_timers_fleet_n", 0),
+                    timer_next=getattr(self, "_timers_fleet_next", None)),
+                armed=armed_n, awaiting=awaiting, working=working,
+                paused=paused, band=label,
+                sessions=len(self.watcher.sessions),
+                panel_sid=self._own_sid))
+        except Exception:
+            pass   # an ambient widget must never break the panel
 
     # --- the floating mascot widget -----------------------------------------
     # A separate process, so relay owns its lifetime: started here, killed on
