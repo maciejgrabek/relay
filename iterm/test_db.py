@@ -576,6 +576,76 @@ def run():
         ok &= check("unique index rejects a duplicate (session, key)", True)
     up6.close()
 
+    # --- v7 -> v8 with duplicates already in the table ------------------------
+    # cmd_timer_add's lookup-then-insert is not atomic, so a DB written while
+    # v7 was current can hold duplicate (iterm_session_id, key) rows. Creating
+    # the unique index over those raises IntegrityError, which _migrate does
+    # NOT swallow - db.connect() would then raise for the TUI, the watcher and
+    # every CLI verb, with no way out. Migration 7 must dedupe first.
+    p7 = os.path.join(tempfile.mkdtemp(), "v7dup.db")
+    old7 = _sq.connect(p7)
+    old7.executescript("""
+      CREATE TABLE timers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        iterm_session_id TEXT,
+        label TEXT NOT NULL DEFAULT '',
+        interval_min INTEGER NOT NULL DEFAULT 5,
+        payload TEXT NOT NULL DEFAULT '',
+        mode TEXT NOT NULL DEFAULT 'idle',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        last_fired_at REAL NOT NULL DEFAULT 0,
+        bound_at REAL NOT NULL DEFAULT 0,
+        max_fires INTEGER NOT NULL DEFAULT 10,
+        fire_count INTEGER NOT NULL DEFAULT 0,
+        key TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL DEFAULT 0
+      );
+      PRAGMA user_version = 7;
+    """)
+    for lbl, k in (("first", "prs"), ("racy dup", "prs"), ("third", "prs"),
+                   ("other key", "docs"), ("overlay a", ""), ("overlay b", "")):
+        old7.execute(
+            "INSERT INTO timers(iterm_session_id, label, interval_min, "
+            "payload, mode, key) VALUES('DUP-SID', ?, 5, 'p', 'idle', ?)",
+            (lbl, k))
+    # a same-key row on ANOTHER session must survive: the group is (sid, key)
+    old7.execute(
+        "INSERT INTO timers(iterm_session_id, label, interval_min, payload, "
+        "mode, key) VALUES('OTHER-SID', 'elsewhere', 5, 'p', 'idle', 'prs')")
+    old7.commit()
+    old7.close()
+    up7 = db.connect(p7)                  # must NOT raise
+    ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
+                up7.execute("PRAGMA user_version").fetchone()[0] == 8)
+    dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
+    ok &= check("dedupe keeps exactly one row per (session, key) group",
+                len(dup_rows) == 1 and dup_rows[0]["label"] == "first")
+    ok &= check("dedupe keeps other keys and both empty-key operator rows",
+                len(db.list_timers(up7, "DUP-SID")) == 4)
+    ok &= check("dedupe is scoped per session, not per key",
+                len(db.list_timers(up7, "OTHER-SID")) == 1)
+    ok &= check("the unique index exists after the dedupe migration",
+                up7.execute("SELECT name FROM sqlite_master WHERE type='index' "
+                            "AND name='timers_sid_key'").fetchone() is not None)
+    up7.close()
+    # ...and it really is committed, not sitting in an open transaction.
+    re7 = db.connect(p7)
+    ok &= check("the dedupe is committed (survives reopening the DB)",
+                len([r for r in db.list_timers(re7, "DUP-SID")
+                     if r["key"] == "prs"]) == 1)
+    re7.close()
+
+    # A FRESH DB gets the index too, even though _SCHEMA no longer carries it
+    # (_INDEXES runs after _migrate's v == 0 early return).
+    pfresh = os.path.join(tempfile.mkdtemp(), "fresh.db")
+    fresh = db.connect(pfresh)
+    ok &= check("a fresh DB gets timers_sid_key from _INDEXES",
+                fresh.execute("SELECT name FROM sqlite_master WHERE "
+                              "type='index' AND name='timers_sid_key'"
+                              ).fetchone() is not None)
+    fresh.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

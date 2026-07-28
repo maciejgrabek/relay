@@ -180,16 +180,19 @@ Two migrations, extending the timers table from timers v1 §2:
     "(iterm_session_id, key) WHERE key != ''",)
 ```
 
-plus `_CURRENT_VERSION` bumped `6 -> 8`, and both the `key TEXT NOT NULL
-DEFAULT ''` column and the same `CREATE UNIQUE INDEX ...` statement added to
-the `timers` block of `_SCHEMA` so fresh databases get the index too, not
-just the column. Consistent with the existing numbered `_MIGRATIONS` ladder
-in `db.py` (last key 5, `_CURRENT_VERSION` 6 before this feature). Fresh DBs
-get the column and the index from `_SCHEMA`; on an upgrading DB, `connect()`
-swallows the `OperationalError` `_SCHEMA`'s index statement raises when the
-`key` column does not exist yet (a DB from before migration 6) - `_migrate`
-then runs migration 6 (add the column) and migration 7 (create the index) in
-that order, same "already present" swallow pattern as migration 5. (`key` is
+plus `_CURRENT_VERSION` bumped `6 -> 8`, and the `key TEXT NOT NULL DEFAULT ''`
+column added to the `timers` block of `_SCHEMA` so fresh databases get it.
+Consistent with the existing numbered `_MIGRATIONS` ladder in `db.py` (last key
+5, `_CURRENT_VERSION` 6 before this feature). The index does **not** go in
+`_SCHEMA`: it references a column a migration adds, so on a pre-migration-6 DB
+it would raise `OperationalError` and abort `executescript`, silently skipping
+every statement after it. It lives in a separate `_INDEXES` script that
+`connect()` runs *after* `_migrate`, so fresh and upgrading DBs both get it and
+`_SCHEMA` itself stays loud about real failures. Migration 7 first deletes any
+duplicate `(iterm_session_id, key)` rows (keeping the lowest `id` per group),
+because `cmd_timer_add`'s lookup-then-insert is not atomic and
+`CREATE UNIQUE INDEX` over existing duplicates would raise `IntegrityError` out
+of every `db.connect()`. (`key` is
 a non-reserved keyword in SQLite and works unquoted in column position,
 including in `update_timer`'s generated `f"{k}=?"` clause - verified.)
 
@@ -202,16 +205,18 @@ backstop that makes the invariant a DB-level guarantee rather than only a
 CLI-level convention that a bug (or a future write path) could quietly
 violate.
 
-Self-registered rows also set `label = "self:<key>"`. This gives the operator a
-free visual marker in the `t` overlay and the preview TIMERS block: "the session
-asked for this, I did not."
+Self-registered rows also set `label = "self:<key>"`. The `t` overlay tags such
+a row with `self:<key>` (keyed off the `key` column, not the label - overlay
+rows carry labels too), which is the operator's one visual marker for "the
+session asked for this, I did not."
 
 ## 8. Visibility
 
 No new UI. Self-registered timers appear wherever timers v1 §8 already shows
 them - the `⏲N` row glyph, the preview TIMERS block, and the `TIMER ->` feed
-line - distinguished only by the `self:` label prefix. The operator kills one
-with `x` in the `t` overlay exactly as they would their own.
+line - which render them identically to operator rows. Only the `t` overlay
+distinguishes them, with a `self:<key>` tag ahead of the payload. The operator
+kills one with `x` in the `t` overlay exactly as they would their own.
 
 ## 9. Safety and edge cases
 

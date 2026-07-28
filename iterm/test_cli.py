@@ -15,8 +15,9 @@ _TMP = tempfile.mkdtemp()
 os.environ["RELAY_DB"] = os.path.join(_TMP, "relay.db")
 os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
-import cli  # noqa: E402
-import db   # noqa: E402
+import cli     # noqa: E402
+import db      # noqa: E402
+import timers  # noqa: E402
 
 
 def check(msg, cond):
@@ -238,22 +239,47 @@ def run():
                 trows[0]["interval_min"] == 30 and trows[0]["payload"] == "new text"
                 and trows[0]["max_fires"] == 5)
 
-    # Re-registering an EXHAUSTED timer must not revive it: fire_count stays
-    # put, and the output says so plainly instead of silently succeeding.
+    # Re-registering an EXHAUSTED timer must not revive it - and the only
+    # re-registration that can revive one is a LARGER --times, which would
+    # raise max_fires above fire_count and make capped() false again. Same
+    # --times keeps the row capped no matter what the code does, so it proves
+    # nothing; this re-registers 1-fire-exhausted with --times 10.
     run_cli("timer", "add", "--key", "x", "--every", "20", "--times", "1",
             "--say", "x", iterm_id="w0t1p0:EXHAUST-SID")
     exhaust_row = db.get_timer_by_key(db.connect(), "EXHAUST-SID", "x")
     db.mark_timer_fired(db.connect(), exhaust_row["id"])   # fire_count -> cap
-    code, out, _ = run_cli("timer", "add", "--key", "x", "--every", "20",
-                           "--times", "1", "--say", "x",
+    code, out, _ = run_cli("timer", "add", "--key", "x", "--every", "25",
+                           "--times", "10", "--say", "revive me",
                            iterm_id="w0t1p0:EXHAUST-SID")
     r = db.get_timer_by_key(db.connect(), "EXHAUST-SID", "x")
     ok &= check("re-registering an exhausted timer does not reset fire_count",
                 code == 0 and r["fire_count"] == 1)
+    ok &= check("a larger --times does NOT raise an exhausted timer's cap",
+                r["max_fires"] == 1)
+    ok &= check("an exhausted timer stays exhausted after re-registration",
+                timers.capped(r))
+    ok &= check("re-registering an exhausted timer still updates text/interval",
+                r["interval_min"] == 25 and r["payload"] == "revive me")
     ok &= check("re-registering an exhausted timer says it is exhausted",
                 "exhausted" in out.lower())
     ok &= check("re-registering an exhausted timer points at the t overlay",
                 "overlay" in out.lower())
+    ok &= check("exhausted output reports the surviving cap, not the request",
+                "10 fire" not in out)
+
+    # Exhausted AND operator-disabled at once: the session must hear BOTH
+    # facts, not just the first one an elif chain happened to match.
+    run_cli("timer", "add", "--key", "both", "--every", "20", "--times", "1",
+            "--say", "x", iterm_id="w0t1p0:BOTH-SID")
+    both_row = db.get_timer_by_key(db.connect(), "BOTH-SID", "both")
+    db.mark_timer_fired(db.connect(), both_row["id"])      # fire_count -> cap
+    db.update_timer(db.connect(), both_row["id"], enabled=0)
+    code, out, _ = run_cli("timer", "add", "--key", "both", "--every", "20",
+                           "--times", "5", "--say", "y",
+                           iterm_id="w0t1p0:BOTH-SID")
+    ok &= check("an exhausted AND off timer reports both facts",
+                code == 0 and "exhausted" in out.lower()
+                and "off" in out.lower())
 
     # Upsert must never touch enabled/active - an operator-disabled or
     # pending-restore timer stays that way across re-registration, and the
@@ -308,6 +334,23 @@ def run():
                 code == 0
                 and db.get_timer_by_key(db.connect(), "CAP-SID", "cap0")
                     ["interval_min"] == 45)
+    # The cap counts SELF-registered rows only. Operator rows added in the `t`
+    # overlay carry key='' - five of them must not lock the session out of
+    # self-scheduling (and must not get it told to `relay timer rm` a human's
+    # timer to make room).
+    _opc = db.connect()
+    for i in range(5):
+        db.add_timer(_opc, iterm_session_id="OPCAP-SID", label="relay",
+                     interval_min=5, payload=f"operator {i}", mode="idle")
+    code, _, err = run_cli("timer", "add", "--key", "mine", "--every", "20",
+                           "--times", "5", "--say", "x",
+                           iterm_id="w0t1p0:OPCAP-SID")
+    ok &= check("5 operator rows (key='') do not block self-registration",
+                code == 0
+                and db.get_timer_by_key(db.connect(), "OPCAP-SID", "mine")
+                    is not None)
+    ok &= check("operator rows survive a self-registration next to them",
+                len(db.list_timers(db.connect(), "OPCAP-SID")) == 6)
 
     # Interval clamps to [1, 90]; cap clamps to [1, 50]. Both bounds.
     run_cli("timer", "add", "--key", "clamped", "--every", "999",
