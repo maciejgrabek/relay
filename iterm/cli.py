@@ -824,7 +824,8 @@ def cmd_doctor(args) -> int:
             f"{k} {v}" for k, v in sorted(by_state.items())))
         for r in rows:
             if r["flag"]:
-                print(f"  ‼ {r['ref']:<22} {r['state']:<9} "
+                age = swarm.fmt_age(r["age_s"])
+                print(f"  ‼ {r['ref']:<22} {r['state']:<9} {age:>4} ago  "
                       f"{r['owner_label']}")
 
     _doctor_notify()
