@@ -190,6 +190,13 @@ def run():
     ok &= check("escalation_pings empty when all seen",
                 swarm.escalation_pings(esc, {1, 3}) == [])
 
+    fresh = [{"id": 1, "to_name": "human", "from_name": "pr-sweep"},
+             {"id": 2, "to_name": "api-worker", "from_name": "pr-sweep"}]
+    ok &= check("a human escalation is closed by the ping itself",
+                swarm.escalations_to_close(fresh) == [1])
+    ok &= check("a session-addressed escalation stays queued for injection",
+                2 not in swarm.escalations_to_close(fresh))
+
     # --- restore/clean planning ---------------------------------------------
     S = [
         {"name": "bff", "role": "worker", "project": "shop", "workdir": "/w/bff",

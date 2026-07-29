@@ -899,6 +899,9 @@ class Watcher:
                 self._escalation_pinged.add(m["id"])
                 self._note(f"ESCALATION from {m['from_name']} -> "
                            f"{m['to_name']}: {m['body'][:80]}")
+            if not self.dry_run:
+                for mid in swarm.escalations_to_close(fresh):
+                    swarmdb.mark_delivered(self._swarm_conn(), mid)
             # Rate limit: at most one SOUND per notify_cooldown window - a
             # looping worker must not turn the escalation channel into a
             # siren. Every message is still logged above.

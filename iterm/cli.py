@@ -12,7 +12,8 @@
 Every verb resolves "me" from $ITERM_SESSION_ID (set by iTerm2 in every
 session). Writes go straight to the SQLite bus (db.py); the relay TUI's
 watcher performs deliveries. Exit codes: 0 ok, 1 user/state error (printed to
-stderr so the calling Claude session sees why), 2 argparse usage error.
+stderr so the calling Claude session sees why), 2 argparse usage error, 3 =
+`send --pr` to an unclaimed PR, 4 = `send --pr` whose owner is gone.
 """
 from __future__ import annotations
 
@@ -91,6 +92,15 @@ _PAYLOAD_WARN_LEN = 200
 # session that invents a new --key every turn instead of upserting.
 _MAX_TIMERS_PER_SESSION = 5
 
+# Exit codes beyond the usual 0/1/2, so a sweep session can branch on WHY a
+# route failed instead of parsing stderr.
+EXIT_UNCLAIMED = 3      # relay has no owner recorded for that PR
+EXIT_OWNER_GONE = 4     # it had one, and that session is no longer there
+
+# The operator's mailbox. Never a registered session, so nothing is ever
+# injected into it; the watcher pings and marks it read.
+HUMAN = "human"
+
 
 def _pr_retention_days() -> float:
     """Shared by `pr list` and the TUI's launch-time prune so the CLI window
@@ -110,9 +120,10 @@ def cmd_register(args) -> int:
     name = args.name.strip()
     if not name:
         return _err("name cannot be empty")
-    if name == "relay":
-        return _err("'relay' is reserved - it is the sender name for system "
-                    "wake-ups; pick another name")
+    if name in db.RESERVED_NAMES:
+        return _err(f"'{name}' is reserved - 'relay' is the sender of system "
+                    f"wake-ups and 'human' is the operator's escalation "
+                    f"mailbox; pick another name")
     conn = db.connect()
     db.register(conn, name, sid, args.role, args.project or "")
     if args.dir:
@@ -144,6 +155,48 @@ def cmd_send(args) -> int:
     if not _KIND_RE.match(kind):
         return _err(f"--kind must be one short lowercase token "
                     f"(a-z, 0-9, -, _), got {kind!r}")
+    targets = sum(1 for f in (args.all, args.pr, args.human) if f)
+    if targets > 1:
+        return _err("pick one target: a name, --all, --pr, or --human")
+
+    if args.human:
+        body = args.to if args.body is None else args.body
+        if not body:
+            return _err('usage: relay send --human "<body>"')
+        db.queue_message(conn, me["name"], HUMAN, body, me["project"],
+                         kind="escalation")
+        print("escalated to the human (sound + notification; not injected "
+              "into any session)")
+        return 0
+
+    if args.pr:
+        ref, rc = _pr_ref_or_err(args.pr)
+        if ref is None:
+            return rc
+        repo, number = ref
+        body = args.to if args.body is None else args.body
+        if not body:
+            return _err('usage: relay send --pr <owner/name>#<n> "<body>"')
+        row = db.get_pr(conn, repo, number)
+        owner_session = (db.get_session(conn, row["owner"])
+                         if row is not None and row["owner"] else None)
+        status, detail = swarm.resolve_pr_route(row, owner_session)
+        if status == "unclaimed":
+            print(f"relay: unclaimed: {repo}#{number} has no owner recorded "
+                  f"- nobody ran `relay pr claim`. Escalate to the human.",
+                  file=sys.stderr)
+            return EXIT_UNCLAIMED
+        if status == "gone":
+            print(f"relay: owner gone: {detail}. Escalate to the human.",
+                  file=sys.stderr)
+            return EXIT_OWNER_GONE
+        db.queue_message(conn, me["name"], detail, body, me["project"],
+                         kind=kind)
+        db.touch_pr_routed(conn, repo, number)
+        task = f" (task #{row['task_id']})" if row["task_id"] else ""
+        print(f"routed to {detail}{task}")
+        return 0
+
     if args.all:
         if args.body is not None:
             return _err("with --all, pass only the message body")
@@ -1205,6 +1258,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="broadcast to every live session in --project "
                          "(except me)")
     sd.add_argument("--project", default=None)
+    sd.add_argument("--pr", default=None, metavar="OWNER/NAME#N",
+                    help="route to whichever session claimed this PR")
+    sd.add_argument("--human", action="store_true",
+                    help="escalate to the operator (pings; never injected)")
     sd.set_defaults(fn=cmd_send)
 
     ib = sub.add_parser("inbox", help="print + mark delivered my queued messages")

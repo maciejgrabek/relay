@@ -20,6 +20,21 @@ inside your session. Errors print to stderr with a non-zero exit.
         sound + notification for the human IMMEDIATELY - use it only when a
         human decision is genuinely required. 'wake' is reserved.
 
+    relay send --pr <owner/name>#<n> "<body>" [--kind <k>]
+        Route a message to whichever session claimed that PR. Exit 0 and
+        prints the owner it resolved to. Exit 3 = unclaimed (nobody ran
+        `relay pr claim`). Exit 4 = the owner session is gone (closed, or its
+        name was rebound to a different tab). Relay never guesses: it will not
+        hand the PR to a different worker, because a session with no context
+        on that branch produces a plausible fix that misses the point. On 3 or
+        4, batch the misses and escalate once with --human.
+
+    relay send --human "<body>"
+        Escalate to the operator. Plays the sound, posts the notification, and
+        shows in the swarm feed. It is NEVER injected into any session, so use
+        it for the decisions only a human can make. Batch a sweep's misses into
+        one message rather than firing one per PR.
+
     relay inbox
         Print your undelivered messages and mark them delivered. Check it when
         you start and between tasks (messages may have queued while you worked).
