@@ -36,6 +36,23 @@ def run_cli(*argv, iterm_id=None):
     return code, out.getvalue(), err.getvalue()
 
 
+def _rebind(name, sid):
+    """Simulate the name being reclaimed by a different tab."""
+    c = db.connect()
+    c.execute("UPDATE sessions SET iterm_session_id = ? WHERE name = ?",
+              (sid, name))
+    c.commit()
+    c.close()
+
+
+def _one_message(to_name):
+    c = db.connect()
+    row = c.execute("SELECT * FROM messages WHERE to_name = ? "
+                    "ORDER BY id DESC LIMIT 1", (to_name,)).fetchone()
+    c.close()
+    return row
+
+
 def run():
     ok = True
 
@@ -897,6 +914,46 @@ def run():
     rc, out, err = run_cli("pr", "list", "--mine")
     ok &= check("--mine hides PRs this session did not claim",
                 "acme/api#482" in out and "acme/bff#77" not in out)
+
+    # --- relay send --pr ----------------------------------------------------
+    cli.main(["register", "--name", "pr-sweep", "--role", "coordinator",
+              "--project", "webshop"])
+
+    rc, out, err = run_cli("send", "--pr", "acme/api#482",
+                         "changes requested: tighten the rate limit test")
+    ok &= check("routing to a live claiming session exits 0", rc == 0)
+    ok &= check("success names the resolved owner", "api-worker" in out)
+
+    rc, out, err = run_cli("send", "--pr", "acme/bff#77", "please fix")
+    ok &= check("an unclaimed PR exits 3", rc == 3)
+    ok &= check("the unclaimed error names the ref", "acme/bff#77" in err)
+
+    rc, out, err = run_cli("send", "--pr", "acme/nope#1", "please fix")
+    ok &= check("a PR relay never heard of also exits 3", rc == 3)
+
+    # Rebind api-worker to a DIFFERENT tab, then route again.
+    _rebind("api-worker", "SID-OTHER")
+    rc, out, err = run_cli("send", "--pr", "acme/api#482", "please fix")
+    ok &= check("a rebound owner exits 4, not 0", rc == 4)
+    ok &= check("the owner-gone error explains why", "rebound" in err)
+
+    rc, out, err = run_cli("send", "--pr", "acme/api", "please fix")
+    ok &= check("a malformed ref is a plain user error (exit 1)", rc == 1)
+
+    # --- relay send --human -------------------------------------------------
+    rc, out, err = run_cli("send", "--human", "PR 77 is unclaimed - who owns it?")
+    ok &= check("send --human exits 0", rc == 0)
+    ok &= check("the human escalation is stored undelivered as an escalation",
+                _one_message(to_name="human")["kind"] == "escalation"
+                and _one_message(to_name="human")["delivered_at"] is None)
+
+    rc, out, err = run_cli("register", "--name", "human", "--role", "worker")
+    ok &= check("'human' cannot be registered as a session name", rc == 1)
+    ok &= check("the reserved-name error explains what human is",
+                "reserved" in err)
+
+    rc, out, err = run_cli("send", "--human", "--pr", "acme/api#482", "both")
+    ok &= check("two target forms at once is an error", rc != 0)
 
     # --- bin/relay routes every CLI verb ---------------------------------
     # bin/relay dispatches on a hardcoded case list; a verb missing from it does

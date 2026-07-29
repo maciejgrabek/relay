@@ -86,6 +86,15 @@ def escalation_pings(msgs, already: set) -> list:
             if kind_of(m) == "escalation" and m["id"] not in already]
 
 
+def escalations_to_close(pinged) -> list:
+    """Message ids that the ping itself has fully handled: those addressed to
+    'human'. Nothing injects into the operator's mailbox, so an unmarked one
+    would sit undelivered forever - never pruned (prune_messages keeps queued
+    rows on purpose) and re-pinged on every relay restart, since the pinged
+    set is in memory."""
+    return [m["id"] for m in pinged if m["to_name"] == "human"]
+
+
 # --- live-scoped stakes: only count what relay can act on RIGHT NOW -----------
 #
 # The header "N msgs queued" and the quit-guard stakes must reflect this run's
