@@ -711,7 +711,12 @@ def claim_pr(conn, repo: str, number: int, *, owner: str,
 def list_prs(conn, project=None, owner=None,
              since=None) -> List[sqlite3.Row]:
     """Stable order: repo, then number. Never sorted by urgency - the TUI
-    duplicates what needs attention into a strip above the list instead."""
+    duplicates what needs attention into a strip above the list instead.
+
+    `since` windows OUT stale settled history the same way prune_prs ages it
+    out, but never an open PR: the PR most likely to need a human is the one
+    nobody has touched in a week, so it must not silently vanish from the
+    listing just because it sat quiet past the retention window."""
     q = "SELECT * FROM prs WHERE 1=1"
     p: list = []
     if project:
@@ -721,7 +726,7 @@ def list_prs(conn, project=None, owner=None,
         q += " AND owner = ?"
         p.append(owner)
     if since is not None:
-        q += " AND updated_at >= ?"
+        q += " AND (updated_at >= ? OR state NOT IN ('merged','closed'))"
         p.append(float(since))
     return conn.execute(q + " ORDER BY repo, number", p).fetchall()
 

@@ -708,12 +708,23 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
         pr_by_task = {p["task_id"]: p for p in prs
                       if _get(p, "task_id") is not None}
         def _card(t):
+            # The suffix must never win at the title's expense: degrade it
+            # (full -> "PR<n>" -> nothing) until the whole cell - head,
+            # title, suffix together - fits colw. A task with no PR takes
+            # the p-is-None branch, which reduces to the pre-PR formula
+            # exactly (suffix contributes 0 either way) - byte-identical
+            # output at every width.
             p = pr_by_task.get(t["id"])
-            suffix = (f" ▸ PR {p['number']} {_PR_GLYPH.get(p['state'], '')}"
-                      f"{p['state']}" if p else "")
             head = f"#{t['id']} "
-            return head + _clip(t["title"], max(4, colw - len(head)
-                                                - len(suffix))) + suffix
+            if p is None:
+                return head + _clip(t["title"], max(4, colw - len(head)))
+            full = (f" ▸ PR {p['number']} {_PR_GLYPH.get(p['state'], '')}"
+                    f"{p['state']}")
+            minimal = f" PR{p['number']}"
+            for suffix in (full, minimal, ""):
+                titlew = colw - len(head) - len(suffix)
+                if titlew >= 4 or not suffix:
+                    return head + _clip(t["title"], max(4, titlew)) + suffix
         cols = {st: [_card(t) for t in p_tasks if t["state"] == st]
                 for st in _STATE_COLS}
         height = max([len(v) for v in cols.values()] + [1])
