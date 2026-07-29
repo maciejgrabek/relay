@@ -39,6 +39,25 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay task list [--project <p>] [--mine]
         Epics with nested subtasks, states, owners, blockers.
 
+    relay pr set <owner/name>#<n> --state created|review|changes|approved|merged|closed
+                  [--title <t>] [--branch <b>] [--project <p>]
+        Push a PR's CURRENT state into relay. Relay never calls gh and never
+        looks at GitHub - it stores what you tell it, and everything that
+        displays a state also displays how old that report is. Run this for
+        every PR your sweep sees, claimed or not: an unclaimed PR that relay
+        knows about shows up as UNCLAIMED instead of being invisible.
+
+    relay pr claim <owner/name>#<n> [--task <id>] [--branch <b>]
+        Record that THIS session opened this PR. Run it immediately after
+        `gh pr create`, in the same breath as committing. This is the only
+        thing that makes "which session did this PR" answerable later - a PR
+        you do not claim can never be routed back to you automatically.
+
+    relay pr list [--project <p>] [--mine] [--days <n>]
+        PRs in stable order (repo, then number) with state, age of that state,
+        owner, task, and an UNCLAIMED or GONE marker. --days defaults to
+        RELAY_PR_RETENTION_DAYS (7).
+
     relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
         Register a timer on YOUR OWN tab: every <every> minutes, when you are
         idle at a ready prompt, <say> is typed into you and submitted. Unlike

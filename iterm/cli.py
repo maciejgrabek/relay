@@ -6,6 +6,7 @@
     relay inbox
     relay msgs [--with N] [--project P]
     relay task add|update|list ...        (task verbs)
+    relay pr set|claim|list ...           (pull request verbs)
     relay spawn --name X [--project P] [--dir D] "prompt"
 
 Every verb resolves "me" from $ITERM_SESSION_ID (set by iTerm2 in every
@@ -89,6 +90,15 @@ _PAYLOAD_WARN_LEN = 200
 # still be able to update its own timer). Bounds the aggregate damage of a
 # session that invents a new --key every turn instead of upserting.
 _MAX_TIMERS_PER_SESSION = 5
+
+
+def _pr_retention_days() -> float:
+    """Shared by `pr list` and the TUI's launch-time prune so the CLI window
+    and the pane window cannot drift apart."""
+    try:
+        return float(os.environ.get("RELAY_PR_RETENTION_DAYS", "7"))
+    except ValueError:
+        return 7.0
 
 
 # --- verb handlers (each returns an exit code) --------------------------------
@@ -196,6 +206,83 @@ def cmd_msgs(args) -> int:
         tag = f" [{k}]" if k != "info" else ""
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(m['created_at']))} "
               f"{m['from_name']} -> {m['to_name']}{tag}: {m['body']}{tick}")
+    return 0
+
+
+def _pr_ref_or_err(ref: str):
+    """(repo, number) or (None, exit_code). One format, taught on failure."""
+    parsed = swarm.parse_pr_ref(ref)
+    if parsed is None:
+        return None, _err(f"'{ref}' is not a PR reference - use "
+                          f"owner/name#number, e.g. acme/api#482")
+    return parsed, 0
+
+
+def cmd_pr_set(args) -> int:
+    """The sweep session's verb: push what GitHub currently says. Relay never
+    looks - it stores what it was told, and the UI always shows how old that
+    telling is."""
+    ref, rc = _pr_ref_or_err(args.ref)
+    if ref is None:
+        return rc
+    repo, number = ref
+    conn = db.connect()
+    me = whoami(conn)
+    project = args.project if args.project is not None else (
+        me["project"] if me else "")
+    row = db.upsert_pr(conn, repo, number, project=project, state=args.state,
+                       title=args.title, branch=args.branch)
+    print(f"{repo}#{number} -> {row['state']}"
+          + (f" ({row['title']})" if row["title"] else ""))
+    return 0
+
+
+def cmd_pr_claim(args) -> int:
+    """The worker's verb, run right after `gh pr create`. This is the only
+    thing that makes 'who owns this PR' answerable later."""
+    ref, rc = _pr_ref_or_err(args.ref)
+    if ref is None:
+        return rc
+    repo, number = ref
+    conn = db.connect()
+    me, rc = _require_me(conn)
+    if me is None:
+        return rc
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    row = db.claim_pr(conn, repo, number, owner=me["name"],
+                      owner_session_id=sid, task_id=args.task,
+                      branch=args.branch,
+                      project=args.project if args.project is not None
+                      else me["project"])
+    task = f" for task #{row['task_id']}" if row["task_id"] else ""
+    print(f"{repo}#{number} claimed by {me['name']}{task}")
+    return 0
+
+
+def cmd_pr_list(args) -> int:
+    conn = db.connect()
+    me = whoami(conn)
+    if args.mine and me is None:
+        return _err("--mine needs a registered session - run relay register")
+    days = args.days if args.days is not None else _pr_retention_days()
+    since = time.time() - float(days) * 86400
+    rows = db.list_prs(conn, project=args.project,
+                       owner=me["name"] if args.mine else None, since=since)
+    if not rows:
+        print("no pull requests")
+        return 0
+    sessions = {s["name"]: s for s in db.list_sessions(conn)}
+    for r in rows:
+        status, detail = swarm.resolve_pr_route(r, sessions.get(r["owner"]))
+        who = (r["owner"] if status == "ok"
+               else "UNCLAIMED" if status == "unclaimed"
+               else f"{r['owner']} (GONE)")
+        task = f"  #{r['task_id']}" if r["task_id"] else ""
+        age = swarm.fmt_age(time.time() - r["state_changed_at"])
+        print(f"{r['repo']}#{r['number']:<6} {r['state']:<9} {age:>4} ago  "
+              f"{who}{task}")
     return 0
 
 
@@ -1149,6 +1236,33 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    pr = sub.add_parser("pr", help="pull requests: who owns which PR")
+    prsub = pr.add_subparsers(dest="pr_verb", required=True)
+
+    prs_ = prsub.add_parser("set", help="push a PR's current state "
+                                        "(the sweep session's verb)")
+    prs_.add_argument("ref", help="owner/name#number, e.g. acme/api#482")
+    prs_.add_argument("--state", required=True, choices=db.PR_STATES)
+    prs_.add_argument("--title", default=None)
+    prs_.add_argument("--branch", default=None)
+    prs_.add_argument("--project", default=None)
+    prs_.set_defaults(fn=cmd_pr_set)
+
+    prc = prsub.add_parser("claim", help="record that THIS session opened "
+                                         "this PR")
+    prc.add_argument("ref", help="owner/name#number, e.g. acme/api#482")
+    prc.add_argument("--task", type=int, default=None)
+    prc.add_argument("--branch", default=None)
+    prc.add_argument("--project", default=None)
+    prc.set_defaults(fn=cmd_pr_claim)
+
+    prl = prsub.add_parser("list", help="PRs with state, age, owner")
+    prl.add_argument("--project", default=None)
+    prl.add_argument("--mine", action="store_true")
+    prl.add_argument("--days", type=float, default=None,
+                     help="window in days (default: RELAY_PR_RETENTION_DAYS)")
+    prl.set_defaults(fn=cmd_pr_list)
 
     tm = sub.add_parser("timer", help="timers bound to THIS session")
     tmsub = tm.add_subparsers(dest="timer_cmd", required=True)
