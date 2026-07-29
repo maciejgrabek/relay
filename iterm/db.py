@@ -692,13 +692,13 @@ def claim_pr(conn, repo: str, number: int, *, owner: str,
     cur = _pr_row(conn, repo, number)
     conn.execute(
         "UPDATE prs SET owner = ?, owner_session_id = ?, task_id = ?,"
-        " branch = ?, project = ?, claimed_at = ?"
+        " branch = ?, project = ?, claimed_at = ?, updated_at = ?"
         " WHERE id = ?",
         (owner, owner_session_id,
          task_id if task_id is not None else cur["task_id"],
          branch if branch is not None else cur["branch"],
          project if project is not None else cur["project"],
-         ts, cur["id"]))
+         ts, ts, cur["id"]))
     conn.commit()
     return _pr_row(conn, repo, number)
 

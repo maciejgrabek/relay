@@ -744,8 +744,10 @@ def run():
     ok &= check("list_prs --owner filters",
                 [r["number"] for r in db.list_prs(conn, owner="fe-worker")]
                 == [31])
+    # #482 was re-claimed at 5000, #31 claimed at 4100: a claim is a write, so
+    # it moves updated_at and the window sees it.
     ok &= check("list_prs --since filters on updated_at",
-                [r["number"] for r in db.list_prs(conn, since=4050.0)] == [31])
+                [r["number"] for r in db.list_prs(conn, since=4500.0)] == [482])
 
     db.touch_pr_routed(conn, "acme/api", 482, now=6000.0)
     ok &= check("touch_pr_routed stamps last_routed_at",
