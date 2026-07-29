@@ -568,6 +568,41 @@ def run():
     ok &= check("a task with a PR shows it on its kanban card",
                 "PR 482" in kb)
 
+    # --- kanban PR suffix: floor-width degrade, never overflow the column --
+    # Code review finding: `width=60` is the app's real floor (`w = max(60,
+    # ...)`), giving colw=12 - narrower than even the shortest legible PR
+    # suffix. The suffix must degrade (full -> "PRnnn" -> nothing) instead
+    # of overflowing into the neighbouring kanban column.
+    floor_tasks = [
+        {"id": 14, "project": "webshop", "parent_id": None, "state": "doing",
+         "title": "rate limiting across every gateway endpoint we own",
+         "owner": "api-worker"},
+        {"id": 15, "project": "webshop", "parent_id": None, "state": "doing",
+         "title": "a totally unrelated task with no PR at all",
+         "owner": "api-worker"},
+    ]
+    floor_prs = [dict(prs[0], state="approved")]
+    floor_view = swarm.render_swarm(sess, floor_tasks, [], now, width=60,
+                                    prs=floor_prs)
+    colw = max(12, (60 - 3 * 3) // 4)
+    row_width = 4 * colw + 3 * 3
+    line14 = next(l for l in floor_view.splitlines() if "#14" in l)
+    ok &= check("a PR suffix that cannot fit degrades instead of "
+                "overflowing the kanban row",
+                len(line14) == row_width)
+    ok &= check("the degraded card still shows the task in its own column",
+                "#14" in line14[colw + 3: 2 * colw + 3])
+
+    no_pr_view = swarm.render_swarm(sess, [floor_tasks[1]], [], now,
+                                    width=60)
+    with_pr_view = swarm.render_swarm(sess, [floor_tasks[1]], [], now,
+                                      width=60, prs=floor_prs)
+    line15_no_pr = next(l for l in no_pr_view.splitlines() if "#15" in l)
+    line15_with_pr = next(l for l in with_pr_view.splitlines() if "#15" in l)
+    ok &= check("a card with no matching PR renders byte-identical whether "
+                "or not prs is passed",
+                line15_no_pr == line15_with_pr)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

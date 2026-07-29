@@ -761,10 +761,13 @@ def run():
     ok &= check("list_prs --owner filters",
                 [r["number"] for r in db.list_prs(conn, owner="fe-worker")]
                 == [31])
-    # #482 was re-claimed at 5000, #31 claimed at 4100: a claim is a write, so
-    # it moves updated_at and the window sees it.
-    ok &= check("list_prs --since filters on updated_at",
-                [r["number"] for r in db.list_prs(conn, since=4500.0)] == [482])
+    # #482 (state "changes") and #31 (state "created") are both still open.
+    # The visibility window must never hide an open PR by age - only settled
+    # (merged/closed) history ages out - so `since` must not filter either
+    # of these out even though #31's updated_at (4100) is before the cutoff.
+    ok &= check("list_prs --since never filters an open PR by age",
+                sorted(r["number"] for r in db.list_prs(conn, since=4500.0))
+                == [31, 482])
 
     db.touch_pr_routed(conn, "acme/api", 482, now=6000.0)
     ok &= check("touch_pr_routed stamps last_routed_at",
@@ -778,6 +781,17 @@ def run():
     ok &= check("prune_prs drops old merged and closed rows", n == 2)
     ok &= check("prune_prs never drops an open PR, however old",
                 db.get_pr(conn, "acme/api", 402) is not None)
+
+    # list_prs's `since` window mirrors prune_prs's own rule: a stale review
+    # (open) PR stays visible, a stale merged one does not - the invariant
+    # is "open PRs never age out", true of both visibility and deletion.
+    db.upsert_pr(conn, "acme/api", 501, state="review", now=100.0)
+    db.upsert_pr(conn, "acme/api", 502, state="merged", now=100.0)
+    windowed = [r["number"] for r in db.list_prs(conn, since=9000.0)]
+    ok &= check("list_prs keeps a stale OPEN pr inside the window",
+                501 in windowed)
+    ok &= check("list_prs windows out a stale SETTLED pr",
+                502 not in windowed)
 
     ok &= check("RESERVED_NAMES covers relay and human",
                 set(db.RESERVED_NAMES) == {"relay", "human"})
