@@ -683,6 +683,35 @@ only - there's no TUI binding for `--project --all`, that's deliberately a
 terminal-only, type-it-out command). `relay clean` has no TUI binding;
 run it from a terminal when you've decided the work is not worth reviving.
 
+### Pull requests: who owns what
+
+Relay never calls `gh`. A session tells it what it sees, and relay answers one
+question in return: **which session opened this PR?**
+
+A worker claims its PR the moment it opens one:
+
+    relay pr claim acme/api#482 --task 14
+
+A PR-sweep session pushes what GitHub currently says, then routes feedback
+straight to whoever wrote the code:
+
+    relay pr set acme/api#482 --state changes
+    relay send --pr acme/api#482 "changes requested: tighten the rate limit test"
+
+That message is typed into the claiming session when it goes idle. If nobody
+claimed the PR (exit 3), or the claiming session is closed or its name has been
+rebound to a different tab (exit 4), relay refuses to guess and you decide:
+
+    relay send --human "acme/bff#77 has changes requested and no owner"
+
+which pings you immediately and is never injected into any session. `TAB` shows
+the PR pane: what needs work on top, then every PR in stable order, each with
+the age of the last report beside its state - relay only knows what it was
+last told, and the pane never pretends otherwise.
+
+Retention is `RELAY_PR_RETENTION_DAYS` (default 7). Merged and closed PRs age
+out; open ones never do.
+
 ### Skills
 
 `skills/relay-worker` and `skills/relay-coordinator` are the protocol layer:
