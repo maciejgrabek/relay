@@ -190,6 +190,48 @@ def stale_reason(now: float, threshold_s: float,
     return None
 
 
+# --- PR reference parsing and routing ----------------------------------------
+
+# owner/name#number - the single PR reference format, used by every verb and
+# every message. One format is one less thing for a session to get wrong.
+_PR_REF_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
+
+
+def parse_pr_ref(ref: str):
+    """('acme/api', 482) or None. Strict: a caller that guesses at the format
+    gets an error, not a row written under a ref nothing will ever match."""
+    m = _PR_REF_RE.match((ref or "").strip())
+    if not m:
+        return None
+    return m.group(1), int(m.group(2))
+
+
+def resolve_pr_route(pr, session):
+    """Can PR feedback be routed to the session that opened it?
+
+    Returns (status, detail): ('ok', owner_name) when the claiming session is
+    still the session behind that name; ('unclaimed', '') when nobody claimed
+    the PR; ('gone', reason) otherwise.
+
+    The identity check is the point. Relay names are reclaimable - re-register
+    rebinds a name to a new tab, and `relay restore` depends on that - so
+    routing on the name alone would deliver 'your PR has changes requested' to
+    a tab that has never seen the branch. Comparing the iTerm session id
+    recorded at claim time makes 'is this still the author?' answerable."""
+    if pr is None or not (_get(pr, "owner", "") or ""):
+        return ("unclaimed", "")
+    owner = pr["owner"]
+    if session is None:
+        return ("gone", f"no session registered as '{owner}'")
+    if _get(session, "closed_at", 0):
+        return ("gone", f"session '{owner}' closed")
+    if _get(session, "iterm_session_id", "") != _get(pr, "owner_session_id",
+                                                     ""):
+        return ("gone", f"'{owner}' was rebound to a different tab since the "
+                        f"PR was claimed")
+    return ("ok", owner)
+
+
 # --- restore / clean planning (pure; rows in, plans out) ----------------------
 
 def _nondone_ids(tasks, owner):
