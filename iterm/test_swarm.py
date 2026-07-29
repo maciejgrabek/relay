@@ -12,7 +12,7 @@ from swarm import (  # noqa: E402
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
-    wipe_plan_text,
+    wipe_plan_text, parse_pr_ref, resolve_pr_route,
 )
 
 
@@ -452,6 +452,50 @@ def run():
     ok &= check("worktree_removals: carries repo + workdir for the git call",
                 any(r["name"] == "w-clean" and r["repo"] == "/repo"
                     and r["workdir"] == "/repo-w-clean" for r in rem))
+
+    # --- PR ref parsing -----------------------------------------------------
+    ok &= check("parse_pr_ref splits owner/name#number",
+                swarm.parse_pr_ref("acme/api#482") == ("acme/api", 482))
+    ok &= check("parse_pr_ref accepts dots and dashes in the repo",
+                swarm.parse_pr_ref("my-org/api.core#7")
+                == ("my-org/api.core", 7))
+    for bad in ("acme/api", "482", "acme/api#", "#482", "acme#482",
+                "acme/api#abc", "a/b#1#2", "", "acme/api#-1"):
+        ok &= check(f"parse_pr_ref rejects {bad!r}",
+                    swarm.parse_pr_ref(bad) is None)
+
+    # --- route resolution ---------------------------------------------------
+    live = {"name": "api-worker", "iterm_session_id": "SID-A", "closed_at": 0}
+    pr = {"owner": "api-worker", "owner_session_id": "SID-A"}
+    ok &= check("routable when the owner session is the claiming session",
+                swarm.resolve_pr_route(pr, live) == ("ok", "api-worker"))
+
+    ok &= check("no row at all is unclaimed",
+                swarm.resolve_pr_route(None, None)[0] == "unclaimed")
+    ok &= check("a row the sweep pushed but nobody claimed is unclaimed",
+                swarm.resolve_pr_route(
+                    {"owner": "", "owner_session_id": ""}, None)[0]
+                == "unclaimed")
+
+    st, why = swarm.resolve_pr_route(pr, None)
+    ok &= check("owner name no longer registered is gone", st == "gone")
+    ok &= check("gone reason names the missing session",
+                "api-worker" in why)
+
+    st, why = swarm.resolve_pr_route(
+        pr, {"name": "api-worker", "iterm_session_id": "SID-A",
+             "closed_at": 123.0})
+    ok &= check("closed owner session is gone", st == "gone")
+    ok &= check("gone reason says closed", "closed" in why)
+
+    # The bug owner_session_id exists to prevent: the name was reclaimed by a
+    # different tab, which never saw this branch.
+    st, why = swarm.resolve_pr_route(
+        pr, {"name": "api-worker", "iterm_session_id": "SID-Z",
+             "closed_at": 0})
+    ok &= check("name rebound to a different tab is gone, NOT routable",
+                st == "gone")
+    ok &= check("gone reason says rebound", "rebound" in why)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
