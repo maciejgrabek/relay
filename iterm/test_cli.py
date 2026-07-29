@@ -860,6 +860,44 @@ def run():
         os.environ.pop("RELAY_UPDATE_STAMP", None)
         os.environ.pop("RELAY_NO_AUTOUPDATE", None)
 
+    # --- relay pr set / claim / list ----------------------------------------
+    run_cli("register", "--name", "api-worker", "--role", "worker",
+            "--project", "webshop", iterm_id="w0t1p0:PR-ID")
+
+    rc, out, err = run_cli("pr", "set", "acme/api#482", "--state", "changes",
+                         "--title", "Add rate limiting")
+    ok &= check("pr set exits 0", rc == 0)
+    ok &= check("pr set confirms the ref and state",
+                "acme/api#482" in out and "changes" in out)
+
+    rc, out, err = run_cli("pr", "set", "acme/api#482", "--state", "sideways")
+    ok &= check("pr set rejects an unknown state with usage exit 2", rc == 2)
+
+    rc, out, err = run_cli("pr", "set", "acme/api", "--state", "changes")
+    ok &= check("pr set rejects a malformed ref", rc == 1)
+    ok &= check("the malformed-ref error teaches the format",
+                "owner/name#number" in err)
+
+    rc, out, err = run_cli("pr", "claim", "acme/api#482", "--task", "14")
+    ok &= check("pr claim exits 0", rc == 0)
+    ok &= check("pr claim names the owner it recorded", "api-worker" in out)
+
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("pr list shows the PR, its state and its owner",
+                "acme/api#482" in out and "changes" in out
+                and "api-worker" in out)
+    ok &= check("pr list shows the age of the report next to the state",
+                "ago" in out or "s " in out)
+
+    run_cli("pr", "set", "acme/bff#77", "--state", "review")
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("an unclaimed PR is listed and marked UNCLAIMED",
+                "acme/bff#77" in out and "UNCLAIMED" in out)
+
+    rc, out, err = run_cli("pr", "list", "--mine")
+    ok &= check("--mine hides PRs this session did not claim",
+                "acme/api#482" in out and "acme/bff#77" not in out)
+
     # --- bin/relay routes every CLI verb ---------------------------------
     # bin/relay dispatches on a hardcoded case list; a verb missing from it does
     # NOT error, it falls through and launches a second TUI. That is how `relay
