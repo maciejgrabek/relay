@@ -716,6 +716,20 @@ def run():
                 code == 1 and ("names" in err or "takes no" in err))
     wc.close()
 
+    # --- reserved names are blocked system-wide, not just at cmd_register ---
+    # relay spawn never checks args.name itself; it goes through
+    # spawn.spawn_worker -> db.register directly. The stubbed _fake_spawn
+    # above calls the real db.register, so this exercises the db.register
+    # guard (not a cli.py-level one) - without it, `relay spawn --name human`
+    # would create a live session literally named 'human', and the watcher
+    # would inject the operator's escalations straight into it.
+    code, out, err = run_cli("spawn", "watch the PRs", "--name", "human",
+                             "--project", "webshop", iterm_id="w0t0p0:CO-ID")
+    ok &= check("spawn --name human fails instead of creating a session",
+                code == 1 and db.get_session(conn, "human") is None)
+    ok &= check("spawn --name human error explains the reservation",
+                "reserved" in err)
+
     # --- spawn --worktree -----------------------------------------------------
     import subprocess
     repo = os.path.join(tempfile.mkdtemp(), "webshop")
