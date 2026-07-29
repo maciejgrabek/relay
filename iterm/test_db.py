@@ -16,6 +16,14 @@ def check(msg, cond):
     return bool(cond)
 
 
+def _raises(fn):
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 def _tmpdb():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -676,6 +684,84 @@ def run():
     finally:
         db._MIGRATIONS = saved_migrations
     rconn.close()
+
+    # --- prs ----------------------------------------------------------------
+    row = db.upsert_pr(conn, "acme/api", 482, project="webshop",
+                       state="created", title="Add rate limiting",
+                       branch="relay/api-worker", now=1000.0)
+    ok &= check("upsert_pr creates a row with no owner",
+                row["repo"] == "acme/api" and row["number"] == 482
+                and row["owner"] == "" and row["state"] == "created")
+    ok &= check("upsert_pr stamps state_changed_at and updated_at",
+                row["state_changed_at"] == 1000.0
+                and row["updated_at"] == 1000.0)
+
+    same = db.upsert_pr(conn, "acme/api", 482, state="created", now=2000.0)
+    ok &= check("re-upsert with the SAME state moves updated_at only",
+                same["updated_at"] == 2000.0
+                and same["state_changed_at"] == 1000.0)
+
+    moved = db.upsert_pr(conn, "acme/api", 482, state="changes", now=3000.0)
+    ok &= check("upsert with a NEW state re-stamps state_changed_at",
+                moved["state"] == "changes"
+                and moved["state_changed_at"] == 3000.0)
+    ok &= check("upsert preserves fields it was not given",
+                moved["title"] == "Add rate limiting"
+                and moved["branch"] == "relay/api-worker")
+
+    ok &= check("upsert_pr rejects an unknown state", _raises(
+        lambda: db.upsert_pr(conn, "acme/api", 482, state="merged-ish")))
+
+    claimed = db.claim_pr(conn, "acme/api", 482, owner="api-worker",
+                          owner_session_id="SID-A", task_id=14, now=4000.0)
+    ok &= check("claim_pr records owner, session id and task",
+                claimed["owner"] == "api-worker"
+                and claimed["owner_session_id"] == "SID-A"
+                and claimed["task_id"] == 14
+                and claimed["claimed_at"] == 4000.0)
+    ok &= check("claim_pr does not disturb state",
+                claimed["state"] == "changes")
+
+    fresh = db.claim_pr(conn, "acme/web", 31, owner="fe-worker",
+                        owner_session_id="SID-B", project="webshop",
+                        now=4100.0)
+    ok &= check("claim_pr creates the row when the sweep never saw the PR",
+                fresh["number"] == 31 and fresh["state"] == "created")
+
+    reclaim = db.claim_pr(conn, "acme/api", 482, owner="api-worker",
+                          owner_session_id="SID-C", now=5000.0)
+    ok &= check("re-claiming overwrites the session id (restore case)",
+                reclaim["owner_session_id"] == "SID-C")
+
+    ok &= check("get_pr finds by ref",
+                db.get_pr(conn, "acme/api", 482)["id"] == claimed["id"])
+    ok &= check("get_pr returns None for an unknown ref",
+                db.get_pr(conn, "acme/api", 999) is None)
+
+    ok &= check("list_prs is ordered by repo then number",
+                [(r["repo"], r["number"]) for r in db.list_prs(conn)]
+                == [("acme/api", 482), ("acme/web", 31)])
+    ok &= check("list_prs --owner filters",
+                [r["number"] for r in db.list_prs(conn, owner="fe-worker")]
+                == [31])
+    ok &= check("list_prs --since filters on updated_at",
+                [r["number"] for r in db.list_prs(conn, since=4050.0)] == [31])
+
+    db.touch_pr_routed(conn, "acme/api", 482, now=6000.0)
+    ok &= check("touch_pr_routed stamps last_routed_at",
+                db.get_pr(conn, "acme/api", 482)["last_routed_at"] == 6000.0)
+
+    # retention: merged/closed prune, open never does, at any age
+    db.upsert_pr(conn, "acme/api", 400, state="merged", now=1.0)
+    db.upsert_pr(conn, "acme/api", 401, state="closed", now=1.0)
+    db.upsert_pr(conn, "acme/api", 402, state="review", now=1.0)
+    n = db.prune_prs(conn, 7, now=1.0 + 8 * 86400)
+    ok &= check("prune_prs drops old merged and closed rows", n == 2)
+    ok &= check("prune_prs never drops an open PR, however old",
+                db.get_pr(conn, "acme/api", 402) is not None)
+
+    ok &= check("RESERVED_NAMES covers relay and human",
+                set(db.RESERVED_NAMES) == {"relay", "human"})
 
     conn.close()
     print()
