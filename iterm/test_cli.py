@@ -983,6 +983,8 @@ def run():
     ok &= check("doctor reports PR counts", "PULL REQUESTS" in out)
     ok &= check("doctor surfaces PRs that cannot be routed",
                 "unclaimed" in out.lower() or "UNCLAIMED" in out)
+    ok &= check("doctor flagged rows show age of state report",
+                " ago " in out)
 
     # Restore the file's ambient identity so tests defined after this block
     # (bin/relay verb-routing check) are unaffected.
