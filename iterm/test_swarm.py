@@ -504,6 +504,70 @@ def run():
                 st == "gone")
     ok &= check("gone reason says rebound", "rebound" in why)
 
+    # --- PR pane ------------------------------------------------------------
+    now = 10_000.0
+    sess = [{"name": "api-worker", "iterm_session_id": "SID-A",
+             "closed_at": 0, "role": "worker", "project": "webshop",
+             "status_text": ""}]
+    prs = [
+        {"repo": "acme/api", "number": 482, "state": "changes",
+         "state_changed_at": now - 4 * 3600, "owner": "api-worker",
+         "owner_session_id": "SID-A", "task_id": 14, "project": "webshop"},
+        {"repo": "acme/bff", "number": 77, "state": "changes",
+         "state_changed_at": now - 86400, "owner": "",
+         "owner_session_id": "", "task_id": None, "project": "webshop"},
+        {"repo": "acme/api", "number": 480, "state": "merged",
+         "state_changed_at": now - 2 * 86400, "owner": "api-worker",
+         "owner_session_id": "SID-A", "task_id": 11, "project": "webshop"},
+    ]
+    rows = swarm.pr_rows(prs, sess, now)
+    ok &= check("pr_rows preserves the stable repo/number order it was given",
+                [r["ref"] for r in rows]
+                == ["acme/api#482", "acme/bff#77", "acme/api#480"])
+    ok &= check("changes-requested is flagged for attention",
+                rows[0]["flag"] is True)
+    ok &= check("an unclaimed PR is flagged and labelled UNCLAIMED",
+                rows[1]["flag"] is True
+                and rows[1]["owner_label"] == "UNCLAIMED")
+    ok &= check("a merged PR is not flagged", rows[2]["flag"] is False)
+
+    gone_rows = swarm.pr_rows(
+        [dict(prs[0], owner_session_id="SID-OLD")], sess, now)
+    ok &= check("an owner whose name was rebound is flagged GONE",
+                gone_rows[0]["flag"] is True
+                and "GONE" in gone_rows[0]["owner_label"])
+
+    text = "\n".join(swarm.render_prs(rows, width=100))
+    ok &= check("the pane shows the age beside every state, never a bare "
+                "state", text.count("4h") >= 1 and text.count("1d") >= 1)
+    ok &= check("flagged rows are duplicated into an attention strip above",
+                text.count("acme/api#482") == 2)
+    ok &= check("unflagged rows appear exactly once",
+                text.count("acme/api#480") == 1)
+    ok &= check("the attention strip sits above the separator",
+                text.index("acme/api#482")
+                < text.index("─") < text.rindex("acme/api#482"))
+
+    ok &= check("render_prs is empty for no PRs", swarm.render_prs([], 100) == [])
+
+    ok &= check("the fleet line counts PRs and how many need work",
+                "PRs 3 · 2 need work"
+                in swarm.fleet_line(sess, [], prs=rows))
+
+    full = swarm.render_swarm(sess, [], [], now, width=100, prs=prs)
+    ok &= check("render_swarm includes the PR pane", "PULL REQUESTS" in full)
+    ok &= check("render_swarm still works with no prs argument at all",
+                "PULL REQUESTS" not in swarm.render_swarm(sess, [], [], now,
+                                                          width=100))
+
+    kb = swarm.render_swarm(
+        sess,
+        [{"id": 14, "project": "webshop", "parent_id": None, "state": "doing",
+          "title": "rate limiting", "owner": "api-worker"}],
+        [], now, width=120, prs=prs)
+    ok &= check("a task with a PR shows it on its kanban card",
+                "PR 482" in kb)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
