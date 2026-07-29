@@ -237,6 +237,11 @@ def register(conn, name: str, iterm_session_id: str, role: str,
     without --project must not wipe its pre-registered project). Also clears
     closed_at: a re-register revives a session that was previously marked
     closed."""
+    if name in RESERVED_NAMES:
+        raise ValueError(
+            f"'{name}' is reserved - 'relay' is the sender of system "
+            f"wake-ups and 'human' is the operator's escalation mailbox; "
+            f"pick another name")
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     t = _now(now)

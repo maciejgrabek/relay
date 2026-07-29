@@ -166,6 +166,23 @@ def run():
     except ValueError:
         ok &= check("bad role raises", True)
 
+    # Reserved names rejected system-wide, not just at the cmd_register
+    # call site - spawn.spawn_worker and any other caller goes through
+    # db.register too, so the guard belongs here.
+    for reserved in db.RESERVED_NAMES:
+        try:
+            db.register(conn, reserved, "U-RES", "worker", "p")
+            ok &= check(f"db.register raises for reserved name {reserved!r}",
+                        False)
+        except ValueError as e:
+            ok &= check(f"db.register raises for reserved name {reserved!r}",
+                        "reserved" in str(e))
+    ok &= check("db.register still accepts an ordinary name",
+                db.register(conn, "not-reserved", "U-OK", "worker", "p")
+                is None
+                and db.get_session(conn, "not-reserved") is not None)
+    db.delete_session(conn, "not-reserved")   # keep later session-count checks intact
+
     # status
     ok &= check("set_status on registered -> True",
                 db.set_status(conn, "bff-worker", "working on #14", now=300.0))
