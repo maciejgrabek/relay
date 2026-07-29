@@ -812,6 +812,21 @@ def cmd_doctor(args) -> int:
         for s in orphans:
             print(f"    {s['name']} (workdir: {s['workdir'] or 'unknown'})")
 
+    prs = [dict(r) for r in db.list_prs(conn)]
+    if prs:
+        rows = swarm.pr_rows(prs, [dict(s) for s in db.list_sessions(conn)],
+                             time.time())
+        by_state = {}
+        for r in rows:
+            by_state[r["state"]] = by_state.get(r["state"], 0) + 1
+        print()
+        print("PULL REQUESTS  " + " · ".join(
+            f"{k} {v}" for k, v in sorted(by_state.items())))
+        for r in rows:
+            if r["flag"]:
+                print(f"  ‼ {r['ref']:<22} {r['state']:<9} "
+                      f"{r['owner_label']}")
+
     _doctor_notify()
     _doctor_statusbar(cfg)
     return 0

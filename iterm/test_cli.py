@@ -977,6 +977,13 @@ def run():
     rc, out, err = run_cli("send", "--human", "--pr", "acme/api#482", "both")
     ok &= check("two target forms at once is an error", rc != 0)
 
+    # --- doctor reports PR health ---
+    rc, out, err = run_cli("doctor")
+    ok &= check("doctor exits 0", rc == 0)
+    ok &= check("doctor reports PR counts", "PULL REQUESTS" in out)
+    ok &= check("doctor surfaces PRs that cannot be routed",
+                "unclaimed" in out.lower() or "UNCLAIMED" in out)
+
     # Restore the file's ambient identity so tests defined after this block
     # (bin/relay verb-routing check) are unaffected.
     os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
