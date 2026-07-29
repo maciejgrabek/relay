@@ -916,11 +916,18 @@ def run():
                 "acme/api#482" in out and "acme/bff#77" not in out)
 
     # --- relay send --pr ----------------------------------------------------
-    cli.main(["register", "--name", "pr-sweep", "--role", "coordinator",
-              "--project", "webshop"])
+    # pr-sweep gets its OWN iterm id, distinct from api-worker's (PR-ID): two
+    # session rows must never share one id, or whoami()'s
+    # get_by_iterm_id (no ORDER BY) resolves "me" non-deterministically.
+    run_cli("register", "--name", "pr-sweep", "--role", "coordinator",
+            "--project", "webshop", iterm_id="w0t9p0:SWEEP-ID")
 
+    # Every send below runs AS pr-sweep. iterm_id is set explicitly on this
+    # first call only; it stays ambient (ITERM_SESSION_ID) for the rest of
+    # the block, since nothing else in the block changes it.
     rc, out, err = run_cli("send", "--pr", "acme/api#482",
-                         "changes requested: tighten the rate limit test")
+                         "changes requested: tighten the rate limit test",
+                         iterm_id="w0t9p0:SWEEP-ID")
     ok &= check("routing to a live claiming session exits 0", rc == 0)
     ok &= check("success names the resolved owner", "api-worker" in out)
 
@@ -931,7 +938,8 @@ def run():
     rc, out, err = run_cli("send", "--pr", "acme/nope#1", "please fix")
     ok &= check("a PR relay never heard of also exits 3", rc == 3)
 
-    # Rebind api-worker to a DIFFERENT tab, then route again.
+    # Rebind api-worker's NAME to a different tab (not pr-sweep's id, which
+    # is untouched), then route again.
     _rebind("api-worker", "SID-OTHER")
     rc, out, err = run_cli("send", "--pr", "acme/api#482", "please fix")
     ok &= check("a rebound owner exits 4, not 0", rc == 4)
@@ -940,7 +948,7 @@ def run():
     rc, out, err = run_cli("send", "--pr", "acme/api", "please fix")
     ok &= check("a malformed ref is a plain user error (exit 1)", rc == 1)
 
-    # --- relay send --human -------------------------------------------------
+    # --- relay send --human (still as pr-sweep) ------------------------------
     rc, out, err = run_cli("send", "--human", "PR 77 is unclaimed - who owns it?")
     ok &= check("send --human exits 0", rc == 0)
     ok &= check("the human escalation is stored undelivered as an escalation",
@@ -954,6 +962,10 @@ def run():
 
     rc, out, err = run_cli("send", "--human", "--pr", "acme/api#482", "both")
     ok &= check("two target forms at once is an error", rc != 0)
+
+    # Restore the file's ambient identity so tests defined after this block
+    # (bin/relay verb-routing check) are unaffected.
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
     # --- bin/relay routes every CLI verb ---------------------------------
     # bin/relay dispatches on a hardcoded case list; a verb missing from it does
