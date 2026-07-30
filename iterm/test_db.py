@@ -37,8 +37,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 8",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 8)
+    ok &= check("fresh connect stamps user_version = 9",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 9)
 
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
@@ -59,12 +59,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 8
+                mig.execute("PRAGMA user_version").fetchone()[0] == 9
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 8
+                mig.execute("PRAGMA user_version").fetchone()[0] == 9
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -182,6 +182,41 @@ def run():
                 is None
                 and db.get_session(conn, "not-reserved") is not None)
     db.delete_session(conn, "not-reserved")   # keep later session-count checks intact
+
+    # --- v8 -> v9: legacy 'human' session row cleared (Finding 1 fix) --------
+    # RESERVED_NAMES was only ever enforced by db.register - a DB written
+    # before that guard existed (or before 'human' was reserved at all) can
+    # hold a real, deliverable 'human' sessions row. Hand-build a v8 DB
+    # (current shape, PRAGMA user_version=8) with such a row already present,
+    # plus a task it owns, and confirm connect() clears the row but leaves
+    # the task alone.
+    import sqlite3 as _sq9
+    hpath = os.path.join(tempfile.mkdtemp(), "legacy-human.db")
+    hold = _sq9.connect(hpath)
+    hold.executescript(db._SCHEMA)
+    hold.executescript(db._INDEXES)
+    hold.execute(
+        "INSERT INTO sessions(name, iterm_session_id, role, project, "
+        "status_text, registered_at, last_seen) VALUES('human', 'H-SID', "
+        "'worker', 'p', '', 1.0, 1.0)")
+    hold.execute(
+        "INSERT INTO tasks(project, title, state, owner, blocked_by, "
+        "updated_at) VALUES('p', 'legacy human task', 'todo', 'human', "
+        "'', 1.0)")
+    hold.execute("PRAGMA user_version = 8")
+    hold.commit()
+    hold.close()
+    hmig = db.connect(hpath)
+    ok &= check("v8 -> v9 migration runs",
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 9)
+    ok &= check("legacy 'human' session row is cleared",
+                db.get_session(hmig, "human") is None)
+    legacy_task = hmig.execute(
+        "SELECT * FROM tasks WHERE title='legacy human task'").fetchone()
+    ok &= check("the session's task survives the migration untouched",
+                legacy_task is not None and legacy_task["owner"] == "human"
+                and legacy_task["state"] == "todo")
+    hmig.close()
 
     # status
     ok &= check("set_status on registered -> True",
@@ -368,8 +403,8 @@ def run():
     # --- v5: message kind + worktree_repo ------------------------------------
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
-    ok &= check("fresh DB is schema v8",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 8)
+    ok &= check("fresh DB is schema v9",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 9)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -411,7 +446,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up.execute("PRAGMA user_version").fetchone()[0] == 9)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -569,7 +604,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 9)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -642,7 +677,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 9)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")

@@ -358,6 +358,23 @@ async def deliver_tests():
     chk("dry-run: not marked delivered", 11 not in delivered)
     chk("dry-run: audited once, second call does not re-audit", len(would) == 1)
 
+    # RESERVED NAME: even with a live registry row bound to 'human' (the
+    # legacy-DB reproduction from Finding 1 - a row db.register would refuse
+    # to create today but an upgraded DB can still contain), _deliver must
+    # refuse to inject, without even querying the DB.
+    q5 = {"n": 0}
+
+    def _counting_undelivered5(conn, name=None):
+        q5["n"] += 1
+        return [{"id": 13, "from_name": "coord", "body": "escalation leak"}]
+    W.swarmdb.undelivered = _counting_undelivered5
+    info5, fs5 = _mk(w, "sid5", "human")
+    w.dry_run = False
+    await w._deliver(info5)
+    chk("reserved name: no DB query", q5["n"] == 0)
+    chk("reserved name: nothing sent", fs5.sent == [])
+    chk("reserved name: not marked delivered", 13 not in delivered)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

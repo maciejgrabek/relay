@@ -764,6 +764,15 @@ class Watcher:
         reg = self.registry.get(info.session_id)
         if not reg:
             return
+        if reg["name"] in swarmdb.RESERVED_NAMES:
+            # Defense in depth: db.register refuses NEW registrations under a
+            # reserved name, but a DB populated before that guard (or before a
+            # name was reserved at all) can still hold a live `sessions` row
+            # bound to one - migration 9 clears the known legacy case ('human')
+            # but this is the leg that actually injects text into a tab, so it
+            # must refuse on its own, unconditionally, regardless of what the
+            # sessions table currently contains.
+            return
         if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
             return
         try:
