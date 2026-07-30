@@ -149,7 +149,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 8
+_CURRENT_VERSION = 9
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -187,6 +187,22 @@ _MIGRATIONS = {
         "GROUP BY iterm_session_id, key)",
         "CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers"
         "(iterm_session_id, key) WHERE key != ''"),
+    # v9: RESERVED_NAMES ('relay', 'human') was only ever enforced by
+    # db.register - a DB populated before that guard existed (or before
+    # 'human' was reserved at all) can hold a real, deliverable `sessions`
+    # row named 'human'. That row is exactly the operator's escalation
+    # mailbox name, so `relay send --human` would queue a message that a
+    # live registered tab then receives as typed input - the one thing the
+    # escalation channel promises never to do. DELETE, not rename: the goal
+    # is simply "no session may ever be bound to a reserved name" and a
+    # plain delete is the smallest change that guarantees it. This is
+    # deliberately NOT reset_owner_tasks/delete_tasks_for_owner - the tasks
+    # table has no foreign key on sessions.name, so removing the sessions
+    # row does not touch a single task row; any task this session owned
+    # keeps owner='human' exactly as it was, still visible via `relay task
+    # list` and reassignable by `relay clean`/`relay task update`. A no-op
+    # DELETE (no such row) is the common case and costs nothing.
+    8: ("DELETE FROM sessions WHERE name = 'human'",),
 }
 
 
