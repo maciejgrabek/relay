@@ -1000,6 +1000,38 @@ def run():
     rc, out, err = run_cli("send", "--pr", "acme/api", "please fix")
     ok &= check("a malformed ref is a plain user error (exit 1)", rc == 1)
 
+    # --- Finding 2: positional recipient + flag target, and --pr "" --------
+    # The mutual-exclusion guard used to count only --all/--pr/--human,
+    # ignoring a positional recipient entirely - so `send <name> --human ...`
+    # silently discarded <name> and escalated instead. Each of these must now
+    # be a loud argument error, and nothing gets queued.
+    before = len(db.undelivered(conn, "api-worker"))
+    rc, out, err = run_cli("send", "api-worker", "--human", "MEANT-FOR-WORKER")
+    ok &= check("positional recipient + --human is an error, not a silent "
+                "escalation that drops the recipient",
+                rc != 0 and "api-worker" in err)
+    ok &= check("...and nothing was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "api-worker", "--pr", "acme/api#482",
+                          "MEANT-FOR-WORKER")
+    ok &= check("positional recipient + --pr is an error, not a silent "
+                "route to the PR claimant",
+                rc != 0 and "api-worker" in err)
+    ok &= check("...and nothing new was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "--pr", "acme/api#482", "body", "extra")
+    ok &= check("--pr with two positionals is an error - 'body' is never "
+                "silently dropped in favor of 'extra'", rc != 0)
+    ok &= check("...and nothing new was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "--pr", "", "please fix")
+    ok &= check("an explicit empty --pr ref is a malformed-ref error, not a "
+                "fall-through to the plain <name> path",
+                rc == 1 and "owner/name#number" in err)
+
     # --- relay send --human (still as pr-sweep) ------------------------------
     rc, out, err = run_cli("send", "--human", "PR 77 is unclaimed - who owns it?")
     ok &= check("send --human exits 0", rc == 0)

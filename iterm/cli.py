@@ -225,26 +225,46 @@ def cmd_send(args) -> int:
     if not _KIND_RE.match(kind):
         return _err(f"--kind must be one short lowercase token "
                     f"(a-z, 0-9, -, _), got {kind!r}")
-    targets = sum(1 for f in (args.all, args.pr, args.human) if f)
-    if targets > 1:
+    # Flag targets (--all/--pr/--human) take no separate recipient name - the
+    # positional `to` slot holds the message BODY instead, since there is
+    # nothing else for it to hold. `--pr` is checked by presence, not
+    # truthiness: `--pr ""` is an explicitly-passed (if malformed) ref, and
+    # treating it as "no --pr" would silently fall through to the plain
+    # <name> path below instead of hitting the malformed-ref error.
+    picked = [name for name, on in
+              (("--all", args.all), ("--pr", args.pr is not None),
+               ("--human", args.human)) if on]
+    if len(picked) > 1:
         return _err("pick one target: a name, --all, --pr, or --human")
 
-    if args.human:
+    if picked:
+        # A flag target takes at most ONE positional (the body). Two
+        # positionals means a recipient name was given alongside the flag -
+        # e.g. `relay send api-worker --human "..."` or
+        # `relay send --pr <ref> "body" "extra"` - which is a conflicting
+        # instruction, not something to resolve by silently keeping one
+        # positional and discarding the other.
+        if args.to is not None and args.body is not None:
+            return _err(f"{picked[0]} takes only the message body - got both "
+                        f"'{args.to}' and a separate body; drop one")
         body = args.to if args.body is None else args.body
+    else:
+        body = args.body
+
+    if args.human:
         if not body:
             return _err('usage: relay send --human "<body>"')
         db.queue_message(conn, me["name"], HUMAN, body, me["project"],
                          kind="escalation")
-        print("escalated to the human (sound + notification; not injected "
-              "into any session)")
+        print("escalated to the human (pings the operator when the relay "
+              "TUI is running; never injected into any session)")
         return 0
 
-    if args.pr:
+    if args.pr is not None:
         ref, rc = _pr_ref_or_err(args.pr)
         if ref is None:
             return rc
         repo, number = ref
-        body = args.to if args.body is None else args.body
         if not body:
             return _err('usage: relay send --pr <owner/name>#<n> "<body>"')
         row = db.get_pr(conn, repo, number)
@@ -268,13 +288,10 @@ def cmd_send(args) -> int:
         return 0
 
     if args.all:
-        if args.body is not None:
-            return _err("with --all, pass only the message body")
-        if args.to is None:
+        if body is None:
             return _err("message body required")
         if not args.project:
             return _err("--all requires --project")
-        body = args.to
         targets = [s for s in db.list_sessions(conn, args.project)
                    if s["name"] != me["name"] and not s["closed_at"]]
         if not targets:
