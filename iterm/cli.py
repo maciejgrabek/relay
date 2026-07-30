@@ -26,9 +26,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import db      # noqa: E402
-import swarm   # noqa: E402
-import timers  # noqa: E402
+import db        # noqa: E402
+import protocol  # noqa: E402
+import swarm     # noqa: E402
+import timers    # noqa: E402
 
 
 def my_iterm_id():
@@ -259,6 +260,19 @@ def cmd_msgs(args) -> int:
         tag = f" [{k}]" if k != "info" else ""
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(m['created_at']))} "
               f"{m['from_name']} -> {m['to_name']}{tag}: {m['body']}{tick}")
+    return 0
+
+
+def cmd_help(args) -> int:
+    """Teach without touching state. Registering is an explicit act, and a
+    session reading the rules must be able to do so before committing to
+    them."""
+    if not args.topic:
+        print("relay help <topic>\n")
+        for name in protocol.TOPICS:
+            print(f"  {name}")
+        return 0
+    print(protocol.TOPICS[args.topic], end="")
     return 0
 
 
@@ -1287,6 +1301,12 @@ def build_parser() -> argparse.ArgumentParser:
     ms.add_argument("--with", dest="with_name", default=None)
     ms.add_argument("--project", default=None)
     ms.set_defaults(fn=cmd_msgs)
+
+    hp = sub.add_parser("help", help="print the swarm protocol (registers "
+                                     "nothing)")
+    hp.add_argument("topic", nargs="?", default=None,
+                    choices=sorted(protocol.TOPICS))
+    hp.set_defaults(fn=cmd_help)
 
     t = sub.add_parser("task", help="task board verbs")
     tsub = t.add_subparsers(dest="task_verb", required=True)
