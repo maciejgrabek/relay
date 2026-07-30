@@ -53,6 +53,13 @@ def _one_message(to_name):
     return row
 
 
+def _session_count():
+    c = db.connect()
+    n = c.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    c.close()
+    return n
+
+
 def run():
     ok = True
 
@@ -985,6 +992,28 @@ def run():
                 "unclaimed" in out.lower() or "UNCLAIMED" in out)
     ok &= check("doctor flagged rows show age of state report",
                 " ago " in out)
+
+    # --- relay help ------------------------------------------------------
+    rc, out, err = run_cli("help", "swarm")
+    ok &= check("relay help swarm exits 0", rc == 0)
+    ok &= check("relay help swarm prints the protocol",
+                "relay inbox" in out and "heartbeat" in out)
+
+    rc, out, err = run_cli("help", "pr")
+    ok &= check("relay help pr prints the PR protocol",
+                "relay pr claim" in out)
+
+    rc, out, err = run_cli("help")
+    ok &= check("bare relay help lists the topics", rc == 0
+                and "swarm" in out and "pr" in out)
+
+    rc, out, err = run_cli("help", "nonsense")
+    ok &= check("an unknown topic is a usage error", rc == 2)
+
+    _before = _session_count()
+    run_cli("help", "swarm")
+    ok &= check("relay help NEVER registers anything",
+                _session_count() == _before)
 
     # Restore the file's ambient identity so tests defined after this block
     # (bin/relay verb-routing check) are unaffected.
