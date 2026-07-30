@@ -4,6 +4,16 @@ Shared by the relay-worker and relay-coordinator skills. All verbs resolve
 "me" from $ITERM_SESSION_ID automatically - run them via the Bash tool from
 inside your session. Errors print to stderr with a non-zero exit.
 
+    relay join <name> [--role worker|coordinator] [--project <p>]
+        START HERE. Registers this session AND prints, in one go: who else is
+        in the swarm, anything already queued for you, and the protocol you
+        are expected to follow. Safe to re-run - it rebinds the name to this
+        tab and re-reads your inbox. `relay register` is the same binding
+        without the teaching.
+
+    relay help swarm | relay help pr
+        The protocol text alone, registering nothing.
+
     relay register --name <name> --role worker|coordinator [--project <p>]
         Bind this session to a swarm name. Re-running rebinds (safe).
 

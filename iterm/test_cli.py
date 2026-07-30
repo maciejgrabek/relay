@@ -60,6 +60,14 @@ def _session_count():
     return n
 
 
+def _sess(name):
+    c = db.connect()
+    row = c.execute("SELECT * FROM sessions WHERE name = ?",
+                    (name,)).fetchone()
+    c.close()
+    return row
+
+
 def run():
     ok = True
 
@@ -1017,6 +1025,46 @@ def run():
 
     # Restore the file's ambient identity so tests defined after this block
     # (bin/relay verb-routing check) are unaffected.
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- relay join ---------------------------------------------------------
+    rc, out, err = run_cli("join", "w1")
+    ok &= check("join exits 0", rc == 0)
+    ok &= check("join registers the session", _sess("w1") is not None)
+    ok &= check("join defaults the role to worker",
+                _sess("w1")["role"] == "worker")
+    ok &= check("join prints the protocol", "relay inbox" in out
+                and "heartbeat" in out)
+    ok &= check("join prints the roster so it knows who to talk to",
+                "SWARM" in out or "roster" in out.lower())
+
+    # A second session, in a different tab, joining sees the first in the
+    # roster. run_cli's iterm_id kwarg is how this file already switches tabs,
+    # and it PERSISTS - every later call runs as that tab until changed, so
+    # each step below states the tab it means.
+    rc, out, err = run_cli("join", "w2", iterm_id="w0t2p0:BBBB-2222")
+    ok &= check("join lists the sessions already present", "w1" in out)
+    ok &= check("join defaults project to the single active project",
+                _sess("w2")["project"] == _sess("w1")["project"])
+
+    # w1 messages w2, then w2 re-joins and finds it waiting.
+    run_cli("send", "w2", "welcome aboard", iterm_id="w0t1p0:AAAA-1111")
+    rc, out, err = run_cli("join", "w2", iterm_id="w0t2p0:BBBB-2222")
+    ok &= check("re-joining shows queued messages", "welcome aboard" in out)
+    ok &= check("re-joining is safe and still exits 0", rc == 0)
+
+    rc, out, err = run_cli("join", "human")
+    ok &= check("join rejects the reserved name 'human'", rc == 1)
+    rc, out, err = run_cli("join", "relay")
+    ok &= check("join rejects the reserved name 'relay'", rc == 1)
+    ok &= check("a rejected join registers nothing", _sess("human") is None)
+
+    rc, out, err = run_cli("join", "w3", "--role", "coordinator",
+                           iterm_id="w0t3p0:CCCC-3333")
+    ok &= check("join takes an explicit role",
+                _sess("w3")["role"] == "coordinator")
+
+    # Leave the environment as the rest of the suite expects it.
     os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
     # --- bin/relay routes every CLI verb ---------------------------------
