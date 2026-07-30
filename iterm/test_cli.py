@@ -952,6 +952,21 @@ def run():
     ok &= check("--mine hides PRs this session did not claim",
                 "acme/api#482" in out and "acme/bff#77" not in out)
 
+    # --- case-insensitive PR refs (Finding 3) --------------------------------
+    # GitHub repo names are case-insensitive. Claim in ONE case, push a state
+    # update in a DIFFERENT case, and route in yet another, end to end
+    # through the real CLI - they must all land on the same row, not split
+    # into two, and a mixed-case claim must not read back as unclaimed.
+    run_cli("pr", "claim", "Acme/CASE#900", "--task", "77",
+            iterm_id="w0t1p0:PR-ID")   # as api-worker
+    run_cli("pr", "set", "acme/CASE#900", "--state", "changes")
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("mixed-case claim/set collapse into ONE listed row",
+                out.count("acme/case#900") == 1)
+    rc, out, err = run_cli("send", "--pr", "ACME/case#900", "changes requested")
+    ok &= check("a claim made in mixed case routes via a differently-cased ref",
+                rc == 0 and "api-worker" in out)
+
     # --- relay send --pr ----------------------------------------------------
     # pr-sweep gets its OWN iterm id, distinct from api-worker's (PR-ID): two
     # session rows must never share one id, or whoami()'s

@@ -208,11 +208,18 @@ _PR_REF_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
 
 def parse_pr_ref(ref: str):
     """('acme/api', 482) or None. Strict: a caller that guesses at the format
-    gets an error, not a row written under a ref nothing will ever match."""
+    gets an error, not a row written under a ref nothing will ever match.
+
+    The repo half is lowercased: GitHub repo names are case-insensitive
+    (Acme/API and acme/api are the same repo), but idx_prs_ref is a plain
+    case-sensitive TEXT index, so without normalizing here the same PR could
+    land in two rows under different casing - one claimed, the other queried,
+    each blind to the other. Every write and lookup goes through this
+    function, so normalizing here is enough. The PR number is untouched."""
     m = _PR_REF_RE.match((ref or "").strip())
     if not m:
         return None
-    return m.group(1), int(m.group(2))
+    return m.group(1).lower(), int(m.group(2))
 
 
 def resolve_pr_route(pr, session):

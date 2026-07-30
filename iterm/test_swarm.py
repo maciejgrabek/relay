@@ -471,6 +471,17 @@ def run():
         ok &= check(f"parse_pr_ref rejects {bad!r}",
                     swarm.parse_pr_ref(bad) is None)
 
+    # GitHub repo names are case-insensitive; a mixed-case ref must resolve
+    # to the SAME (repo, number) as its lowercase form, or one PR becomes two
+    # rows under a case-sensitive index (Finding 3).
+    ok &= check("parse_pr_ref lowercases the repo",
+                swarm.parse_pr_ref("Acme/API#482") == ("acme/api", 482))
+    ok &= check("mixed case and lowercase refs parse identically",
+                swarm.parse_pr_ref("Acme/API#482")
+                == swarm.parse_pr_ref("acme/api#482"))
+    ok &= check("parse_pr_ref leaves the PR number untouched",
+                swarm.parse_pr_ref("ACME/API#007") == ("acme/api", 7))
+
     # --- route resolution ---------------------------------------------------
     live = {"name": "api-worker", "iterm_session_id": "SID-A", "closed_at": 0}
     pr = {"owner": "api-worker", "owner_session_id": "SID-A"}
