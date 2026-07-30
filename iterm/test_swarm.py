@@ -559,7 +559,15 @@ def run():
                 text.index("acme/api#482")
                 < text.index("─") < text.rindex("acme/api#482"))
 
-    ok &= check("render_prs is empty for no PRs", swarm.render_prs([], 100) == [])
+    # Empty renders like MESSAGES does - header plus a "(none)" line - so the
+    # section never looks like a missing feature, and the empty state teaches
+    # how it gets filled.
+    empty = swarm.render_prs([], 100)
+    ok &= check("render_prs still renders a header with no PRs",
+                empty[0] == "PULL REQUESTS")
+    ok &= check("the empty pane says none and names the verb that fills it",
+                len(empty) == 2 and "(none" in empty[1]
+                and "relay pr claim" in empty[1])
 
     ok &= check("the fleet line counts PRs and how many need work",
                 "PRs 3 · 2 need work"
@@ -567,9 +575,11 @@ def run():
 
     full = swarm.render_swarm(sess, [], [], now, width=100, prs=prs)
     ok &= check("render_swarm includes the PR pane", "PULL REQUESTS" in full)
-    ok &= check("render_swarm still works with no prs argument at all",
-                "PULL REQUESTS" not in swarm.render_swarm(sess, [], [], now,
-                                                          width=100))
+    noprs = swarm.render_swarm(sess, [], [], now, width=100)
+    ok &= check("render_swarm shows the PR pane even with no prs argument",
+                "PULL REQUESTS" in noprs)
+    ok &= check("that empty pane carries the (none) line, not stray rows",
+                "(none" in noprs.split("PULL REQUESTS")[1].split("MESSAGES")[0])
 
     kb = swarm.render_swarm(
         sess,
