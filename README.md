@@ -456,6 +456,15 @@ A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
 automatically), so every verb below resolves "me" without you passing an id:
 
 ```
+relay join <name> [--role worker|coordinator] [--project <p>]
+    START HERE. Registers this session AND prints, in one go: who else is
+    in the swarm, anything already queued for you, and the protocol you are
+    expected to follow. Safe to re-run. `relay register` is the same
+    binding without the teaching.
+
+relay help swarm | relay help pr
+    The protocol text alone, registering nothing.
+
 relay register --name <name> --role worker|coordinator [--project <p>]
     Bind this session to a swarm name. Re-running rebinds (safe).
 
@@ -470,6 +479,17 @@ relay send --all --project <p> "<body>" [--kind <k>]
     newlines are flattened. --kind: info (default) | done | blocked |
     escalation | a custom lowercase token ('wake' is reserved). escalation
     also pings the human immediately.
+
+relay send --pr <owner/name>#<n> "<body>" [--kind <k>]
+    Route a message to whichever session claimed that PR. Exit 3 =
+    unclaimed (nobody ran `relay pr claim`). Exit 4 = the owner session is
+    gone (closed, or its name was rebound to a different tab). Relay never
+    guesses at a substitute owner - escalate with --human on 3 or 4 instead.
+
+relay send --human "<body>"
+    Escalate to the operator: pings them (sound + notification) when the
+    relay TUI is running, and shows in the swarm feed. Never injected into
+    any session.
 
 relay inbox
     Print your undelivered messages and mark them delivered. Check it when
@@ -489,6 +509,22 @@ relay task update <id> --state todo|doing|blocked|done
 
 relay task list [--project <p>] [--mine]
     Epics with nested subtasks, states, owners, blockers.
+
+relay pr set <owner/name>#<n> --state created|review|changes|approved|merged|closed
+             [--title <t>] [--branch <b>] [--project <p>]
+    Push a PR's CURRENT state into relay. Relay never calls gh or looks at
+    GitHub - it stores what you tell it, and everything that displays a
+    state also displays how old that report is. Run it for every PR your
+    sweep sees, claimed or not.
+
+relay pr claim <owner/name>#<n> [--task <id>] [--branch <b>]
+    Record that THIS session opened this PR - run it right after
+    `gh pr create`. The only thing that makes "which session owns this PR"
+    answerable later.
+
+relay pr list [--project <p>] [--mine] [--days <n>]
+    PRs in stable order (repo, then number) with state, age of that state,
+    owner, task, and an UNCLAIMED or GONE marker.
 
 relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
             [--role worker|coordinator] [--worktree]

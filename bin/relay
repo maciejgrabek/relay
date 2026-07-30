@@ -5,7 +5,7 @@
 #                    ARMED sessions, pings you on dangerous ones, delivers
 #                    swarm messages into idle sessions)
 #   relay --dry-run  watch + notify but NEVER inject (safe first run)
-#   relay register|send|status|task|pr|inbox|msgs|spawn|doctor|clean|restore|wipe ...
+#   relay join|register|send|status|task|pr|inbox|msgs|help|spawn|doctor|clean|restore|wipe ...
 #                    swarm CLI verbs (see: relay register -h etc.)
 #   relay timer ...  register/list/remove a timer on your own tab
 #   relay demo       guided 60s tour: spawns a demo worker, you watch the loop
