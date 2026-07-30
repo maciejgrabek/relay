@@ -163,8 +163,17 @@ def cmd_join(args) -> int:
                     f"wake-ups and 'human' is the operator's escalation "
                     f"mailbox; pick another name")
     conn = db.connect()
-    project = args.project if args.project is not None else \
-        _default_project(conn)
+    existing = db.get_session(conn, name)
+    if args.project is not None:
+        project = args.project
+    elif existing is not None and existing["project"]:
+        # Reclaiming an identity (a restored worker re-running `relay join`
+        # with no --project) must keep the project it was already on - not
+        # whatever _default_project resolves to right now, which can differ
+        # once other sessions have joined other projects in the meantime.
+        project = existing["project"]
+    else:
+        project = _default_project(conn)
     db.register(conn, name, sid, args.role, project)
     db.set_session_context(conn, name, os.getcwd(),
                            db.get_session(conn, name)["spawn_prompt"])
