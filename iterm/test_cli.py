@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from contextlib import redirect_stdout, redirect_stderr
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1066,6 +1067,60 @@ def run():
 
     # Leave the environment as the rest of the suite expects it.
     os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- relay join: re-joining must never move a live session off its
+    # project (regression) ---------------------------------------------------
+    # A restored worker reclaims its identity by re-running `relay join
+    # <name>` with no --project. That must keep the project it was already
+    # on, not whatever _default_project happens to resolve to right now -
+    # which can change the moment a second project shows up in the active
+    # set. Prove it by manufacturing exactly that: one session on a known
+    # project, a second session on a DIFFERENT project (so the active-project
+    # count is no longer 1), then re-join the first with no --project.
+    rc, out, err = run_cli("join", "proj-keeper", "--project", "webshop",
+                           iterm_id="w0t4p0:DDDD-4444")
+    ok &= check("proj-keeper joins webshop explicitly", rc == 0
+                and _sess("proj-keeper")["project"] == "webshop")
+
+    rc, out, err = run_cli("join", "other-proj-worker", "--project",
+                           "otherproj", iterm_id="w0t5p0:EEEE-5555")
+    ok &= check("other-proj-worker joins a different project", rc == 0)
+
+    rc, out, err = run_cli("join", "proj-keeper", iterm_id="w0t6p0:FFFF-6666")
+    ok &= check("re-joining without --project keeps the existing project "
+                "instead of falling back to the cwd basename",
+                rc == 0 and _sess("proj-keeper")["project"] == "webshop")
+
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- cli._default_project (unit-level, isolated DB) ---------------------
+    # The end-to-end join tests above run against a shared temp DB that
+    # already holds several distinct active projects by this point, so they
+    # only ever exercise the "several projects -> cwd fallback" branch - they
+    # would still pass even if the "exactly one active project" branch were
+    # deleted outright. Test _default_project directly against a DB whose
+    # session set is fully controlled.
+    _dp_path = os.path.join(tempfile.mkdtemp(), "default-project.db")
+    dpconn = db.connect(_dp_path)
+    cwd_base = os.path.basename(os.getcwd())
+
+    ok &= check("_default_project falls back to cwd basename with zero "
+                "active projects", cli._default_project(dpconn) == cwd_base)
+
+    db.register(dpconn, "dp-a", "sid-dp-a", "worker", "solo-project")
+    ok &= check("_default_project returns the project when exactly one is "
+                "active", cli._default_project(dpconn) == "solo-project")
+
+    db.register(dpconn, "dp-b", "sid-dp-b", "worker", "second-project")
+    ok &= check("_default_project falls back to cwd basename with two or "
+                "more active projects",
+                cli._default_project(dpconn) == cwd_base)
+
+    db.mark_closed(dpconn, "dp-b", time.time())
+    ok &= check("_default_project excludes closed sessions from the active "
+                "count", cli._default_project(dpconn) == "solo-project")
+
+    dpconn.close()
 
     # --- bin/relay routes every CLI verb ---------------------------------
     # bin/relay dispatches on a hardcoded case list; a verb missing from it does
