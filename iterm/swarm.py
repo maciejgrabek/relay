@@ -627,9 +627,15 @@ def _pr_line(r, width: int, mark: str = " ") -> str:
 def render_prs(rows, width: int = 100) -> list:
     """Attention strip on top, then every PR in stable order below it. The
     main list never reorders as states change, so a row stays where the eye
-    last found it; anything urgent is DUPLICATED above rather than moved."""
+    last found it; anything urgent is DUPLICATED above rather than moved.
+
+    Always renders, like MESSAGES: a section that vanishes when empty reads
+    as "relay has no such feature" rather than "nothing here yet", and the
+    empty state is where the operator most needs telling how one gets filled."""
     if not rows:
-        return []
+        return ["PULL REQUESTS",
+                "[dim]  (none - a session records one with: "
+                "relay pr claim owner/name#482)[/dim]"]
     out = ["PULL REQUESTS"]
     flagged = [r for r in rows if r["flag"]]
     for r in flagged:
@@ -769,10 +775,8 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
                        if r["flag"] and color else _esc(line))
         out.append("")
 
-    pane = render_prs(prows, width)
-    if pane:
-        out.extend(pane)
-        out.append("")
+    out.extend(render_prs(prows, width))
+    out.append("")
 
     out.append("MESSAGES")
     for m in messages[-8:]:
