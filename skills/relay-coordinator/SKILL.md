@@ -1,6 +1,6 @@
 ---
 name: relay-coordinator
-description: Use when told you are a relay swarm coordinator - registers the session, writes specs, creates and assigns epics, spawns workers, and routes progress
+description: Use when told you are a relay swarm coordinator, or asked to split work across several Claude sessions through relay, delegate to other sessions, or drive a relay swarm - registers the session, writes specs, creates and assigns epics, spawns workers, and routes progress
 ---
 
 # Relay Swarm Coordinator
@@ -10,7 +10,9 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
 
 ## On start
 
-1. `relay register --name <your-name> --role coordinator --project <project>`
+1. Join (your name and project come from the prompt that invoked you):
+   `relay join <your-name> --role coordinator` - this registers you, shows
+   who else is here, and prints the protocol.
 2. `relay task list --project <project>` and `relay msgs --project <project>`
    to pick up any existing state.
 

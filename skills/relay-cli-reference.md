@@ -4,6 +4,16 @@ Shared by the relay-worker and relay-coordinator skills. All verbs resolve
 "me" from $ITERM_SESSION_ID automatically - run them via the Bash tool from
 inside your session. Errors print to stderr with a non-zero exit.
 
+    relay join <name> [--role worker|coordinator] [--project <p>]
+        START HERE. Registers this session AND prints, in one go: who else is
+        in the swarm, anything already queued for you, and the protocol you
+        are expected to follow. Safe to re-run - it rebinds the name to this
+        tab and re-reads your inbox. `relay register` is the same binding
+        without the teaching.
+
+    relay help swarm | relay help pr
+        The protocol text alone, registering nothing.
+
     relay register --name <name> --role worker|coordinator [--project <p>]
         Bind this session to a swarm name. Re-running rebinds (safe).
 
@@ -19,6 +29,21 @@ inside your session. Errors print to stderr with a non-zero exit.
         escalation | a custom lowercase token. 'escalation' also plays a
         sound + notification for the human IMMEDIATELY - use it only when a
         human decision is genuinely required. 'wake' is reserved.
+
+    relay send --pr <owner/name>#<n> "<body>" [--kind <k>]
+        Route a message to whichever session claimed that PR. Exit 0 and
+        prints the owner it resolved to. Exit 3 = unclaimed (nobody ran
+        `relay pr claim`). Exit 4 = the owner session is gone (closed, or its
+        name was rebound to a different tab). Relay never guesses: it will not
+        hand the PR to a different worker, because a session with no context
+        on that branch produces a plausible fix that misses the point. On 3 or
+        4, batch the misses and escalate once with --human.
+
+    relay send --human "<body>"
+        Escalate to the operator. Plays the sound, posts the notification, and
+        shows in the swarm feed. It is NEVER injected into any session, so use
+        it for the decisions only a human can make. Batch a sweep's misses into
+        one message rather than firing one per PR.
 
     relay inbox
         Print your undelivered messages and mark them delivered. Check it when
@@ -38,6 +63,25 @@ inside your session. Errors print to stderr with a non-zero exit.
 
     relay task list [--project <p>] [--mine]
         Epics with nested subtasks, states, owners, blockers.
+
+    relay pr set <owner/name>#<n> --state created|review|changes|approved|merged|closed
+                  [--title <t>] [--branch <b>] [--project <p>]
+        Push a PR's CURRENT state into relay. Relay never calls gh and never
+        looks at GitHub - it stores what you tell it, and everything that
+        displays a state also displays how old that report is. Run this for
+        every PR your sweep sees, claimed or not: an unclaimed PR that relay
+        knows about shows up as UNCLAIMED instead of being invisible.
+
+    relay pr claim <owner/name>#<n> [--task <id>] [--branch <b>]
+        Record that THIS session opened this PR. Run it immediately after
+        `gh pr create`, in the same breath as committing. This is the only
+        thing that makes "which session did this PR" answerable later - a PR
+        you do not claim can never be routed back to you automatically.
+
+    relay pr list [--project <p>] [--mine] [--days <n>]
+        PRs in stable order (repo, then number) with state, age of that state,
+        owner, task, and an UNCLAIMED or GONE marker. --days defaults to
+        RELAY_PR_RETENTION_DAYS (7).
 
     relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
         Register a timer on YOUR OWN tab: every <every> minutes, when you are

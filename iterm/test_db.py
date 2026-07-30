@@ -16,6 +16,14 @@ def check(msg, cond):
     return bool(cond)
 
 
+def _raises(fn):
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 def _tmpdb():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -29,8 +37,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 8",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 8)
+    ok &= check("fresh connect stamps user_version = 9",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 9)
 
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
@@ -51,12 +59,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 8
+                mig.execute("PRAGMA user_version").fetchone()[0] == 9
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 8
+                mig.execute("PRAGMA user_version").fetchone()[0] == 9
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -157,6 +165,58 @@ def run():
         ok &= check("bad role raises", False)
     except ValueError:
         ok &= check("bad role raises", True)
+
+    # Reserved names rejected system-wide, not just at the cmd_register
+    # call site - spawn.spawn_worker and any other caller goes through
+    # db.register too, so the guard belongs here.
+    for reserved in db.RESERVED_NAMES:
+        try:
+            db.register(conn, reserved, "U-RES", "worker", "p")
+            ok &= check(f"db.register raises for reserved name {reserved!r}",
+                        False)
+        except ValueError as e:
+            ok &= check(f"db.register raises for reserved name {reserved!r}",
+                        "reserved" in str(e))
+    ok &= check("db.register still accepts an ordinary name",
+                db.register(conn, "not-reserved", "U-OK", "worker", "p")
+                is None
+                and db.get_session(conn, "not-reserved") is not None)
+    db.delete_session(conn, "not-reserved")   # keep later session-count checks intact
+
+    # --- v8 -> v9: legacy 'human' session row cleared (Finding 1 fix) --------
+    # RESERVED_NAMES was only ever enforced by db.register - a DB written
+    # before that guard existed (or before 'human' was reserved at all) can
+    # hold a real, deliverable 'human' sessions row. Hand-build a v8 DB
+    # (current shape, PRAGMA user_version=8) with such a row already present,
+    # plus a task it owns, and confirm connect() clears the row but leaves
+    # the task alone.
+    import sqlite3 as _sq9
+    hpath = os.path.join(tempfile.mkdtemp(), "legacy-human.db")
+    hold = _sq9.connect(hpath)
+    hold.executescript(db._SCHEMA)
+    hold.executescript(db._INDEXES)
+    hold.execute(
+        "INSERT INTO sessions(name, iterm_session_id, role, project, "
+        "status_text, registered_at, last_seen) VALUES('human', 'H-SID', "
+        "'worker', 'p', '', 1.0, 1.0)")
+    hold.execute(
+        "INSERT INTO tasks(project, title, state, owner, blocked_by, "
+        "updated_at) VALUES('p', 'legacy human task', 'todo', 'human', "
+        "'', 1.0)")
+    hold.execute("PRAGMA user_version = 8")
+    hold.commit()
+    hold.close()
+    hmig = db.connect(hpath)
+    ok &= check("v8 -> v9 migration runs",
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 9)
+    ok &= check("legacy 'human' session row is cleared",
+                db.get_session(hmig, "human") is None)
+    legacy_task = hmig.execute(
+        "SELECT * FROM tasks WHERE title='legacy human task'").fetchone()
+    ok &= check("the session's task survives the migration untouched",
+                legacy_task is not None and legacy_task["owner"] == "human"
+                and legacy_task["state"] == "todo")
+    hmig.close()
 
     # status
     ok &= check("set_status on registered -> True",
@@ -343,8 +403,8 @@ def run():
     # --- v5: message kind + worktree_repo ------------------------------------
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
-    ok &= check("fresh DB is schema v8",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 8)
+    ok &= check("fresh DB is schema v9",
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 9)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -386,7 +446,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up.execute("PRAGMA user_version").fetchone()[0] == 9)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -544,7 +604,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 9)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -617,7 +677,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 8)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 9)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")
@@ -676,6 +736,100 @@ def run():
     finally:
         db._MIGRATIONS = saved_migrations
     rconn.close()
+
+    # --- prs ----------------------------------------------------------------
+    row = db.upsert_pr(conn, "acme/api", 482, project="webshop",
+                       state="created", title="Add rate limiting",
+                       branch="relay/api-worker", now=1000.0)
+    ok &= check("upsert_pr creates a row with no owner",
+                row["repo"] == "acme/api" and row["number"] == 482
+                and row["owner"] == "" and row["state"] == "created")
+    ok &= check("upsert_pr stamps state_changed_at and updated_at",
+                row["state_changed_at"] == 1000.0
+                and row["updated_at"] == 1000.0)
+
+    same = db.upsert_pr(conn, "acme/api", 482, state="created", now=2000.0)
+    ok &= check("re-upsert with the SAME state moves updated_at only",
+                same["updated_at"] == 2000.0
+                and same["state_changed_at"] == 1000.0)
+
+    moved = db.upsert_pr(conn, "acme/api", 482, state="changes", now=3000.0)
+    ok &= check("upsert with a NEW state re-stamps state_changed_at",
+                moved["state"] == "changes"
+                and moved["state_changed_at"] == 3000.0)
+    ok &= check("upsert preserves fields it was not given",
+                moved["title"] == "Add rate limiting"
+                and moved["branch"] == "relay/api-worker")
+
+    ok &= check("upsert_pr rejects an unknown state", _raises(
+        lambda: db.upsert_pr(conn, "acme/api", 482, state="merged-ish")))
+
+    claimed = db.claim_pr(conn, "acme/api", 482, owner="api-worker",
+                          owner_session_id="SID-A", task_id=14, now=4000.0)
+    ok &= check("claim_pr records owner, session id and task",
+                claimed["owner"] == "api-worker"
+                and claimed["owner_session_id"] == "SID-A"
+                and claimed["task_id"] == 14
+                and claimed["claimed_at"] == 4000.0)
+    ok &= check("claim_pr does not disturb state",
+                claimed["state"] == "changes")
+
+    fresh = db.claim_pr(conn, "acme/web", 31, owner="fe-worker",
+                        owner_session_id="SID-B", project="webshop",
+                        now=4100.0)
+    ok &= check("claim_pr creates the row when the sweep never saw the PR",
+                fresh["number"] == 31 and fresh["state"] == "created")
+
+    reclaim = db.claim_pr(conn, "acme/api", 482, owner="api-worker",
+                          owner_session_id="SID-C", now=5000.0)
+    ok &= check("re-claiming overwrites the session id (restore case)",
+                reclaim["owner_session_id"] == "SID-C")
+
+    ok &= check("get_pr finds by ref",
+                db.get_pr(conn, "acme/api", 482)["id"] == claimed["id"])
+    ok &= check("get_pr returns None for an unknown ref",
+                db.get_pr(conn, "acme/api", 999) is None)
+
+    ok &= check("list_prs is ordered by repo then number",
+                [(r["repo"], r["number"]) for r in db.list_prs(conn)]
+                == [("acme/api", 482), ("acme/web", 31)])
+    ok &= check("list_prs --owner filters",
+                [r["number"] for r in db.list_prs(conn, owner="fe-worker")]
+                == [31])
+    # #482 (state "changes") and #31 (state "created") are both still open.
+    # The visibility window must never hide an open PR by age - only settled
+    # (merged/closed) history ages out - so `since` must not filter either
+    # of these out even though #31's updated_at (4100) is before the cutoff.
+    ok &= check("list_prs --since never filters an open PR by age",
+                sorted(r["number"] for r in db.list_prs(conn, since=4500.0))
+                == [31, 482])
+
+    db.touch_pr_routed(conn, "acme/api", 482, now=6000.0)
+    ok &= check("touch_pr_routed stamps last_routed_at",
+                db.get_pr(conn, "acme/api", 482)["last_routed_at"] == 6000.0)
+
+    # retention: merged/closed prune, open never does, at any age
+    db.upsert_pr(conn, "acme/api", 400, state="merged", now=1.0)
+    db.upsert_pr(conn, "acme/api", 401, state="closed", now=1.0)
+    db.upsert_pr(conn, "acme/api", 402, state="review", now=1.0)
+    n = db.prune_prs(conn, 7, now=1.0 + 8 * 86400)
+    ok &= check("prune_prs drops old merged and closed rows", n == 2)
+    ok &= check("prune_prs never drops an open PR, however old",
+                db.get_pr(conn, "acme/api", 402) is not None)
+
+    # list_prs's `since` window mirrors prune_prs's own rule: a stale review
+    # (open) PR stays visible, a stale merged one does not - the invariant
+    # is "open PRs never age out", true of both visibility and deletion.
+    db.upsert_pr(conn, "acme/api", 501, state="review", now=100.0)
+    db.upsert_pr(conn, "acme/api", 502, state="merged", now=100.0)
+    windowed = [r["number"] for r in db.list_prs(conn, since=9000.0)]
+    ok &= check("list_prs keeps a stale OPEN pr inside the window",
+                501 in windowed)
+    ok &= check("list_prs windows out a stale SETTLED pr",
+                502 not in windowed)
+
+    ok &= check("RESERVED_NAMES covers relay and human",
+                set(db.RESERVED_NAMES) == {"relay", "human"})
 
     conn.close()
     print()

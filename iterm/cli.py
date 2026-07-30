@@ -1,17 +1,20 @@
 """Relay swarm CLI - the verbs Claude sessions shell out to.
 
+    relay join <name> [--role worker|coordinator] [--project P]
     relay register --name X --role worker|coordinator [--project P]
     relay status "text"
     relay send <name> "body"
     relay inbox
     relay msgs [--with N] [--project P]
     relay task add|update|list ...        (task verbs)
+    relay pr set|claim|list ...           (pull request verbs)
     relay spawn --name X [--project P] [--dir D] "prompt"
 
 Every verb resolves "me" from $ITERM_SESSION_ID (set by iTerm2 in every
 session). Writes go straight to the SQLite bus (db.py); the relay TUI's
 watcher performs deliveries. Exit codes: 0 ok, 1 user/state error (printed to
-stderr so the calling Claude session sees why), 2 argparse usage error.
+stderr so the calling Claude session sees why), 2 argparse usage error, 3 =
+`send --pr` to an unclaimed PR, 4 = `send --pr` whose owner is gone.
 """
 from __future__ import annotations
 
@@ -24,9 +27,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import db      # noqa: E402
-import swarm   # noqa: E402
-import timers  # noqa: E402
+import db        # noqa: E402
+import protocol  # noqa: E402
+import swarm     # noqa: E402
+import timers    # noqa: E402
 
 
 def my_iterm_id():
@@ -90,6 +94,24 @@ _PAYLOAD_WARN_LEN = 200
 # session that invents a new --key every turn instead of upserting.
 _MAX_TIMERS_PER_SESSION = 5
 
+# Exit codes beyond the usual 0/1/2, so a sweep session can branch on WHY a
+# route failed instead of parsing stderr.
+EXIT_UNCLAIMED = 3      # relay has no owner recorded for that PR
+EXIT_OWNER_GONE = 4     # it had one, and that session is no longer there
+
+# The operator's mailbox. Never a registered session, so nothing is ever
+# injected into it; the watcher pings and marks it read.
+HUMAN = "human"
+
+
+def _pr_retention_days() -> float:
+    """Shared by `pr list` and the TUI's launch-time prune so the CLI window
+    and the pane window cannot drift apart."""
+    try:
+        return float(os.environ.get("RELAY_PR_RETENTION_DAYS", "7"))
+    except ValueError:
+        return 7.0
+
 
 # --- verb handlers (each returns an exit code) --------------------------------
 
@@ -100,9 +122,10 @@ def cmd_register(args) -> int:
     name = args.name.strip()
     if not name:
         return _err("name cannot be empty")
-    if name == "relay":
-        return _err("'relay' is reserved - it is the sender name for system "
-                    "wake-ups; pick another name")
+    if name in db.RESERVED_NAMES:
+        return _err(f"'{name}' is reserved - 'relay' is the sender of system "
+                    f"wake-ups and 'human' is the operator's escalation "
+                    f"mailbox; pick another name")
     conn = db.connect()
     db.register(conn, name, sid, args.role, args.project or "")
     if args.dir:
@@ -110,6 +133,74 @@ def cmd_register(args) -> int:
                                db.get_session(conn, name)["spawn_prompt"])
     print(f"registered '{name}' as {args.role}"
           + (f" on project '{args.project}'" if args.project else ""))
+    return 0
+
+
+def _default_project(conn) -> str:
+    """One active project means joining it is unambiguous, so do not make the
+    session guess a flag. Zero or several means fall back to the workdir
+    basename, which at least groups sessions in the same repo."""
+    projects = {s["project"] for s in db.list_sessions(conn)
+                if s["project"] and not s["closed_at"]}
+    if len(projects) == 1:
+        return next(iter(projects))
+    return os.path.basename(os.getcwd())
+
+
+def cmd_join(args) -> int:
+    """Register and teach in one command. This is the entry point an operator
+    can paste into any session: 'you are api-worker, run relay join
+    api-worker'. Everything the session needs to behave correctly is in the
+    output - no skill required."""
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    name = args.name.strip()
+    if not name:
+        return _err("name cannot be empty")
+    if name in db.RESERVED_NAMES:
+        return _err(f"'{name}' is reserved - 'relay' is the sender of system "
+                    f"wake-ups and 'human' is the operator's escalation "
+                    f"mailbox; pick another name")
+    conn = db.connect()
+    existing = db.get_session(conn, name)
+    if args.project is not None:
+        project = args.project
+    elif existing is not None and existing["project"]:
+        # Reclaiming an identity (a restored worker re-running `relay join`
+        # with no --project) must keep the project it was already on - not
+        # whatever _default_project resolves to right now, which can differ
+        # once other sessions have joined other projects in the meantime.
+        project = existing["project"]
+    else:
+        project = _default_project(conn)
+    db.register(conn, name, sid, args.role, project)
+    db.set_session_context(conn, name, os.getcwd(),
+                           db.get_session(conn, name)["spawn_prompt"])
+
+    print(f"joined as '{name}' ({args.role}) on project '{project}'")
+    print()
+    others = [s for s in db.list_sessions(conn, project)
+              if s["name"] != name and not s["closed_at"]]
+    print("SWARM ROSTER")
+    if others:
+        for s in others:
+            print(f"  {s['name']:<16} {s['role']:<12} "
+                  f"{s['status_text'] or '-'}")
+    else:
+        print("  (nobody else yet - you are first)")
+    print()
+
+    msgs = db.undelivered(conn, name)
+    print("YOUR INBOX")
+    if msgs:
+        for m in msgs:
+            print(f"  from {m['from_name']}: {m['body']}")
+            db.mark_delivered(conn, m["id"])
+    else:
+        print("  (empty)")
+    print()
+    print(protocol.SWARM_PROTOCOL, end="")
     return 0
 
 
@@ -134,14 +225,73 @@ def cmd_send(args) -> int:
     if not _KIND_RE.match(kind):
         return _err(f"--kind must be one short lowercase token "
                     f"(a-z, 0-9, -, _), got {kind!r}")
+    # Flag targets (--all/--pr/--human) take no separate recipient name - the
+    # positional `to` slot holds the message BODY instead, since there is
+    # nothing else for it to hold. `--pr` is checked by presence, not
+    # truthiness: `--pr ""` is an explicitly-passed (if malformed) ref, and
+    # treating it as "no --pr" would silently fall through to the plain
+    # <name> path below instead of hitting the malformed-ref error.
+    picked = [name for name, on in
+              (("--all", args.all), ("--pr", args.pr is not None),
+               ("--human", args.human)) if on]
+    if len(picked) > 1:
+        return _err("pick one target: a name, --all, --pr, or --human")
+
+    if picked:
+        # A flag target takes at most ONE positional (the body). Two
+        # positionals means a recipient name was given alongside the flag -
+        # e.g. `relay send api-worker --human "..."` or
+        # `relay send --pr <ref> "body" "extra"` - which is a conflicting
+        # instruction, not something to resolve by silently keeping one
+        # positional and discarding the other.
+        if args.to is not None and args.body is not None:
+            return _err(f"{picked[0]} takes only the message body - got both "
+                        f"'{args.to}' and a separate body; drop one")
+        body = args.to if args.body is None else args.body
+    else:
+        body = args.body
+
+    if args.human:
+        if not body:
+            return _err('usage: relay send --human "<body>"')
+        db.queue_message(conn, me["name"], HUMAN, body, me["project"],
+                         kind="escalation")
+        print("escalated to the human (pings the operator when the relay "
+              "TUI is running; never injected into any session)")
+        return 0
+
+    if args.pr is not None:
+        ref, rc = _pr_ref_or_err(args.pr)
+        if ref is None:
+            return rc
+        repo, number = ref
+        if not body:
+            return _err('usage: relay send --pr <owner/name>#<n> "<body>"')
+        row = db.get_pr(conn, repo, number)
+        owner_session = (db.get_session(conn, row["owner"])
+                         if row is not None and row["owner"] else None)
+        status, detail = swarm.resolve_pr_route(row, owner_session)
+        if status == "unclaimed":
+            print(f"relay: unclaimed: {repo}#{number} has no owner recorded "
+                  f"- nobody ran `relay pr claim`. Escalate to the human.",
+                  file=sys.stderr)
+            return EXIT_UNCLAIMED
+        if status == "gone":
+            print(f"relay: owner gone: {detail}. Escalate to the human.",
+                  file=sys.stderr)
+            return EXIT_OWNER_GONE
+        db.queue_message(conn, me["name"], detail, body, me["project"],
+                         kind=kind)
+        db.touch_pr_routed(conn, repo, number)
+        task = f" (task #{row['task_id']})" if row["task_id"] else ""
+        print(f"routed to {detail}{task}")
+        return 0
+
     if args.all:
-        if args.body is not None:
-            return _err("with --all, pass only the message body")
-        if args.to is None:
+        if body is None:
             return _err("message body required")
         if not args.project:
             return _err("--all requires --project")
-        body = args.to
         targets = [s for s in db.list_sessions(conn, args.project)
                    if s["name"] != me["name"] and not s["closed_at"]]
         if not targets:
@@ -196,6 +346,96 @@ def cmd_msgs(args) -> int:
         tag = f" [{k}]" if k != "info" else ""
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(m['created_at']))} "
               f"{m['from_name']} -> {m['to_name']}{tag}: {m['body']}{tick}")
+    return 0
+
+
+def cmd_help(args) -> int:
+    """Teach without touching state. Registering is an explicit act, and a
+    session reading the rules must be able to do so before committing to
+    them."""
+    if not args.topic:
+        print("relay help <topic>\n")
+        for name in protocol.TOPICS:
+            print(f"  {name}")
+        return 0
+    print(protocol.TOPICS[args.topic], end="")
+    return 0
+
+
+def _pr_ref_or_err(ref: str):
+    """(repo, number) or (None, exit_code). One format, taught on failure."""
+    parsed = swarm.parse_pr_ref(ref)
+    if parsed is None:
+        return None, _err(f"'{ref}' is not a PR reference - use "
+                          f"owner/name#number, e.g. acme/api#482")
+    return parsed, 0
+
+
+def cmd_pr_set(args) -> int:
+    """The sweep session's verb: push what GitHub currently says. Relay never
+    looks - it stores what it was told, and the UI always shows how old that
+    telling is."""
+    ref, rc = _pr_ref_or_err(args.ref)
+    if ref is None:
+        return rc
+    repo, number = ref
+    conn = db.connect()
+    me = whoami(conn)
+    project = args.project if args.project is not None else (
+        me["project"] if me else "")
+    row = db.upsert_pr(conn, repo, number, project=project, state=args.state,
+                       title=args.title, branch=args.branch)
+    print(f"{repo}#{number} -> {row['state']}"
+          + (f" ({row['title']})" if row["title"] else ""))
+    return 0
+
+
+def cmd_pr_claim(args) -> int:
+    """The worker's verb, run right after `gh pr create`. This is the only
+    thing that makes 'who owns this PR' answerable later."""
+    ref, rc = _pr_ref_or_err(args.ref)
+    if ref is None:
+        return rc
+    repo, number = ref
+    conn = db.connect()
+    me, rc = _require_me(conn)
+    if me is None:
+        return rc
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    row = db.claim_pr(conn, repo, number, owner=me["name"],
+                      owner_session_id=sid, task_id=args.task,
+                      branch=args.branch,
+                      project=args.project if args.project is not None
+                      else me["project"])
+    task = f" for task #{row['task_id']}" if row["task_id"] else ""
+    print(f"{repo}#{number} claimed by {me['name']}{task}")
+    return 0
+
+
+def cmd_pr_list(args) -> int:
+    conn = db.connect()
+    me = whoami(conn)
+    if args.mine and me is None:
+        return _err("--mine needs a registered session - run relay register")
+    days = args.days if args.days is not None else _pr_retention_days()
+    since = time.time() - float(days) * 86400
+    rows = db.list_prs(conn, project=args.project,
+                       owner=me["name"] if args.mine else None, since=since)
+    if not rows:
+        print("no pull requests")
+        return 0
+    sessions = {s["name"]: s for s in db.list_sessions(conn)}
+    for r in rows:
+        status, detail = swarm.resolve_pr_route(r, sessions.get(r["owner"]))
+        who = (r["owner"] if status == "ok"
+               else "UNCLAIMED" if status == "unclaimed"
+               else f"{r['owner']} (GONE)")
+        task = f"  #{r['task_id']}" if r["task_id"] else ""
+        age = swarm.fmt_age(time.time() - r["state_changed_at"])
+        print(f"{r['repo']}#{r['number']:<6} {r['state']:<9} {age:>4} ago  "
+              f"{who}{task}")
     return 0
 
 
@@ -287,6 +527,8 @@ def cmd_task_list(args) -> int:
                 bits.append("blocked-by " + ",".join(f"#{b}" for b in bb))
         if t["spec_path"]:
             bits.append(f"spec:{t['spec_path']}")
+        if t["created_by"]:
+            bits.append(f"by {t['created_by']}")
         return "  ".join(bits)
 
     listed = set()
@@ -671,6 +913,22 @@ def cmd_doctor(args) -> int:
               f"- 'relay restore' to revive, 'relay clean' to reset")
         for s in orphans:
             print(f"    {s['name']} (workdir: {s['workdir'] or 'unknown'})")
+
+    prs = [dict(r) for r in db.list_prs(conn)]
+    if prs:
+        rows = swarm.pr_rows(prs, [dict(s) for s in db.list_sessions(conn)],
+                             time.time())
+        by_state = {}
+        for r in rows:
+            by_state[r["state"]] = by_state.get(r["state"], 0) + 1
+        print()
+        print("PULL REQUESTS  " + " · ".join(
+            f"{k} {v}" for k, v in sorted(by_state.items())))
+        for r in rows:
+            if r["flag"]:
+                age = swarm.fmt_age(r["age_s"])
+                print(f"  ‼ {r['ref']:<22} {r['state']:<9} {age:>4} ago  "
+                      f"{r['owner_label']}")
 
     _doctor_notify()
     _doctor_statusbar(cfg)
@@ -1103,6 +1361,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="record this session's working directory (for restore)")
     r.set_defaults(fn=cmd_register)
 
+    j = sub.add_parser("join", help="register AND print the swarm protocol "
+                                    "(start here)")
+    j.add_argument("name")
+    j.add_argument("--role", default="worker", choices=db.ROLES)
+    j.add_argument("--project", default=None)
+    j.set_defaults(fn=cmd_join)
+
     s = sub.add_parser("status", help="update my one-line status")
     s.add_argument("text")
     s.set_defaults(fn=cmd_status)
@@ -1118,6 +1383,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="broadcast to every live session in --project "
                          "(except me)")
     sd.add_argument("--project", default=None)
+    sd.add_argument("--pr", default=None, metavar="OWNER/NAME#N",
+                    help="route to whichever session claimed this PR")
+    sd.add_argument("--human", action="store_true",
+                    help="escalate to the operator (pings; never injected)")
     sd.set_defaults(fn=cmd_send)
 
     ib = sub.add_parser("inbox", help="print + mark delivered my queued messages")
@@ -1127,6 +1396,12 @@ def build_parser() -> argparse.ArgumentParser:
     ms.add_argument("--with", dest="with_name", default=None)
     ms.add_argument("--project", default=None)
     ms.set_defaults(fn=cmd_msgs)
+
+    hp = sub.add_parser("help", help="print the swarm protocol (registers "
+                                     "nothing)")
+    hp.add_argument("topic", nargs="?", default=None,
+                    choices=sorted(protocol.TOPICS))
+    hp.set_defaults(fn=cmd_help)
 
     t = sub.add_parser("task", help="task board verbs")
     tsub = t.add_subparsers(dest="task_verb", required=True)
@@ -1149,6 +1424,33 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    pr = sub.add_parser("pr", help="pull requests: who owns which PR")
+    prsub = pr.add_subparsers(dest="pr_verb", required=True)
+
+    prs_ = prsub.add_parser("set", help="push a PR's current state "
+                                        "(the sweep session's verb)")
+    prs_.add_argument("ref", help="owner/name#number, e.g. acme/api#482")
+    prs_.add_argument("--state", required=True, choices=db.PR_STATES)
+    prs_.add_argument("--title", default=None)
+    prs_.add_argument("--branch", default=None)
+    prs_.add_argument("--project", default=None)
+    prs_.set_defaults(fn=cmd_pr_set)
+
+    prc = prsub.add_parser("claim", help="record that THIS session opened "
+                                         "this PR")
+    prc.add_argument("ref", help="owner/name#number, e.g. acme/api#482")
+    prc.add_argument("--task", type=int, default=None)
+    prc.add_argument("--branch", default=None)
+    prc.add_argument("--project", default=None)
+    prc.set_defaults(fn=cmd_pr_claim)
+
+    prl = prsub.add_parser("list", help="PRs with state, age, owner")
+    prl.add_argument("--project", default=None)
+    prl.add_argument("--mine", action="store_true")
+    prl.add_argument("--days", type=float, default=None,
+                     help="window in days (default: RELAY_PR_RETENTION_DAYS)")
+    prl.set_defaults(fn=cmd_pr_list)
 
     tm = sub.add_parser("timer", help="timers bound to THIS session")
     tmsub = tm.add_subparsers(dest="timer_cmd", required=True)

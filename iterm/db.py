@@ -26,6 +26,13 @@ ARM_REQUEST_MODES = ("safe", "wild", "insane")
 # render plain. Validation lives in the CLI - the DB stores what it is given.
 MESSAGE_KINDS = ("info", "done", "blocked", "escalation", "wake")
 
+PR_STATES = ("created", "review", "changes", "approved", "merged", "closed")
+
+# Names no session may register. 'relay' is the sender of system wake-ups;
+# 'human' is the recipient of operator escalations, which must never resolve
+# to a tab that could be injected into.
+RESERVED_NAMES = ("relay", "human")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   name TEXT PRIMARY KEY,
@@ -80,6 +87,22 @@ CREATE TABLE IF NOT EXISTS timers(
   key TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS prs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'created',
+  task_id INTEGER,
+  owner TEXT NOT NULL DEFAULT '',
+  owner_session_id TEXT NOT NULL DEFAULT '',
+  claimed_at REAL NOT NULL DEFAULT 0,
+  state_changed_at REAL NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL DEFAULT 0,
+  last_routed_at REAL NOT NULL DEFAULT 0
+);
 """
 
 # Indexes live OUTSIDE _SCHEMA and run AFTER _migrate, never inside it.
@@ -94,6 +117,7 @@ CREATE TABLE IF NOT EXISTS timers(
 _INDEXES = """
 CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers(iterm_session_id, key)
   WHERE key != '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prs_ref ON prs(repo, number);
 """
 
 
@@ -125,7 +149,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 8
+_CURRENT_VERSION = 9
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -163,6 +187,22 @@ _MIGRATIONS = {
         "GROUP BY iterm_session_id, key)",
         "CREATE UNIQUE INDEX IF NOT EXISTS timers_sid_key ON timers"
         "(iterm_session_id, key) WHERE key != ''"),
+    # v9: RESERVED_NAMES ('relay', 'human') was only ever enforced by
+    # db.register - a DB populated before that guard existed (or before
+    # 'human' was reserved at all) can hold a real, deliverable `sessions`
+    # row named 'human'. That row is exactly the operator's escalation
+    # mailbox name, so `relay send --human` would queue a message that a
+    # live registered tab then receives as typed input - the one thing the
+    # escalation channel promises never to do. DELETE, not rename: the goal
+    # is simply "no session may ever be bound to a reserved name" and a
+    # plain delete is the smallest change that guarantees it. This is
+    # deliberately NOT reset_owner_tasks/delete_tasks_for_owner - the tasks
+    # table has no foreign key on sessions.name, so removing the sessions
+    # row does not touch a single task row; any task this session owned
+    # keeps owner='human' exactly as it was, still visible via `relay task
+    # list` and reassignable by `relay clean`/`relay task update`. A no-op
+    # DELETE (no such row) is the common case and costs nothing.
+    8: ("DELETE FROM sessions WHERE name = 'human'",),
 }
 
 
@@ -213,6 +253,11 @@ def register(conn, name: str, iterm_session_id: str, role: str,
     without --project must not wipe its pre-registered project). Also clears
     closed_at: a re-register revives a session that was previously marked
     closed."""
+    if name in RESERVED_NAMES:
+        raise ValueError(
+            f"'{name}' is reserved - 'relay' is the sender of system "
+            f"wake-ups and 'human' is the operator's escalation mailbox; "
+            f"pick another name")
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     t = _now(now)
@@ -609,6 +654,113 @@ def prune_messages(conn, older_than_days: float, now=None) -> int:
     cutoff = _now(now) - older_than_days * 86400
     cur = conn.execute(
         "DELETE FROM messages WHERE delivered_at IS NOT NULL AND created_at < ?",
+        (cutoff,))
+    conn.commit()
+    return cur.rowcount
+
+
+# --- prs -----------------------------------------------------------------------
+
+def _pr_row(conn, repo: str, number: int):
+    return conn.execute(
+        "SELECT * FROM prs WHERE repo = ? AND number = ?",
+        (repo, int(number))).fetchone()
+
+
+def get_pr(conn, repo: str, number: int) -> Optional[sqlite3.Row]:
+    return _pr_row(conn, repo, number)
+
+
+def upsert_pr(conn, repo: str, number: int, *, project=None, state=None,
+              title=None, branch=None, now=None) -> sqlite3.Row:
+    """Create or update a PR row. Only the fields passed are written, so a
+    sweep pushing state cannot blank a title a worker recorded. Changing the
+    state re-stamps state_changed_at; every call moves updated_at."""
+    if state is not None and state not in PR_STATES:
+        raise ValueError(f"unknown PR state {state!r}; "
+                         f"expected one of {', '.join(PR_STATES)}")
+    ts = _now(now)
+    cur = _pr_row(conn, repo, number)
+    if cur is None:
+        conn.execute(
+            "INSERT INTO prs(project, repo, number, title, branch, state,"
+            " state_changed_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (project or "", repo, int(number), title or "", branch or "",
+             state or "created", ts, ts))
+    else:
+        new_state = state or cur["state"]
+        sc = ts if new_state != cur["state"] else cur["state_changed_at"]
+        conn.execute(
+            "UPDATE prs SET project = ?, title = ?, branch = ?, state = ?,"
+            " state_changed_at = ?, updated_at = ? WHERE id = ?",
+            (project if project is not None else cur["project"],
+             title if title is not None else cur["title"],
+             branch if branch is not None else cur["branch"],
+             new_state, sc, ts, cur["id"]))
+    conn.commit()
+    return _pr_row(conn, repo, number)
+
+
+def claim_pr(conn, repo: str, number: int, *, owner: str,
+             owner_session_id: str, task_id=None, branch=None, project=None,
+             now=None) -> sqlite3.Row:
+    """Attach ownership. Creates the row when the sweep has not seen the PR
+    yet. Re-claiming overwrites owner_session_id: a restored worker resuming
+    its own PR is the case this must support."""
+    ts = _now(now)
+    if _pr_row(conn, repo, number) is None:
+        upsert_pr(conn, repo, number, project=project, branch=branch, now=ts)
+    cur = _pr_row(conn, repo, number)
+    conn.execute(
+        "UPDATE prs SET owner = ?, owner_session_id = ?, task_id = ?,"
+        " branch = ?, project = ?, claimed_at = ?, updated_at = ?"
+        " WHERE id = ?",
+        (owner, owner_session_id,
+         task_id if task_id is not None else cur["task_id"],
+         branch if branch is not None else cur["branch"],
+         project if project is not None else cur["project"],
+         ts, ts, cur["id"]))
+    conn.commit()
+    return _pr_row(conn, repo, number)
+
+
+def list_prs(conn, project=None, owner=None,
+             since=None) -> List[sqlite3.Row]:
+    """Stable order: repo, then number. Never sorted by urgency - the TUI
+    duplicates what needs attention into a strip above the list instead.
+
+    `since` windows OUT stale settled history the same way prune_prs ages it
+    out, but never an open PR: the PR most likely to need a human is the one
+    nobody has touched in a week, so it must not silently vanish from the
+    listing just because it sat quiet past the retention window."""
+    q = "SELECT * FROM prs WHERE 1=1"
+    p: list = []
+    if project:
+        q += " AND project = ?"
+        p.append(project)
+    if owner:
+        q += " AND owner = ?"
+        p.append(owner)
+    if since is not None:
+        q += " AND (updated_at >= ? OR state NOT IN ('merged','closed'))"
+        p.append(float(since))
+    return conn.execute(q + " ORDER BY repo, number", p).fetchall()
+
+
+def touch_pr_routed(conn, repo: str, number: int, now=None) -> None:
+    conn.execute(
+        "UPDATE prs SET last_routed_at = ? WHERE repo = ? AND number = ?",
+        (_now(now), repo, int(number)))
+    conn.commit()
+
+
+def prune_prs(conn, older_than_days: float, now=None) -> int:
+    """Drop settled PRs past the retention window. An open PR is live state,
+    never history: it is kept at any age, mirroring the rule that queued
+    messages survive prune_messages."""
+    cutoff = _now(now) - older_than_days * 86400
+    cur = conn.execute(
+        "DELETE FROM prs WHERE state IN ('merged','closed') AND updated_at < ?",
         (cutoff,))
     conn.commit()
     return cur.rowcount

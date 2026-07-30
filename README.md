@@ -434,10 +434,37 @@ With the TUI closed, CLI writes still land (messages queue, tasks update) -
 delivery just resumes once the TUI is open again, same "tool on === TUI
 open" contract as everything else in this repo.
 
+### Telling sessions to work together
+
+Point each session at relay by name and it self-onboards - no skill required,
+because the CLI teaches the protocol itself:
+
+    you are api-worker. run: relay join api-worker
+    then work with the other sessions through relay.
+
+`relay join` registers the session, shows it who else is in the swarm, hands it
+anything already queued, and prints the rules it is expected to follow: keep
+your status fresh (it is your heartbeat), reply to whoever messaged you, never
+end a turn silent with a task still `doing`, and escalate rather than guess.
+
+`relay help swarm` prints the same protocol without registering anything, for
+reading first. Joining stays an explicit act: relay will not enrol a session it
+merely watches, because an enrolled session is one any local process can send
+text to.
+
 A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
 automatically), so every verb below resolves "me" without you passing an id:
 
 ```
+relay join <name> [--role worker|coordinator] [--project <p>]
+    START HERE. Registers this session AND prints, in one go: who else is
+    in the swarm, anything already queued for you, and the protocol you are
+    expected to follow. Safe to re-run. `relay register` is the same
+    binding without the teaching.
+
+relay help swarm | relay help pr
+    The protocol text alone, registering nothing.
+
 relay register --name <name> --role worker|coordinator [--project <p>]
     Bind this session to a swarm name. Re-running rebinds (safe).
 
@@ -452,6 +479,17 @@ relay send --all --project <p> "<body>" [--kind <k>]
     newlines are flattened. --kind: info (default) | done | blocked |
     escalation | a custom lowercase token ('wake' is reserved). escalation
     also pings the human immediately.
+
+relay send --pr <owner/name>#<n> "<body>" [--kind <k>]
+    Route a message to whichever session claimed that PR. Exit 3 =
+    unclaimed (nobody ran `relay pr claim`). Exit 4 = the owner session is
+    gone (closed, or its name was rebound to a different tab). Relay never
+    guesses at a substitute owner - escalate with --human on 3 or 4 instead.
+
+relay send --human "<body>"
+    Escalate to the operator: pings them (sound + notification) when the
+    relay TUI is running, and shows in the swarm feed. Never injected into
+    any session.
 
 relay inbox
     Print your undelivered messages and mark them delivered. Check it when
@@ -471,6 +509,22 @@ relay task update <id> --state todo|doing|blocked|done
 
 relay task list [--project <p>] [--mine]
     Epics with nested subtasks, states, owners, blockers.
+
+relay pr set <owner/name>#<n> --state created|review|changes|approved|merged|closed
+             [--title <t>] [--branch <b>] [--project <p>]
+    Push a PR's CURRENT state into relay. Relay never calls gh or looks at
+    GitHub - it stores what you tell it, and everything that displays a
+    state also displays how old that report is. Run it for every PR your
+    sweep sees, claimed or not.
+
+relay pr claim <owner/name>#<n> [--task <id>] [--branch <b>]
+    Record that THIS session opened this PR - run it right after
+    `gh pr create`. The only thing that makes "which session owns this PR"
+    answerable later.
+
+relay pr list [--project <p>] [--mine] [--days <n>]
+    PRs in stable order (repo, then number) with state, age of that state,
+    owner, task, and an UNCLAIMED or GONE marker.
 
 relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
             [--role worker|coordinator] [--worktree]
@@ -682,6 +736,35 @@ Press `W` the same way to wipe every closed orphan's work (orphaned scope
 only - there's no TUI binding for `--project --all`, that's deliberately a
 terminal-only, type-it-out command). `relay clean` has no TUI binding;
 run it from a terminal when you've decided the work is not worth reviving.
+
+### Pull requests: who owns what
+
+Relay never calls `gh`. A session tells it what it sees, and relay answers one
+question in return: **which session opened this PR?**
+
+A worker claims its PR the moment it opens one:
+
+    relay pr claim acme/api#482 --task 14
+
+A PR-sweep session pushes what GitHub currently says, then routes feedback
+straight to whoever wrote the code:
+
+    relay pr set acme/api#482 --state changes
+    relay send --pr acme/api#482 "changes requested: tighten the rate limit test"
+
+That message is typed into the claiming session when it goes idle. If nobody
+claimed the PR (exit 3), or the claiming session is closed or its name has been
+rebound to a different tab (exit 4), relay refuses to guess and you decide:
+
+    relay send --human "acme/bff#77 has changes requested and no owner"
+
+which pings you immediately and is never injected into any session. `TAB` shows
+the PR pane: what needs work on top, then every PR in stable order, each with
+the age of the last report beside its state - relay only knows what it was
+last told, and the pane never pretends otherwise.
+
+Retention is `RELAY_PR_RETENTION_DAYS` (default 7). Merged and closed PRs age
+out; open ones never do.
 
 ### Skills
 
