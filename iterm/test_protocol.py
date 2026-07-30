@@ -36,6 +36,10 @@ def run():
                                      "relay task update", "relay status")))
     ok &= check("does not assume a coordinator exists",
                 "the coordinator" not in p.lower())
+    ok &= check("teaches that a message from relay itself has nobody to "
+                "reply to, and to fall back to the task's creator or --human",
+                "nobody named `relay`" in p and "task's creator" in p
+                and "relay task list" in p and "relay send --human" in p)
 
     ok &= check("PR topic covers claim and routing",
                 "relay pr claim" in protocol.PR_PROTOCOL

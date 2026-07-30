@@ -36,7 +36,11 @@ THE FOUR RULES THAT MAKE A SWARM WORK
 2. REPLY TO WHOEVER MESSAGED YOU. A message arrives tagged with its sender.
    Answer that sender. Do not assume there is a coordinator above you and do
    not route your reply through one - a swarm can be flat, and the session
-   that asked is the session waiting.
+   that asked is the session waiting. A message FROM `relay` itself (a task
+   assignment or an unblocked-task wake-up) is an automatic notice, not a
+   person - there is nobody named `relay` to reply to. Instead, report to
+   the task's creator: `relay task list` shows `by <name>` on every task. If
+   a task has no creator either, use `relay send --human`.
 
 3. NEVER END A TURN SILENT WITH A TASK STILL `doing`. A worker that goes
    silent mid-task is indistinguishable from one that is working, and whoever
