@@ -510,6 +510,8 @@ def cmd_task_list(args) -> int:
                 bits.append("blocked-by " + ",".join(f"#{b}" for b in bb))
         if t["spec_path"]:
             bits.append(f"spec:{t['spec_path']}")
+        if t["created_by"]:
+            bits.append(f"by {t['created_by']}")
         return "  ".join(bits)
 
     listed = set()

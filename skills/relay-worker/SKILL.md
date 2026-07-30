@@ -41,10 +41,13 @@ An assignment message names a task id, and usually a spec file.
    A PR you do not claim cannot be routed back to you when a reviewer asks for
    changes, and a human ends up hunting for which session wrote it. Then
    `relay task update <epic-id> --state done` and reply to whoever sent you
-   the work. (Not on a worktree? Same rule, minus the branch name.)
+   the work - unless that sender was `relay` itself (most assignments arrive
+   this way), in which case there is nobody named `relay` to reply to; see
+   "Never go silent" below for what to do instead. (Not on a worktree? Same
+   rule, minus the branch name.)
 
    If PR feedback later arrives: put the task back to `doing`, fix it, push,
-   and reply to the sender.
+   and reply to the sender (same relay-has-nobody-to-reply-to check applies).
 
 ## A thin brief is a blocker - clarify, do not guess
 
@@ -65,9 +68,16 @@ forever.
 
 Reply to WHOEVER SENT YOU THE WORK - a message arrives tagged with its
 sender, and that sender is the one waiting. A swarm can be flat: do not
-assume a coordinator exists above you. If the work came from no one (you
-found it on the board yourself) and you need a decision, escalate with
-`relay send --human "<the question>"`.
+assume a coordinator exists above you.
+
+**But check the sender name first.** A task assignment or an unblocked-task
+wake-up arrives `from relay` - that is relay's own automatic notice, not a
+person, and `relay` cannot receive a message (it is reserved, not a
+registered session). If the sender is `relay`, there is nobody there to
+reply to: report to the task's creator instead - `relay task list` shows `by
+<name>` on every task. If a task has no creator either, or the work came
+from no one at all (you found it on the board yourself) and you need a
+decision, escalate with `relay send --human "<the question>"`.
 
 - **Before your turn ends** with a task still `doing`, send a status to
   whoever sent you the work: `relay send <name> "still on #<id>: <where you

@@ -246,6 +246,13 @@ def run():
     ok &= check("task list --mine filters", f"#{dep_id}" in out
                 and f"#{sub_id}" not in out)
 
+    # task list shows who created each task, so a worker whose wake-up came
+    # from 'relay' can find a person to reply to
+    code, out, _ = run_cli("task", "list", "--project", "webshop",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("task list shows the creator",
+                f"#{epic_id}" in out and "by coord" in out)
+
     # --- self-scheduling: relay timer add -------------------------------
     code, out, err = run_cli("timer", "add", "--key", "pr-duty",
                              "--every", "20", "--times", "10",
