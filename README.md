@@ -434,6 +434,24 @@ With the TUI closed, CLI writes still land (messages queue, tasks update) -
 delivery just resumes once the TUI is open again, same "tool on === TUI
 open" contract as everything else in this repo.
 
+### Telling sessions to work together
+
+Point each session at relay by name and it self-onboards - no skill required,
+because the CLI teaches the protocol itself:
+
+    you are api-worker. run: relay join api-worker
+    then work with the other sessions through relay.
+
+`relay join` registers the session, shows it who else is in the swarm, hands it
+anything already queued, and prints the rules it is expected to follow: keep
+your status fresh (it is your heartbeat), reply to whoever messaged you, never
+end a turn silent with a task still `doing`, and escalate rather than guess.
+
+`relay help swarm` prints the same protocol without registering anything, for
+reading first. Joining stays an explicit act: relay will not enrol a session it
+merely watches, because an enrolled session is one any local process can send
+text to.
+
 A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
 automatically), so every verb below resolves "me" without you passing an id:
 
