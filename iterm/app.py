@@ -71,6 +71,13 @@ def _active_theme() -> dict:
     return THEMES.get(name, THEMES["phosphor"])
 
 
+def _pr_retention_days() -> float:
+    try:
+        return float(os.environ.get("RELAY_PR_RETENTION_DAYS", "7"))
+    except ValueError:
+        return 7.0
+
+
 TH = _active_theme()
 # Short aliases for the markup call sites.
 BRIGHT, ACCENT, DIM, DIMMER = (TH["bright"], TH["accent"], TH["dim"],
@@ -956,6 +963,7 @@ class RelayApp(App):
             _mc = swarmdb.connect()
             swarmdb.prune_messages(
                 _mc, float(os.environ.get("RELAY_MSG_RETENTION_DAYS", "7")))
+            swarmdb.prune_prs(_mc, _pr_retention_days())
             _mc.close()
         except Exception:
             pass
@@ -1832,6 +1840,9 @@ class RelayApp(App):
             # itself still shows only the last 8 lines.
             msgs = [dict(r) for r in swarmdb.message_history(self._swarm_db,
                                                              limit=200)]
+            prs = [dict(r) for r in swarmdb.list_prs(
+                self._swarm_db,
+                since=_time.time() - _pr_retention_days() * 86400)]
             stale, activity = set(), {}
             reg = (self.watcher.registry or {}) if self.watcher else {}
             for sid, row in reg.items():
@@ -1846,7 +1857,8 @@ class RelayApp(App):
             w = max(60, self.query_one("#swarmview").size.width - 4)
             text = swarmlogic.render_swarm(sessions, tasks, msgs,
                                            _time.time(), width=w,
-                                           stale=stale, activity=activity)
+                                           stale=stale, activity=activity,
+                                           prs=prs)
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)

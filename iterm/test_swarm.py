@@ -12,7 +12,7 @@ from swarm import (  # noqa: E402
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
-    wipe_plan_text,
+    wipe_plan_text, parse_pr_ref, resolve_pr_route,
 )
 
 
@@ -189,6 +189,13 @@ def run():
                 [m["id"] for m in swarm.escalation_pings(esc, {1})] == [3])
     ok &= check("escalation_pings empty when all seen",
                 swarm.escalation_pings(esc, {1, 3}) == [])
+
+    fresh = [{"id": 1, "to_name": "human", "from_name": "pr-sweep"},
+             {"id": 2, "to_name": "api-worker", "from_name": "pr-sweep"}]
+    ok &= check("a human escalation is closed by the ping itself",
+                swarm.escalations_to_close(fresh) == [1])
+    ok &= check("a session-addressed escalation stays queued for injection",
+                2 not in swarm.escalations_to_close(fresh))
 
     # --- restore/clean planning ---------------------------------------------
     S = [
@@ -452,6 +459,160 @@ def run():
     ok &= check("worktree_removals: carries repo + workdir for the git call",
                 any(r["name"] == "w-clean" and r["repo"] == "/repo"
                     and r["workdir"] == "/repo-w-clean" for r in rem))
+
+    # --- PR ref parsing -----------------------------------------------------
+    ok &= check("parse_pr_ref splits owner/name#number",
+                swarm.parse_pr_ref("acme/api#482") == ("acme/api", 482))
+    ok &= check("parse_pr_ref accepts dots and dashes in the repo",
+                swarm.parse_pr_ref("my-org/api.core#7")
+                == ("my-org/api.core", 7))
+    for bad in ("acme/api", "482", "acme/api#", "#482", "acme#482",
+                "acme/api#abc", "a/b#1#2", "", "acme/api#-1"):
+        ok &= check(f"parse_pr_ref rejects {bad!r}",
+                    swarm.parse_pr_ref(bad) is None)
+
+    # GitHub repo names are case-insensitive; a mixed-case ref must resolve
+    # to the SAME (repo, number) as its lowercase form, or one PR becomes two
+    # rows under a case-sensitive index (Finding 3).
+    ok &= check("parse_pr_ref lowercases the repo",
+                swarm.parse_pr_ref("Acme/API#482") == ("acme/api", 482))
+    ok &= check("mixed case and lowercase refs parse identically",
+                swarm.parse_pr_ref("Acme/API#482")
+                == swarm.parse_pr_ref("acme/api#482"))
+    ok &= check("parse_pr_ref leaves the PR number untouched",
+                swarm.parse_pr_ref("ACME/API#007") == ("acme/api", 7))
+
+    # --- route resolution ---------------------------------------------------
+    live = {"name": "api-worker", "iterm_session_id": "SID-A", "closed_at": 0}
+    pr = {"owner": "api-worker", "owner_session_id": "SID-A"}
+    ok &= check("routable when the owner session is the claiming session",
+                swarm.resolve_pr_route(pr, live) == ("ok", "api-worker"))
+
+    ok &= check("no row at all is unclaimed",
+                swarm.resolve_pr_route(None, None)[0] == "unclaimed")
+    ok &= check("a row the sweep pushed but nobody claimed is unclaimed",
+                swarm.resolve_pr_route(
+                    {"owner": "", "owner_session_id": ""}, None)[0]
+                == "unclaimed")
+
+    st, why = swarm.resolve_pr_route(pr, None)
+    ok &= check("owner name no longer registered is gone", st == "gone")
+    ok &= check("gone reason names the missing session",
+                "api-worker" in why)
+
+    st, why = swarm.resolve_pr_route(
+        pr, {"name": "api-worker", "iterm_session_id": "SID-A",
+             "closed_at": 123.0})
+    ok &= check("closed owner session is gone", st == "gone")
+    ok &= check("gone reason says closed", "closed" in why)
+
+    # The bug owner_session_id exists to prevent: the name was reclaimed by a
+    # different tab, which never saw this branch.
+    st, why = swarm.resolve_pr_route(
+        pr, {"name": "api-worker", "iterm_session_id": "SID-Z",
+             "closed_at": 0})
+    ok &= check("name rebound to a different tab is gone, NOT routable",
+                st == "gone")
+    ok &= check("gone reason says rebound", "rebound" in why)
+
+    # --- PR pane ------------------------------------------------------------
+    now = 10_000.0
+    sess = [{"name": "api-worker", "iterm_session_id": "SID-A",
+             "closed_at": 0, "role": "worker", "project": "webshop",
+             "status_text": ""}]
+    prs = [
+        {"repo": "acme/api", "number": 482, "state": "changes",
+         "state_changed_at": now - 4 * 3600, "owner": "api-worker",
+         "owner_session_id": "SID-A", "task_id": 14, "project": "webshop"},
+        {"repo": "acme/bff", "number": 77, "state": "changes",
+         "state_changed_at": now - 86400, "owner": "",
+         "owner_session_id": "", "task_id": None, "project": "webshop"},
+        {"repo": "acme/api", "number": 480, "state": "merged",
+         "state_changed_at": now - 2 * 86400, "owner": "api-worker",
+         "owner_session_id": "SID-A", "task_id": 11, "project": "webshop"},
+    ]
+    rows = swarm.pr_rows(prs, sess, now)
+    ok &= check("pr_rows preserves the stable repo/number order it was given",
+                [r["ref"] for r in rows]
+                == ["acme/api#482", "acme/bff#77", "acme/api#480"])
+    ok &= check("changes-requested is flagged for attention",
+                rows[0]["flag"] is True)
+    ok &= check("an unclaimed PR is flagged and labelled UNCLAIMED",
+                rows[1]["flag"] is True
+                and rows[1]["owner_label"] == "UNCLAIMED")
+    ok &= check("a merged PR is not flagged", rows[2]["flag"] is False)
+
+    gone_rows = swarm.pr_rows(
+        [dict(prs[0], owner_session_id="SID-OLD")], sess, now)
+    ok &= check("an owner whose name was rebound is flagged GONE",
+                gone_rows[0]["flag"] is True
+                and "GONE" in gone_rows[0]["owner_label"])
+
+    text = "\n".join(swarm.render_prs(rows, width=100))
+    ok &= check("the pane shows the age beside every state, never a bare "
+                "state", text.count("4h") >= 1 and text.count("1d") >= 1)
+    ok &= check("flagged rows are duplicated into an attention strip above",
+                text.count("acme/api#482") == 2)
+    ok &= check("unflagged rows appear exactly once",
+                text.count("acme/api#480") == 1)
+    ok &= check("the attention strip sits above the separator",
+                text.index("acme/api#482")
+                < text.index("─") < text.rindex("acme/api#482"))
+
+    ok &= check("render_prs is empty for no PRs", swarm.render_prs([], 100) == [])
+
+    ok &= check("the fleet line counts PRs and how many need work",
+                "PRs 3 · 2 need work"
+                in swarm.fleet_line(sess, [], prs=rows))
+
+    full = swarm.render_swarm(sess, [], [], now, width=100, prs=prs)
+    ok &= check("render_swarm includes the PR pane", "PULL REQUESTS" in full)
+    ok &= check("render_swarm still works with no prs argument at all",
+                "PULL REQUESTS" not in swarm.render_swarm(sess, [], [], now,
+                                                          width=100))
+
+    kb = swarm.render_swarm(
+        sess,
+        [{"id": 14, "project": "webshop", "parent_id": None, "state": "doing",
+          "title": "rate limiting", "owner": "api-worker"}],
+        [], now, width=120, prs=prs)
+    ok &= check("a task with a PR shows it on its kanban card",
+                "PR 482" in kb)
+
+    # --- kanban PR suffix: floor-width degrade, never overflow the column --
+    # Code review finding: `width=60` is the app's real floor (`w = max(60,
+    # ...)`), giving colw=12 - narrower than even the shortest legible PR
+    # suffix. The suffix must degrade (full -> "PRnnn" -> nothing) instead
+    # of overflowing into the neighbouring kanban column.
+    floor_tasks = [
+        {"id": 14, "project": "webshop", "parent_id": None, "state": "doing",
+         "title": "rate limiting across every gateway endpoint we own",
+         "owner": "api-worker"},
+        {"id": 15, "project": "webshop", "parent_id": None, "state": "doing",
+         "title": "a totally unrelated task with no PR at all",
+         "owner": "api-worker"},
+    ]
+    floor_prs = [dict(prs[0], state="approved")]
+    floor_view = swarm.render_swarm(sess, floor_tasks, [], now, width=60,
+                                    prs=floor_prs)
+    colw = max(12, (60 - 3 * 3) // 4)
+    row_width = 4 * colw + 3 * 3
+    line14 = next(l for l in floor_view.splitlines() if "#14" in l)
+    ok &= check("a PR suffix that cannot fit degrades instead of "
+                "overflowing the kanban row",
+                len(line14) == row_width)
+    ok &= check("the degraded card still shows the task in its own column",
+                "#14" in line14[colw + 3: 2 * colw + 3])
+
+    no_pr_view = swarm.render_swarm(sess, [floor_tasks[1]], [], now,
+                                    width=60)
+    with_pr_view = swarm.render_swarm(sess, [floor_tasks[1]], [], now,
+                                      width=60, prs=floor_prs)
+    line15_no_pr = next(l for l in no_pr_view.splitlines() if "#15" in l)
+    line15_with_pr = next(l for l in with_pr_view.splitlines() if "#15" in l)
+    ok &= check("a card with no matching PR renders byte-identical whether "
+                "or not prs is passed",
+                line15_no_pr == line15_with_pr)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

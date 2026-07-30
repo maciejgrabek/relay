@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from contextlib import redirect_stdout, redirect_stderr
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -34,6 +35,38 @@ def run_cli(*argv, iterm_id=None):
     with redirect_stdout(out), redirect_stderr(err):
         code = cli.main(list(argv))
     return code, out.getvalue(), err.getvalue()
+
+
+def _rebind(name, sid):
+    """Simulate the name being reclaimed by a different tab."""
+    c = db.connect()
+    c.execute("UPDATE sessions SET iterm_session_id = ? WHERE name = ?",
+              (sid, name))
+    c.commit()
+    c.close()
+
+
+def _one_message(to_name):
+    c = db.connect()
+    row = c.execute("SELECT * FROM messages WHERE to_name = ? "
+                    "ORDER BY id DESC LIMIT 1", (to_name,)).fetchone()
+    c.close()
+    return row
+
+
+def _session_count():
+    c = db.connect()
+    n = c.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    c.close()
+    return n
+
+
+def _sess(name):
+    c = db.connect()
+    row = c.execute("SELECT * FROM sessions WHERE name = ?",
+                    (name,)).fetchone()
+    c.close()
+    return row
 
 
 def run():
@@ -212,6 +245,13 @@ def run():
     code, out, _ = run_cli("task", "list", "--mine", iterm_id="w0t0p0:CO-ID")
     ok &= check("task list --mine filters", f"#{dep_id}" in out
                 and f"#{sub_id}" not in out)
+
+    # task list shows who created each task, so a worker whose wake-up came
+    # from 'relay' can find a person to reply to
+    code, out, _ = run_cli("task", "list", "--project", "webshop",
+                           iterm_id="w0t0p0:CO-ID")
+    ok &= check("task list shows the creator",
+                f"#{epic_id}" in out and "by coord" in out)
 
     # --- self-scheduling: relay timer add -------------------------------
     code, out, err = run_cli("timer", "add", "--key", "pr-duty",
@@ -699,6 +739,20 @@ def run():
                 code == 1 and ("names" in err or "takes no" in err))
     wc.close()
 
+    # --- reserved names are blocked system-wide, not just at cmd_register ---
+    # relay spawn never checks args.name itself; it goes through
+    # spawn.spawn_worker -> db.register directly. The stubbed _fake_spawn
+    # above calls the real db.register, so this exercises the db.register
+    # guard (not a cli.py-level one) - without it, `relay spawn --name human`
+    # would create a live session literally named 'human', and the watcher
+    # would inject the operator's escalations straight into it.
+    code, out, err = run_cli("spawn", "watch the PRs", "--name", "human",
+                             "--project", "webshop", iterm_id="w0t0p0:CO-ID")
+    ok &= check("spawn --name human fails instead of creating a session",
+                code == 1 and db.get_session(conn, "human") is None)
+    ok &= check("spawn --name human error explains the reservation",
+                "reserved" in err)
+
     # --- spawn --worktree -----------------------------------------------------
     import subprocess
     repo = os.path.join(tempfile.mkdtemp(), "webshop")
@@ -859,6 +913,268 @@ def run():
         cli._repo_root = real_root
         os.environ.pop("RELAY_UPDATE_STAMP", None)
         os.environ.pop("RELAY_NO_AUTOUPDATE", None)
+
+    # --- relay pr set / claim / list ----------------------------------------
+    run_cli("register", "--name", "api-worker", "--role", "worker",
+            "--project", "webshop", iterm_id="w0t1p0:PR-ID")
+
+    rc, out, err = run_cli("pr", "set", "acme/api#482", "--state", "changes",
+                         "--title", "Add rate limiting")
+    ok &= check("pr set exits 0", rc == 0)
+    ok &= check("pr set confirms the ref and state",
+                "acme/api#482" in out and "changes" in out)
+
+    rc, out, err = run_cli("pr", "set", "acme/api#482", "--state", "sideways")
+    ok &= check("pr set rejects an unknown state with usage exit 2", rc == 2)
+
+    rc, out, err = run_cli("pr", "set", "acme/api", "--state", "changes")
+    ok &= check("pr set rejects a malformed ref", rc == 1)
+    ok &= check("the malformed-ref error teaches the format",
+                "owner/name#number" in err)
+
+    rc, out, err = run_cli("pr", "claim", "acme/api#482", "--task", "14")
+    ok &= check("pr claim exits 0", rc == 0)
+    ok &= check("pr claim names the owner it recorded", "api-worker" in out)
+
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("pr list shows the PR, its state and its owner",
+                "acme/api#482" in out and "changes" in out
+                and "api-worker" in out)
+    ok &= check("pr list shows the age of the report next to the state",
+                "ago" in out or "s " in out)
+
+    run_cli("pr", "set", "acme/bff#77", "--state", "review")
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("an unclaimed PR is listed and marked UNCLAIMED",
+                "acme/bff#77" in out and "UNCLAIMED" in out)
+
+    rc, out, err = run_cli("pr", "list", "--mine")
+    ok &= check("--mine hides PRs this session did not claim",
+                "acme/api#482" in out and "acme/bff#77" not in out)
+
+    # --- case-insensitive PR refs (Finding 3) --------------------------------
+    # GitHub repo names are case-insensitive. Claim in ONE case, push a state
+    # update in a DIFFERENT case, and route in yet another, end to end
+    # through the real CLI - they must all land on the same row, not split
+    # into two, and a mixed-case claim must not read back as unclaimed.
+    run_cli("pr", "claim", "Acme/CASE#900", "--task", "77",
+            iterm_id="w0t1p0:PR-ID")   # as api-worker
+    run_cli("pr", "set", "acme/CASE#900", "--state", "changes")
+    rc, out, err = run_cli("pr", "list")
+    ok &= check("mixed-case claim/set collapse into ONE listed row",
+                out.count("acme/case#900") == 1)
+    rc, out, err = run_cli("send", "--pr", "ACME/case#900", "changes requested")
+    ok &= check("a claim made in mixed case routes via a differently-cased ref",
+                rc == 0 and "api-worker" in out)
+
+    # --- relay send --pr ----------------------------------------------------
+    # pr-sweep gets its OWN iterm id, distinct from api-worker's (PR-ID): two
+    # session rows must never share one id, or whoami()'s
+    # get_by_iterm_id (no ORDER BY) resolves "me" non-deterministically.
+    run_cli("register", "--name", "pr-sweep", "--role", "coordinator",
+            "--project", "webshop", iterm_id="w0t9p0:SWEEP-ID")
+
+    # Every send below runs AS pr-sweep. iterm_id is set explicitly on this
+    # first call only; it stays ambient (ITERM_SESSION_ID) for the rest of
+    # the block, since nothing else in the block changes it.
+    rc, out, err = run_cli("send", "--pr", "acme/api#482",
+                         "changes requested: tighten the rate limit test",
+                         iterm_id="w0t9p0:SWEEP-ID")
+    ok &= check("routing to a live claiming session exits 0", rc == 0)
+    ok &= check("success names the resolved owner", "api-worker" in out)
+
+    rc, out, err = run_cli("send", "--pr", "acme/bff#77", "please fix")
+    ok &= check("an unclaimed PR exits 3", rc == 3)
+    ok &= check("the unclaimed error names the ref", "acme/bff#77" in err)
+
+    rc, out, err = run_cli("send", "--pr", "acme/nope#1", "please fix")
+    ok &= check("a PR relay never heard of also exits 3", rc == 3)
+
+    # Rebind api-worker's NAME to a different tab (not pr-sweep's id, which
+    # is untouched), then route again.
+    _rebind("api-worker", "SID-OTHER")
+    rc, out, err = run_cli("send", "--pr", "acme/api#482", "please fix")
+    ok &= check("a rebound owner exits 4, not 0", rc == 4)
+    ok &= check("the owner-gone error explains why", "rebound" in err)
+
+    rc, out, err = run_cli("send", "--pr", "acme/api", "please fix")
+    ok &= check("a malformed ref is a plain user error (exit 1)", rc == 1)
+
+    # --- Finding 2: positional recipient + flag target, and --pr "" --------
+    # The mutual-exclusion guard used to count only --all/--pr/--human,
+    # ignoring a positional recipient entirely - so `send <name> --human ...`
+    # silently discarded <name> and escalated instead. Each of these must now
+    # be a loud argument error, and nothing gets queued.
+    before = len(db.undelivered(conn, "api-worker"))
+    rc, out, err = run_cli("send", "api-worker", "--human", "MEANT-FOR-WORKER")
+    ok &= check("positional recipient + --human is an error, not a silent "
+                "escalation that drops the recipient",
+                rc != 0 and "api-worker" in err)
+    ok &= check("...and nothing was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "api-worker", "--pr", "acme/api#482",
+                          "MEANT-FOR-WORKER")
+    ok &= check("positional recipient + --pr is an error, not a silent "
+                "route to the PR claimant",
+                rc != 0 and "api-worker" in err)
+    ok &= check("...and nothing new was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "--pr", "acme/api#482", "body", "extra")
+    ok &= check("--pr with two positionals is an error - 'body' is never "
+                "silently dropped in favor of 'extra'", rc != 0)
+    ok &= check("...and nothing new was queued to api-worker",
+                len(db.undelivered(conn, "api-worker")) == before)
+
+    rc, out, err = run_cli("send", "--pr", "", "please fix")
+    ok &= check("an explicit empty --pr ref is a malformed-ref error, not a "
+                "fall-through to the plain <name> path",
+                rc == 1 and "owner/name#number" in err)
+
+    # --- relay send --human (still as pr-sweep) ------------------------------
+    rc, out, err = run_cli("send", "--human", "PR 77 is unclaimed - who owns it?")
+    ok &= check("send --human exits 0", rc == 0)
+    ok &= check("the human escalation is stored undelivered as an escalation",
+                _one_message(to_name="human")["kind"] == "escalation"
+                and _one_message(to_name="human")["delivered_at"] is None)
+
+    rc, out, err = run_cli("register", "--name", "human", "--role", "worker")
+    ok &= check("'human' cannot be registered as a session name", rc == 1)
+    ok &= check("the reserved-name error explains what human is",
+                "reserved" in err)
+
+    rc, out, err = run_cli("send", "--human", "--pr", "acme/api#482", "both")
+    ok &= check("two target forms at once is an error", rc != 0)
+
+    # --- doctor reports PR health ---
+    rc, out, err = run_cli("doctor")
+    ok &= check("doctor exits 0", rc == 0)
+    ok &= check("doctor reports PR counts", "PULL REQUESTS" in out)
+    ok &= check("doctor surfaces PRs that cannot be routed",
+                "unclaimed" in out.lower() or "UNCLAIMED" in out)
+    ok &= check("doctor flagged rows show age of state report",
+                " ago " in out)
+
+    # --- relay help ------------------------------------------------------
+    rc, out, err = run_cli("help", "swarm")
+    ok &= check("relay help swarm exits 0", rc == 0)
+    ok &= check("relay help swarm prints the protocol",
+                "relay inbox" in out and "heartbeat" in out)
+
+    rc, out, err = run_cli("help", "pr")
+    ok &= check("relay help pr prints the PR protocol",
+                "relay pr claim" in out)
+
+    rc, out, err = run_cli("help")
+    ok &= check("bare relay help lists the topics", rc == 0
+                and "swarm" in out and "pr" in out)
+
+    rc, out, err = run_cli("help", "nonsense")
+    ok &= check("an unknown topic is a usage error", rc == 2)
+
+    _before = _session_count()
+    run_cli("help", "swarm")
+    ok &= check("relay help NEVER registers anything",
+                _session_count() == _before)
+
+    # Restore the file's ambient identity so tests defined after this block
+    # (bin/relay verb-routing check) are unaffected.
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- relay join ---------------------------------------------------------
+    rc, out, err = run_cli("join", "w1")
+    ok &= check("join exits 0", rc == 0)
+    ok &= check("join registers the session", _sess("w1") is not None)
+    ok &= check("join defaults the role to worker",
+                _sess("w1")["role"] == "worker")
+    ok &= check("join prints the protocol", "relay inbox" in out
+                and "heartbeat" in out)
+    ok &= check("join prints the roster so it knows who to talk to",
+                "SWARM" in out or "roster" in out.lower())
+
+    # A second session, in a different tab, joining sees the first in the
+    # roster. run_cli's iterm_id kwarg is how this file already switches tabs,
+    # and it PERSISTS - every later call runs as that tab until changed, so
+    # each step below states the tab it means.
+    rc, out, err = run_cli("join", "w2", iterm_id="w0t2p0:BBBB-2222")
+    ok &= check("join lists the sessions already present", "w1" in out)
+    ok &= check("join defaults project to the single active project",
+                _sess("w2")["project"] == _sess("w1")["project"])
+
+    # w1 messages w2, then w2 re-joins and finds it waiting.
+    run_cli("send", "w2", "welcome aboard", iterm_id="w0t1p0:AAAA-1111")
+    rc, out, err = run_cli("join", "w2", iterm_id="w0t2p0:BBBB-2222")
+    ok &= check("re-joining shows queued messages", "welcome aboard" in out)
+    ok &= check("re-joining is safe and still exits 0", rc == 0)
+
+    rc, out, err = run_cli("join", "human")
+    ok &= check("join rejects the reserved name 'human'", rc == 1)
+    rc, out, err = run_cli("join", "relay")
+    ok &= check("join rejects the reserved name 'relay'", rc == 1)
+    ok &= check("a rejected join registers nothing", _sess("human") is None)
+
+    rc, out, err = run_cli("join", "w3", "--role", "coordinator",
+                           iterm_id="w0t3p0:CCCC-3333")
+    ok &= check("join takes an explicit role",
+                _sess("w3")["role"] == "coordinator")
+
+    # Leave the environment as the rest of the suite expects it.
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- relay join: re-joining must never move a live session off its
+    # project (regression) ---------------------------------------------------
+    # A restored worker reclaims its identity by re-running `relay join
+    # <name>` with no --project. That must keep the project it was already
+    # on, not whatever _default_project happens to resolve to right now -
+    # which can change the moment a second project shows up in the active
+    # set. Prove it by manufacturing exactly that: one session on a known
+    # project, a second session on a DIFFERENT project (so the active-project
+    # count is no longer 1), then re-join the first with no --project.
+    rc, out, err = run_cli("join", "proj-keeper", "--project", "webshop",
+                           iterm_id="w0t4p0:DDDD-4444")
+    ok &= check("proj-keeper joins webshop explicitly", rc == 0
+                and _sess("proj-keeper")["project"] == "webshop")
+
+    rc, out, err = run_cli("join", "other-proj-worker", "--project",
+                           "otherproj", iterm_id="w0t5p0:EEEE-5555")
+    ok &= check("other-proj-worker joins a different project", rc == 0)
+
+    rc, out, err = run_cli("join", "proj-keeper", iterm_id="w0t6p0:FFFF-6666")
+    ok &= check("re-joining without --project keeps the existing project "
+                "instead of falling back to the cwd basename",
+                rc == 0 and _sess("proj-keeper")["project"] == "webshop")
+
+    os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
+
+    # --- cli._default_project (unit-level, isolated DB) ---------------------
+    # The end-to-end join tests above run against a shared temp DB that
+    # already holds several distinct active projects by this point, so they
+    # only ever exercise the "several projects -> cwd fallback" branch - they
+    # would still pass even if the "exactly one active project" branch were
+    # deleted outright. Test _default_project directly against a DB whose
+    # session set is fully controlled.
+    _dp_path = os.path.join(tempfile.mkdtemp(), "default-project.db")
+    dpconn = db.connect(_dp_path)
+    cwd_base = os.path.basename(os.getcwd())
+
+    ok &= check("_default_project falls back to cwd basename with zero "
+                "active projects", cli._default_project(dpconn) == cwd_base)
+
+    db.register(dpconn, "dp-a", "sid-dp-a", "worker", "solo-project")
+    ok &= check("_default_project returns the project when exactly one is "
+                "active", cli._default_project(dpconn) == "solo-project")
+
+    db.register(dpconn, "dp-b", "sid-dp-b", "worker", "second-project")
+    ok &= check("_default_project falls back to cwd basename with two or "
+                "more active projects",
+                cli._default_project(dpconn) == cwd_base)
+
+    db.mark_closed(dpconn, "dp-b", time.time())
+    ok &= check("_default_project excludes closed sessions from the active "
+                "count", cli._default_project(dpconn) == "solo-project")
+
+    dpconn.close()
 
     # --- bin/relay routes every CLI verb ---------------------------------
     # bin/relay dispatches on a hardcoded case list; a verb missing from it does

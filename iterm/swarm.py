@@ -86,6 +86,15 @@ def escalation_pings(msgs, already: set) -> list:
             if kind_of(m) == "escalation" and m["id"] not in already]
 
 
+def escalations_to_close(pinged) -> list:
+    """Message ids that the ping itself has fully handled: those addressed to
+    'human'. Nothing injects into the operator's mailbox, so an unmarked one
+    would sit undelivered forever - never pruned (prune_messages keeps queued
+    rows on purpose) and re-pinged on every relay restart, since the pinged
+    set is in memory."""
+    return [m["id"] for m in pinged if m["to_name"] == "human"]
+
+
 # --- live-scoped stakes: only count what relay can act on RIGHT NOW -----------
 #
 # The header "N msgs queued" and the quit-guard stakes must reflect this run's
@@ -188,6 +197,55 @@ def stale_reason(now: float, threshold_s: float,
         if quiet > threshold_s:
             return f"no activity for {int(quiet / 60)}m while a task is 'doing'"
     return None
+
+
+# --- PR reference parsing and routing ----------------------------------------
+
+# owner/name#number - the single PR reference format, used by every verb and
+# every message. One format is one less thing for a session to get wrong.
+_PR_REF_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
+
+
+def parse_pr_ref(ref: str):
+    """('acme/api', 482) or None. Strict: a caller that guesses at the format
+    gets an error, not a row written under a ref nothing will ever match.
+
+    The repo half is lowercased: GitHub repo names are case-insensitive
+    (Acme/API and acme/api are the same repo), but idx_prs_ref is a plain
+    case-sensitive TEXT index, so without normalizing here the same PR could
+    land in two rows under different casing - one claimed, the other queried,
+    each blind to the other. Every write and lookup goes through this
+    function, so normalizing here is enough. The PR number is untouched."""
+    m = _PR_REF_RE.match((ref or "").strip())
+    if not m:
+        return None
+    return m.group(1).lower(), int(m.group(2))
+
+
+def resolve_pr_route(pr, session):
+    """Can PR feedback be routed to the session that opened it?
+
+    Returns (status, detail): ('ok', owner_name) when the claiming session is
+    still the session behind that name; ('unclaimed', '') when nobody claimed
+    the PR; ('gone', reason) otherwise.
+
+    The identity check is the point. Relay names are reclaimable - re-register
+    rebinds a name to a new tab, and `relay restore` depends on that - so
+    routing on the name alone would deliver 'your PR has changes requested' to
+    a tab that has never seen the branch. Comparing the iTerm session id
+    recorded at claim time makes 'is this still the author?' answerable."""
+    if pr is None or not (_get(pr, "owner", "") or ""):
+        return ("unclaimed", "")
+    owner = pr["owner"]
+    if session is None:
+        return ("gone", f"no session registered as '{owner}'")
+    if _get(session, "closed_at", 0):
+        return ("gone", f"session '{owner}' closed")
+    if _get(session, "iterm_session_id", "") != _get(pr, "owner_session_id",
+                                                     ""):
+        return ("gone", f"'{owner}' was rebound to a different tab since the "
+                        f"PR was claimed")
+    return ("ok", owner)
 
 
 # --- restore / clean planning (pure; rows in, plans out) ----------------------
@@ -392,7 +450,8 @@ def fmt_age(seconds: float) -> str:
     return f"{s // 86400}d"
 
 
-def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0) -> str:
+def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0,
+              prs=()) -> str:
     """The one-line 'how many workers doing what' header. busy = owns a doing
     task, blocked = owns a blocked one (and nothing doing), idle = the rest;
     armed counts come from the persisted per-session mode."""
@@ -419,6 +478,9 @@ def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0) -> str:
         bits.append(f"{n_stale} STALE")
     if queued:
         bits.append(f"msgs {queued} queued")
+    if prs:
+        need = sum(1 for r in prs if r["flag"])
+        bits.append(f"PRs {len(prs)}" + (f" · {need} need work" if need else ""))
     return "FLEET  " + " · ".join(bits)
 
 
@@ -505,6 +567,80 @@ def interaction_rows(messages, coordinators=frozenset(), now: float = 0.0,
     return out[:limit]
 
 
+# --- PR pane -------------------------------------------------------------
+
+# State glyphs share the vocabulary the rest of the swarm view already uses:
+# ⊘ is the blocked/needs-work mark, ✓ is done, ◷ is waiting.
+_PR_GLYPH = {"created": "◦", "review": "◷", "changes": "⊘",
+             "approved": "✓", "merged": "●", "closed": "✕"}
+_PR_COLOR = {"changes": "yellow", "approved": "green", "merged": "dim",
+             "closed": "dim"}
+
+# States that mean a human or a worker still owes this PR something.
+_PR_NEEDS_WORK = ("changes",)
+
+
+def pr_rows(prs, sessions, now: float) -> list:
+    """One display row per PR, in the order given (list_prs already returns
+    the stable repo/number order). `flag` marks the rows that need attention:
+    changes requested, nobody claimed it, or the claiming session is gone."""
+    by_name = {s["name"]: s for s in sessions}
+    out = []
+    for p in prs:
+        status, _ = resolve_pr_route(p, by_name.get(_get(p, "owner", "")))
+        if status == "ok":
+            label, gone = p["owner"], False
+        elif status == "unclaimed":
+            label, gone = "UNCLAIMED", True
+        else:
+            label, gone = f"{p['owner']} GONE", True
+        state = _get(p, "state", "created")
+        out.append({
+            "ref": f"{p['repo']}#{p['number']}",
+            "state": state,
+            "age_s": max(0.0, now - float(_get(p, "state_changed_at", 0) or 0)),
+            "owner_label": label,
+            "task_id": _get(p, "task_id"),
+            "flag": bool(gone or state in _PR_NEEDS_WORK),
+        })
+    return out
+
+
+def _pr_line(r, width: int, mark: str = " ") -> str:
+    """Age always rides beside the state: relay only knows what a session last
+    told it, and a bare 'approved' would read as fact. `mark` is how the same
+    row renders in the attention strip, so the strip and the list cannot drift
+    apart in formatting. Column widths scale with `width` so the pane doesn't
+    run off a narrow terminal or look starved on a wide one."""
+    refw = max(10, min(22, width - 40))
+    ownerw = max(10, min(18, width - 46))
+    glyph = _PR_GLYPH.get(r["state"], "·")
+    task = f"  #{r['task_id']}" if r["task_id"] else ""
+    line = (f" {mark} {_clip(r['ref'], refw):<{refw}} {glyph}{r['state']:<9} "
+            f"{fmt_age(r['age_s']):>4}  {_clip(r['owner_label'], ownerw)}{task}")
+    color = ("red" if "UNCLAIMED" in r["owner_label"]
+             or "GONE" in r["owner_label"]
+             else _PR_COLOR.get(r["state"]))
+    return f"[{color}]{_esc(line)}[/{color}]" if color else _esc(line)
+
+
+def render_prs(rows, width: int = 100) -> list:
+    """Attention strip on top, then every PR in stable order below it. The
+    main list never reorders as states change, so a row stays where the eye
+    last found it; anything urgent is DUPLICATED above rather than moved."""
+    if not rows:
+        return []
+    out = ["PULL REQUESTS"]
+    flagged = [r for r in rows if r["flag"]]
+    for r in flagged:
+        out.append(_pr_line(r, width, mark="‼"))
+    if flagged:
+        out.append("  " + "─" * max(10, min(width - 4, 60)))
+    for r in rows:
+        out.append(_pr_line(r, width))
+    return out
+
+
 def progress_bar(done: int, total: int, cells: int = 10) -> str:
     if total <= 0:
         return "▱" * cells
@@ -513,7 +649,7 @@ def progress_bar(done: int, total: int, cells: int = 10) -> str:
 
 
 def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
-                 stale=frozenset(), activity=None) -> str:
+                 stale=frozenset(), activity=None, prs=()) -> str:
     """One Rich-markup screen: fleet line, roster (heartbeats, stale marks),
     kanban board, epic progress bars, interaction map, kind-colored message
     feed. Grouped by project when more than one is present. With no swarm at
@@ -539,7 +675,9 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
             "TAB returns to the session control view.")
     out: List[str] = []
     queued = sum(1 for m in messages if _get(m, "delivered_at") is None)
-    out.append(_esc(fleet_line(sessions, tasks, stale=stale, queued=queued)))
+    prows = pr_rows(prs, sessions, now) if prs else []
+    out.append(_esc(fleet_line(sessions, tasks, stale=stale, queued=queued,
+                               prs=prows)))
     # The map is already markup (colors are its whole point) - it carries no
     # user text, so it does not go through _esc().
     fmap = fleet_map(sessions, tasks, stale=stale, width=width)
@@ -571,8 +709,30 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
 
         # kanban: 4 columns of "#id title"
         colw = max(12, (width - 3 * 3) // 4)
-        cols = {st: [f"#{t['id']} {_clip(t['title'], colw - len(str(t['id'])) - 2)}"
-                     for t in p_tasks if t["state"] == st]
+        # A task that produced a PR carries it on its card - the kanban stays
+        # relay's own state machine, the PR pane stays the authority on PR
+        # state, and this is the one thread between them.
+        pr_by_task = {p["task_id"]: p for p in prs
+                      if _get(p, "task_id") is not None}
+        def _card(t):
+            # The suffix must never win at the title's expense: degrade it
+            # (full -> "PR<n>" -> nothing) until the whole cell - head,
+            # title, suffix together - fits colw. A task with no PR takes
+            # the p-is-None branch, which reduces to the pre-PR formula
+            # exactly (suffix contributes 0 either way) - byte-identical
+            # output at every width.
+            p = pr_by_task.get(t["id"])
+            head = f"#{t['id']} "
+            if p is None:
+                return head + _clip(t["title"], max(4, colw - len(head)))
+            full = (f" ▸ PR {p['number']} {_PR_GLYPH.get(p['state'], '')}"
+                    f"{p['state']}")
+            minimal = f" PR{p['number']}"
+            for suffix in (full, minimal, ""):
+                titlew = colw - len(head) - len(suffix)
+                if titlew >= 4 or not suffix:
+                    return head + _clip(t["title"], max(4, titlew)) + suffix
+        cols = {st: [_card(t) for t in p_tasks if t["state"] == st]
                 for st in _STATE_COLS}
         height = max([len(v) for v in cols.values()] + [1])
         out.append("   ".join(h.upper().ljust(colw)
@@ -607,6 +767,11 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
             color = _KIND_COLOR.get(r["last_kind"])
             out.append(f"[{color}]{_esc(line)}[/{color}]"
                        if r["flag"] and color else _esc(line))
+        out.append("")
+
+    pane = render_prs(prows, width)
+    if pane:
+        out.extend(pane)
         out.append("")
 
     out.append("MESSAGES")
