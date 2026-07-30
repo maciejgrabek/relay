@@ -46,6 +46,16 @@ def run():
     ok &= check("no em-dash anywhere in the protocol text",
                 all("\u2014" not in t for t in protocol.TOPICS.values()))
 
+    # SWARM_PROTOCOL points to "relay help pr" as the full PR reference. That
+    # pointer must only promise what PR_PROTOCOL actually delivers - if the
+    # pointer line ever claims spawning is covered there, PR_PROTOCOL had
+    # better actually cover it, or a session following the pointer finds
+    # nothing.
+    ok &= check("the relay help pr pointer does not promise spawn content "
+                "PR_PROTOCOL doesn't have",
+                "spawn" not in p.lower()
+                or "spawn" in protocol.PR_PROTOCOL.lower())
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
