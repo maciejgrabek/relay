@@ -1,5 +1,6 @@
 """Relay swarm CLI - the verbs Claude sessions shell out to.
 
+    relay join <name> [--role worker|coordinator] [--project P]
     relay register --name X --role worker|coordinator [--project P]
     relay status "text"
     relay send <name> "body"
@@ -132,6 +133,65 @@ def cmd_register(args) -> int:
                                db.get_session(conn, name)["spawn_prompt"])
     print(f"registered '{name}' as {args.role}"
           + (f" on project '{args.project}'" if args.project else ""))
+    return 0
+
+
+def _default_project(conn) -> str:
+    """One active project means joining it is unambiguous, so do not make the
+    session guess a flag. Zero or several means fall back to the workdir
+    basename, which at least groups sessions in the same repo."""
+    projects = {s["project"] for s in db.list_sessions(conn)
+                if s["project"] and not s["closed_at"]}
+    if len(projects) == 1:
+        return next(iter(projects))
+    return os.path.basename(os.getcwd())
+
+
+def cmd_join(args) -> int:
+    """Register and teach in one command. This is the entry point an operator
+    can paste into any session: 'you are api-worker, run relay join
+    api-worker'. Everything the session needs to behave correctly is in the
+    output - no skill required."""
+    sid = my_iterm_id()
+    if not sid:
+        return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    name = args.name.strip()
+    if not name:
+        return _err("name cannot be empty")
+    if name in db.RESERVED_NAMES:
+        return _err(f"'{name}' is reserved - 'relay' is the sender of system "
+                    f"wake-ups and 'human' is the operator's escalation "
+                    f"mailbox; pick another name")
+    conn = db.connect()
+    project = args.project if args.project is not None else \
+        _default_project(conn)
+    db.register(conn, name, sid, args.role, project)
+    db.set_session_context(conn, name, os.getcwd(),
+                           db.get_session(conn, name)["spawn_prompt"])
+
+    print(f"joined as '{name}' ({args.role}) on project '{project}'")
+    print()
+    others = [s for s in db.list_sessions(conn, project)
+              if s["name"] != name and not s["closed_at"]]
+    print("SWARM ROSTER")
+    if others:
+        for s in others:
+            print(f"  {s['name']:<16} {s['role']:<12} "
+                  f"{s['status_text'] or '-'}")
+    else:
+        print("  (nobody else yet - you are first)")
+    print()
+
+    msgs = db.undelivered(conn, name)
+    print("YOUR INBOX")
+    if msgs:
+        for m in msgs:
+            print(f"  from {m['from_name']}: {m['body']}")
+            db.mark_delivered(conn, m["id"])
+    else:
+        print("  (empty)")
+    print()
+    print(protocol.SWARM_PROTOCOL, end="")
     return 0
 
 
@@ -1272,6 +1332,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--dir", default=None,
                    help="record this session's working directory (for restore)")
     r.set_defaults(fn=cmd_register)
+
+    j = sub.add_parser("join", help="register AND print the swarm protocol "
+                                    "(start here)")
+    j.add_argument("name")
+    j.add_argument("--role", default="worker", choices=db.ROLES)
+    j.add_argument("--project", default=None)
+    j.set_defaults(fn=cmd_join)
 
     s = sub.add_parser("status", help="update my one-line status")
     s.add_argument("text")
