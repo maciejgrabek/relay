@@ -24,7 +24,7 @@ THE VERBS YOU WILL ACTUALLY USE
   relay task add "<title>" [--owner <name>] [--parent <id>]
   relay task update <id> --state todo|doing|blocked|done
 
-  Full reference, including PR routing and spawning:  relay help pr
+  Full PR reference (claiming, routing, escalating):  relay help pr
 
 THE FOUR RULES THAT MAKE A SWARM WORK
 
