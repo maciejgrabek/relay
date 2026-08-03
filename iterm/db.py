@@ -290,6 +290,14 @@ def get_session(conn, name: str) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM sessions WHERE name=?", (name,)).fetchone()
 
 
+def registered_names(conn) -> set:
+    """Every name currently bound to a non-closed session. Distinct from
+    swarm.live_names, which is watcher-side and additionally requires the tab
+    to be present right now; a name here is taken even if its tab is gone."""
+    return {r["name"] for r in conn.execute(
+        "SELECT name FROM sessions WHERE closed_at = 0").fetchall()}
+
+
 def get_by_iterm_id(conn, iterm_session_id: str) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM sessions WHERE iterm_session_id=?",
                         (iterm_session_id,)).fetchone()

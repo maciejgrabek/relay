@@ -59,12 +59,33 @@ def _confirm(question: str) -> bool:
         return False
 
 
-def _require_me(conn):
+def _ensure_me(conn):
+    """This session's row, auto-registering it if it has none.
+
+    Registration is still an explicit act, in the sense that a session only
+    becomes addressable by RUNNING a relay verb itself - a tab that never
+    touches relay stays untouchable by the watcher's delivery leg. What changes
+    is that the act no longer has to be a separate command carrying a name the
+    operator invented, which was the whole barrier to "just talk to the other
+    session". Rename later with `relay join <name>`; nothing is lost.
+    """
     me = whoami(conn)
-    if me is None:
-        return None, _err("this session is not registered - run: "
-                          "relay register --name <name> --role worker|coordinator")
-    return me, 0
+    if me is not None:
+        return me, 0
+    sid = my_iterm_id()
+    if not sid:
+        return None, _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
+    name = swarm.derive_name(os.getcwd(), db.registered_names(conn))
+    db.register(conn, name, sid, "worker", _default_project(conn))
+    db.set_session_context(conn, name, os.getcwd(), "")
+    print(f"relay: registered this session as '{name}' "
+          f"(rename with: relay join <name>)")
+    return db.get_session(conn, name), 0
+
+
+# Historical name. Auto-registration made "require" the wrong verb, but the
+# call sites read fine either way.
+_require_me = _ensure_me
 
 
 def _ago(ts: float) -> str:
