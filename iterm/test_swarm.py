@@ -624,6 +624,58 @@ def run():
                 "or not prs is passed",
                 line15_no_pr == line15_with_pr)
 
+    # --- thread verdicts ----------------------------------------------------
+    def _m(frm, kind, body, t):
+        return {"from_name": frm, "kind": kind, "body": body,
+                "created_at": float(t), "id": int(t)}
+
+    parts = ["a", "b"]
+    posts = [_m("a", "say", "I think X", 1)]
+    ok &= check("one post is not agreement",
+                swarm.thread_verdict(parts, posts, 3)[0] == "open")
+    ok &= check("round_counts counts says",
+                swarm.round_counts(posts) == {"a": 1})
+    ok &= check("agree does not consume a round",
+                swarm.round_counts(posts + [_m("a", "agree", "X", 2)])
+                == {"a": 1})
+    ok &= check("a lone agree is not unanimity",
+                swarm.thread_verdict(parts, posts
+                                     + [_m("a", "agree", "X", 2)], 3)[0]
+                == "open")
+
+    both = posts + [_m("a", "agree", "X", 2), _m("b", "agree", "X too", 3)]
+    st, outcome = swarm.thread_verdict(parts, both, 3)
+    ok &= check("unanimous agree closes agreed", st == "agreed")
+    ok &= check("outcome carries both positions",
+                "X" in outcome and "X too" in outcome)
+
+    retracted = both + [_m("b", "say", "actually, wait", 4)]
+    ok &= check("a say after agree retracts it",
+                swarm.thread_verdict(parts, retracted, 3)[0] == "open")
+    ok &= check("re-agreeing after a retraction settles again",
+                swarm.thread_verdict(
+                    parts, retracted + [_m("b", "agree", "ok X", 5)],
+                    3)[0] == "agreed")
+
+    capped = []
+    for i in (1, 2, 3):
+        capped.append(_m("a", "say", f"a post {i}", i * 10))
+        capped.append(_m("b", "say", f"b post {i}", i * 10 + 1))
+    st2, out2 = swarm.thread_verdict(parts, capped, 3)
+    ok &= check("cap spent with no unanimity is unresolved",
+                st2 == "unresolved")
+    ok &= check("unresolved records last positions",
+                "a post 3" in out2 and "b post 3" in out2)
+    ok &= check("one participant at cap is not enough to close",
+                swarm.thread_verdict(parts, capped[:5], 3)[0] == "open")
+    ok &= check("agreement wins over a spent cap",
+                swarm.thread_verdict(
+                    parts, capped + [_m("a", "agree", "fine", 99),
+                                     _m("b", "agree", "fine", 100)],
+                    3)[0] == "agreed")
+    ok &= check("a participant who never posted blocks agreement",
+                swarm.thread_verdict(["a", "b", "c"], both, 3)[0] == "open")
+
     # --- batch_delivery_text ------------------------------------------------
     one = [{"id": 5, "from_name": "a", "body": "just this", "kind": "info"}]
     bt = swarm.batch_delivery_text(one)
