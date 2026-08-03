@@ -624,6 +624,33 @@ def run():
                 "or not prs is passed",
                 line15_no_pr == line15_with_pr)
 
+    # --- derive_name --------------------------------------------------------
+    ok &= check("derive_name uses the cwd basename",
+                swarm.derive_name("/Users/x/Work/api", set()) == "api")
+    ok &= check("derive_name slugifies",
+                swarm.derive_name("/Users/x/My Big_Repo!", set())
+                == "my-big-repo")
+    ok &= check("derive_name dedupes with -2",
+                swarm.derive_name("/Users/x/api", {"api"}) == "api-2")
+    ok &= check("derive_name dedupes past -2",
+                swarm.derive_name("/Users/x/api", {"api", "api-2"})
+                == "api-3")
+    ok &= check("derive_name never yields a reserved name",
+                swarm.derive_name("/tmp/human", set()) == "human-2")
+    # The relay repo is itself called 'relay', which is reserved - a session
+    # working ON relay must not derive the one name the watcher refuses to
+    # deliver to.
+    ok &= check("derive_name suffixes 'relay' rather than proposing it",
+                swarm.derive_name("/Users/x/Work/relay", set()) == "relay-2")
+    ok &= check("derive_name falls back when the basename is empty",
+                swarm.derive_name("/", set()) == "session")
+    ok &= check("derive_name handles a trailing slash",
+                swarm.derive_name("/Users/x/api/", set()) == "api")
+    ok &= check("derive_name truncates long basenames",
+                len(swarm.derive_name("/x/" + "a" * 80, set())) <= 24)
+    ok &= check("derive_name tolerates an empty cwd",
+                swarm.derive_name("", set()) == "session")
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
