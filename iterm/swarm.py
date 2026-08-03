@@ -809,6 +809,58 @@ def render_prs(rows, width: int = 100) -> list:
     return out
 
 
+def thread_row(th, msgs, now: float) -> dict:
+    """One discussion, reduced to what the panel shows. Pure: the caller does
+    the DB work and hands over the thread plus its posts."""
+    parts = [p for p in str(_get(th, "participants", "")).split(",") if p]
+    pos = positions(msgs)
+    state = _get(th, "state", "open")
+    return {
+        "id": _get(th, "id", 0),
+        "topic": _get(th, "topic", ""),
+        "state": state,
+        "outcome": _get(th, "outcome", "") or "",
+        "settled": len([p for p in parts if p in pos]),
+        "total": len(parts),
+        "age_s": max(0.0, now - (_get(th, "created_at", 0) or 0)),
+        # A closed discussion is the operator's cue: it has a verdict nobody
+        # has read yet. An open one is the sessions' business, not theirs.
+        "flag": state != "open",
+    }
+
+
+def _discussion_line(r, width: int, mark: str = " ") -> str:
+    head = f"  {mark} #{r['id']:<4} "
+    tail = f" {r['settled']}/{r['total']} settled  {fmt_age(r['age_s']):>5}"
+    if r["state"] != "open":
+        tail = f" {r['state']}: {_clip(r['outcome'], 40)}"
+    topic = _clip(r["topic"], max(12, width - len(head) - len(tail) - 2))
+    line = f"{head}{topic}{tail}"
+    return f"[yellow]{_esc(line)}[/yellow]" if r["flag"] else _esc(line)
+
+
+def render_discussions(rows, width: int = 100) -> list:
+    """Attention strip on top, then every discussion in stable id order below.
+
+    Same contract as render_prs: the main list NEVER reorders as states change,
+    so a row stays where the eye last found it, and anything needing the
+    operator is DUPLICATED above rather than moved. Always renders, even empty
+    - a section that vanishes reads as "relay has no such feature"."""
+    if not rows:
+        return ["DISCUSSIONS",
+                "[dim]  (none - a session opens one with: "
+                "relay discuss <name> <name> \"<question>\")[/dim]"]
+    out = ["DISCUSSIONS"]
+    flagged = [r for r in rows if r["flag"]]
+    for r in flagged:
+        out.append(_discussion_line(r, width, mark="‼"))
+    if flagged:
+        out.append("  " + "─" * max(10, min(width - 4, 60)))
+    for r in sorted(rows, key=lambda x: x["id"]):
+        out.append(_discussion_line(r, width))
+    return out
+
+
 def progress_bar(done: int, total: int, cells: int = 10) -> str:
     if total <= 0:
         return "▱" * cells
@@ -817,7 +869,7 @@ def progress_bar(done: int, total: int, cells: int = 10) -> str:
 
 
 def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
-                 stale=frozenset(), activity=None, prs=()) -> str:
+                 stale=frozenset(), activity=None, prs=(), threads=()) -> str:
     """One Rich-markup screen: fleet line, roster (heartbeats, stale marks),
     kanban board, epic progress bars, interaction map, kind-colored message
     feed. Grouped by project when more than one is present. With no swarm at
@@ -938,6 +990,9 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
         out.append("")
 
     out.extend(render_prs(prows, width))
+    out.append("")
+
+    out.extend(render_discussions(list(threads), width))
     out.append("")
 
     out.append("MESSAGES")

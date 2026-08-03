@@ -1854,11 +1854,22 @@ class RelayApp(App):
                 ts = getattr(info, "_screen_changed_ts", 0) or 0
                 if ts:
                     activity[row["name"]] = ts
+            # Open discussions, plus any that closed recently enough that the
+            # operator has plausibly not read the verdict yet. A closed one is
+            # exactly what the attention strip exists for.
+            _now = _time.time()
+            threads = [
+                swarmlogic.thread_row(
+                    th, swarmdb.thread_messages(self._swarm_db, th["id"]),
+                    _now)
+                for th in swarmdb.list_threads(self._swarm_db)
+                if th["state"] == "open"
+                or _now - (th["closed_at"] or 0) < 86400]
             w = max(60, self.query_one("#swarmview").size.width - 4)
             text = swarmlogic.render_swarm(sessions, tasks, msgs,
                                            _time.time(), width=w,
                                            stale=stale, activity=activity,
-                                           prs=prs)
+                                           prs=prs, threads=threads)
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)

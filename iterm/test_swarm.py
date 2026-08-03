@@ -624,6 +624,42 @@ def run():
                 "or not prs is passed",
                 line15_no_pr == line15_with_pr)
 
+    # --- discussions pane ----------------------------------------------------
+    def _th(i, topic, state="open", outcome="", cap=3, parts="a,b",
+            created=0.0):
+        return {"id": i, "topic": topic, "state": state, "outcome": outcome,
+                "rounds_cap": cap, "participants": parts, "opener": "a",
+                "created_at": created, "closed_at": 0.0, "project": "p"}
+
+    empty = swarm.render_discussions([], 100)
+    ok &= check("discussions pane renders when empty",
+                any("DISCUSSIONS" in ln for ln in empty))
+    ok &= check("the empty pane teaches how to open one",
+                any("relay discuss" in ln for ln in empty))
+
+    r_open = swarm.thread_row(_th(1, "one DB or many?"),
+                              [{"from_name": "a", "kind": "agree",
+                                "body": "X", "created_at": 1, "id": 1}],
+                              now=100.0)
+    ok &= check("thread_row counts settled participants",
+                r_open["settled"] == 1 and r_open["total"] == 2)
+    ok &= check("an open thread is not flagged", not r_open["flag"])
+    r_done = swarm.thread_row(_th(2, "cache?", state="unresolved",
+                                  outcome="a: yes | b: no"), [], now=100.0)
+    ok &= check("a closed thread is flagged for the operator",
+                r_done["flag"])
+
+    pane = swarm.render_discussions([r_open, r_done], 100)
+    body = "\n".join(pane)
+    ok &= check("pane shows the topic", "one DB or many?" in body)
+    ok &= check("pane shows settled counts", "1/2" in body)
+    ok &= check("pane shows a verdict", "unresolved" in body)
+    ok &= check("pane duplicates what needs attention on top",
+                body.count("cache?") == 2)
+    ids = [ln for ln in pane if "#1" in ln or "#2" in ln]
+    ok &= check("the main list stays in id order",
+                ids[-2].find("#1") >= 0 and ids[-1].find("#2") >= 0)
+
     # --- thread verdicts ----------------------------------------------------
     def _m(frm, kind, body, t):
         return {"from_name": frm, "kind": kind, "body": body,
