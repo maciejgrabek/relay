@@ -369,13 +369,21 @@ def _broadcast(conn, th, sender: str, body: str, kind: str) -> None:
     """Post to every participant except the sender - one message row each.
 
     Fan-out rather than a shared mailbox, so delivery, batching, the inbox and
-    the audit trail all keep working exactly as they already do. The
-    transcript de-dupes these back into one post (db.thread_messages)."""
+    the audit trail all keep working exactly as they already do. The transcript
+    de-dupes these back into one post (db.thread_messages).
+
+    ONE timestamp for the whole fan-out, computed here rather than per row:
+    letting each INSERT call time.time() separately makes the rows differ by
+    microseconds, and the transcript's de-dupe key - which includes the
+    timestamp, so that two genuinely separate posts of the same text stay two
+    posts - then never matches. The symptom is every post rendering once per
+    recipient."""
+    stamp = time.time()
     for p in db.participants_of(th):
         if p == sender:
             continue
         db.queue_message(conn, sender, p, body, th["project"], kind=kind,
-                         thread_id=th["id"])
+                         thread_id=th["id"], now=stamp)
 
 
 def cmd_discuss(args) -> int:
