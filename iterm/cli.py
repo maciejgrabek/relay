@@ -348,6 +348,63 @@ def cmd_send(args) -> int:
     return 0
 
 
+def cmd_reply(args) -> int:
+    """Answer whoever wrote to you, without having to know their name.
+
+    This is the ceremony `relay send <name>` used to demand: a session had to
+    parse the sender out of its injected turn and retype it. Getting that wrong
+    is SILENT - the message goes to a real session that never asked - which is
+    exactly the class of mistake a CLI should make impossible rather than
+    document."""
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    if args.target is None:
+        return _err('usage: relay reply "<body>"  or  '
+                    'relay reply <msg-id> "<body>"')
+    if args.body is None:
+        mid, body = None, args.target
+    else:
+        if not str(args.target).isdigit():
+            return _err(f"expected a message id, got {args.target!r} - "
+                        f'usage: relay reply <msg-id> "<body>"')
+        mid, body = int(args.target), args.body
+    if not str(body).strip():
+        return _err("the reply body cannot be empty")
+    if mid is None:
+        batch = db.last_batch(conn, me["name"])
+        if not batch:
+            return _err("nothing to reply to - you have received no messages. "
+                        'Use: relay send <name> "<body>" '
+                        "(relay who lists names)")
+        if len(batch) > 1:
+            ids = ", ".join(f"#{m['id']} from {m['from_name']}"
+                            for m in batch)
+            return _err(f"your last delivery held {len(batch)} messages "
+                        f"({ids}) - say which one you are answering: "
+                        f'relay reply <msg-id> "<body>"')
+        mid = batch[0]["id"]
+    src = db.get_message(conn, mid)
+    if src is None:
+        return _err(f"no message #{mid} - relay msgs shows your history")
+    if src["to_name"] != me["name"]:
+        return _err(f"message #{mid} was not addressed to you "
+                    f"(it went to '{src['to_name']}')")
+    target = src["from_name"]
+    if target in db.RESERVED_NAMES:
+        return _err(f"#{mid} came from '{target}', which is relay itself and "
+                    f"not a session that can receive a reply. If you need a "
+                    f'decision, use: relay send --human "<the question>"')
+    if db.get_session(conn, target) is None:
+        return _err(f"'{target}' is no longer registered - "
+                    f"relay who lists who is here")
+    db.queue_message(conn, me["name"], target, body, me["project"],
+                     kind=args.kind or "info", reply_to=mid)
+    print(f"replied to {target} (re: #{mid})")
+    return 0
+
+
 def cmd_inbox(args) -> int:
     conn = db.connect()
     me, rc = _require_me(conn)
@@ -1446,6 +1503,13 @@ def build_parser() -> argparse.ArgumentParser:
     sd.add_argument("--human", action="store_true",
                     help="escalate to the operator (pings; never injected)")
     sd.set_defaults(fn=cmd_send)
+
+    rp_ = sub.add_parser("reply", help="answer the last message you received")
+    rp_.add_argument("target", nargs="?", default=None,
+                     help="message id, or the body when replying to the last")
+    rp_.add_argument("body", nargs="?", default=None)
+    rp_.add_argument("--kind", default="info")
+    rp_.set_defaults(fn=cmd_reply)
 
     ib = sub.add_parser("inbox", help="print + mark delivered my queued messages")
     ib.set_defaults(fn=cmd_inbox)

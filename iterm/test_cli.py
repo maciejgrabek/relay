@@ -1197,6 +1197,63 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    # --- reply ----------------------------------------------------------------
+    run_cli("join", "rep-a", "--project", "repp", iterm_id="w0t1p0:REP-A")
+    run_cli("join", "rep-b", "--project", "repp", iterm_id="w0t1p0:REP-B")
+    run_cli("send", "rep-b", "question one", iterm_id="w0t1p0:REP-A")
+    c = db.connect()
+    qid = c.execute("SELECT id FROM messages WHERE to_name='rep-b' "
+                    "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    c.execute("UPDATE messages SET delivered_at=1000.0 WHERE id=?", (qid,))
+    c.commit()
+    c.close()
+    code, out, err = run_cli("reply", "my answer", iterm_id="w0t1p0:REP-B")
+    ok &= check("bare reply exits 0", code == 0)
+    rrow = _one_message("rep-a")
+    ok &= check("bare reply targets the sender",
+                rrow is not None and rrow["from_name"] == "rep-b")
+    ok &= check("bare reply correlates with reply_to",
+                rrow is not None and rrow["reply_to"] == qid)
+
+    # Two messages sharing one delivered_at ARE one batch: a bare reply then
+    # cannot know which one it answers, so it must refuse rather than guess.
+    c = db.connect()
+    c.execute("INSERT INTO messages(project,from_name,to_name,body,"
+              "created_at,kind,delivered_at) VALUES "
+              "('repp','rep-a','rep-b','m1',1,'info',2000.0)")
+    c.execute("INSERT INTO messages(project,from_name,to_name,body,"
+              "created_at,kind,delivered_at) VALUES "
+              "('repp','rep-a','rep-b','m2',2,'info',2000.0)")
+    c.commit()
+    bid = c.execute("SELECT id FROM messages WHERE body='m2'").fetchone()[0]
+    c.close()
+    code, out, err = run_cli("reply", "ambiguous", iterm_id="w0t1p0:REP-B")
+    ok &= check("bare reply refuses after a batch", code != 0)
+    ok &= check("refusal lists the ids", "#" in err)
+    code, out, err = run_cli("reply", str(bid), "explicit",
+                             iterm_id="w0t1p0:REP-B")
+    ok &= check("reply <id> works after a batch", code == 0)
+    ok &= check("reply <id> correlates",
+                _one_message("rep-a")["reply_to"] == bid)
+
+    # Guards.
+    code, out, err = run_cli("reply", "99999", "ghost",
+                             iterm_id="w0t1p0:REP-B")
+    ok &= check("reply to an unknown id is refused", code != 0)
+    code, out, err = run_cli("reply", str(qid), "not mine",
+                             iterm_id="w0t1p0:REP-A")
+    ok &= check("reply to someone else's message is refused", code != 0)
+    c = db.connect()
+    c.execute("INSERT INTO messages(project,from_name,to_name,body,"
+              "created_at,kind,delivered_at) VALUES "
+              "('repp','relay','rep-b','wake up',9,'wake',3000.0)")
+    c.commit()
+    c.close()
+    code, out, err = run_cli("reply", "thanks relay",
+                             iterm_id="w0t1p0:REP-B")
+    ok &= check("reply to relay is refused", code != 0)
+    ok &= check("reply to relay points at --human", "--human" in err)
+
     # --- join with no name ----------------------------------------------------
     code, out, err = run_cli("join", iterm_id="w0t1p0:BARE-1")
     ok &= check("bare join exits 0", code == 0)
