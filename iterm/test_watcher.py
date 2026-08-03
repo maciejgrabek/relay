@@ -1341,6 +1341,78 @@ async def timer_tests():
     return ok
 
 
+def close_threads_tests():
+    """_close_threads against a REAL temp DB: it touches enough of the thread
+    API that monkeypatching would test the mocks, not the behaviour."""
+    import tempfile
+    from watcher import Watcher
+    import db as realdb
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.unlink(path)
+    conn = realdb.connect(path)
+    W.notify_mac = lambda *a, **k: None
+
+    w = Watcher(connection=None, dry_run=False)
+    w._db = conn
+
+    def _pings():
+        return conn.execute("SELECT * FROM messages WHERE to_name='human' "
+                            "AND kind='escalation'").fetchall()
+
+    # UNANIMOUS -> agreed, one ping carrying the outcome.
+    t1 = realdb.create_thread(conn, "one DB or many?", "a", ["a", "b"],
+                              project="p", rounds_cap=3)
+    realdb.queue_message(conn, "a", "b", "per service", "p", kind="agree",
+                         thread_id=t1)
+    realdb.queue_message(conn, "b", "a", "per service", "p", kind="agree",
+                         thread_id=t1)
+    w._close_threads()
+    chk("unanimous -> agreed",
+        realdb.get_thread(conn, t1)["state"] == "agreed")
+    chk("agreed records the outcome",
+        "per service" in realdb.get_thread(conn, t1)["outcome"])
+    chk("agreed pings the human once", len(_pings()) == 1)
+    # Idempotent: a second tick must not re-close or re-ping.
+    w._close_threads()
+    chk("closing is idempotent across ticks", len(_pings()) == 1)
+
+    # CAP SPENT with no agreement -> unresolved, last positions recorded.
+    t2 = realdb.create_thread(conn, "shared cache?", "a", ["a", "b"],
+                              project="p", rounds_cap=1)
+    realdb.queue_message(conn, "a", "b", "yes cache", "p", kind="say",
+                         thread_id=t2, now=10.0)
+    realdb.queue_message(conn, "b", "a", "no cache", "p", kind="say",
+                         thread_id=t2, now=11.0)
+    w._close_threads()
+    th2 = realdb.get_thread(conn, t2)
+    chk("spent cap -> unresolved", th2["state"] == "unresolved")
+    chk("unresolved records both last positions",
+        "yes cache" in th2["outcome"] and "no cache" in th2["outcome"])
+    chk("unresolved pings the human too", len(_pings()) == 2)
+
+    # An OPEN thread short of a verdict is left alone.
+    t3 = realdb.create_thread(conn, "still going", "a", ["a", "b"],
+                              project="p", rounds_cap=3)
+    realdb.queue_message(conn, "a", "b", "opening", "p", kind="say",
+                         thread_id=t3)
+    w._close_threads()
+    chk("an undecided thread stays open",
+        realdb.get_thread(conn, t3)["state"] == "open")
+    chk("an undecided thread does not ping", len(_pings()) == 2)
+
+    conn.close()
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
@@ -1356,5 +1428,7 @@ if __name__ == "__main__":
     r12 = notify_mac_tests()
     r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
+    r_thr = close_threads_tests()
     sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10 and r11 and r12 and r13 and r_timer) else 1)
+                   and r9 and r10 and r11 and r12 and r13 and r_timer
+                   and r_thr) else 1)

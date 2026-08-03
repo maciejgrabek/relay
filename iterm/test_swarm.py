@@ -705,6 +705,33 @@ def run():
                     [{"id": 1, "from_name": "a", "body": "one\ntwo",
                       "kind": "info"}]))
 
+    # --- thread pointers ----------------------------------------------------
+    tp = [{"id": 9, "from_name": "api", "body": "one per service",
+           "kind": "say", "thread_id": 7}]
+    pt = swarm.batch_delivery_text(tp)
+    ok &= check("thread delivery points at relay thread",
+                "relay thread 7" in pt)
+    # A thread is posted to with `relay say`; naming `relay reply` in the one
+    # line a woken session is guaranteed to read would send it down the wrong
+    # verb entirely.
+    ok &= check("thread pointer does not say reply", "relay reply" not in pt)
+    ok &= check("thread pointer names the sender", "api" in pt)
+    ok &= check("thread pointer is one line", "\n" not in pt)
+    ok &= check("thread pointer does not inline the payload",
+                "one per service" not in pt)
+    mixed = tp + [{"id": 10, "from_name": "bff", "body": "shared",
+                   "kind": "say", "thread_id": 7}]
+    ok &= check("several posts in one thread collapse to one pointer",
+                swarm.batch_delivery_text(mixed).count("relay thread 7") == 1)
+    ok &= check("the pointer counts the posts",
+                "2" in swarm.batch_delivery_text(mixed))
+    # Mixed traffic (a thread post AND a plain message) must NOT masquerade as
+    # a pure thread pointer, or the plain message would be silently invisible.
+    both_kinds = tp + [{"id": 11, "from_name": "z", "body": "unrelated",
+                        "kind": "info"}]
+    ok &= check("mixed thread + plain traffic falls back to the inbox pointer",
+                "relay inbox" in swarm.batch_delivery_text(both_kinds))
+
     # --- derive_name --------------------------------------------------------
     ok &= check("derive_name uses the cwd basename",
                 swarm.derive_name("/Users/x/Work/api", set()) == "api")

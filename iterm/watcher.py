@@ -321,6 +321,7 @@ class Watcher:
                     self._load_timers_on_start()
                 await self._name_own_tab()
                 self._check_escalations()
+                self._close_threads()
                 self._check_completions()
                 self._statusbar_publish()
                 if self._roster_ok:
@@ -907,6 +908,37 @@ class Watcher:
                     if row["iterm_session_id"] in self.sessions}
         except Exception as e:
             self._note(f"timers load error: {e}")
+
+    def _close_threads(self) -> None:
+        """Close discussions that have reached a verdict and ping the operator
+        with the OUTCOME, not the transcript.
+
+        Runs in dry-run too: stamping a thread and queueing a message are DB
+        writes, not keystrokes, and whether the operator learns how a
+        discussion ended must not depend on relay being allowed to type.
+        Best-effort - a DB error is logged, never breaks the loop."""
+        try:
+            conn = self._swarm_conn()
+            for th in swarmdb.list_threads(conn, state="open"):
+                parts = swarmdb.participants_of(th)
+                msgs = swarmdb.thread_messages(conn, th["id"])
+                state, outcome = swarm.thread_verdict(
+                    parts, msgs, th["rounds_cap"])
+                if state == "open":
+                    continue
+                # close_thread is guarded on state='open', so two ticks racing
+                # cannot double-close and ping the operator twice.
+                if not swarmdb.close_thread(conn, th["id"], state, outcome):
+                    continue
+                verdict = "agreed" if state == "agreed" else "could NOT agree"
+                swarmdb.queue_message(
+                    conn, "relay", "human",
+                    f"discussion #{th['id']} ({th['topic']}) {verdict}: "
+                    f"{outcome}",
+                    th["project"], kind="escalation", thread_id=th["id"])
+                self._note(f"THREAD #{th['id']} {state}: {outcome[:80]}")
+        except Exception as e:
+            self._note(f"thread close error: {e}")
 
     def _check_escalations(self) -> None:
         """A worker sending --kind escalation is calling for a human. Ping
