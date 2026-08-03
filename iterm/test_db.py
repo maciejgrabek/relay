@@ -104,6 +104,48 @@ def run():
     omig.close()
     rconn.close()
 
+    # --- threads --------------------------------------------------------------
+    tpath = _tmpdb()
+    tconn = db.connect(tpath)
+    tid = db.create_thread(tconn, "one DB or many?", "a", ["a", "b", "c"],
+                           project="p", rounds_cap=3)
+    th = db.get_thread(tconn, tid)
+    ok &= check("thread starts open", th["state"] == "open")
+    ok &= check("thread records the opener", th["opener"] == "a")
+    ok &= check("participants round-trip",
+                db.participants_of(th) == ["a", "b", "c"])
+    ok &= check("rounds_cap stored", th["rounds_cap"] == 3)
+    ok &= check("opener is always a participant",
+                db.participants_of(db.get_thread(
+                    tconn, db.create_thread(tconn, "t", "z", ["y"])))
+                == ["z", "y"])
+    db.queue_message(tconn, "a", "b", "my view", "p", kind="say",
+                     thread_id=tid)
+    ok &= check("thread_messages finds the post",
+                len(db.thread_messages(tconn, tid)) == 1)
+    # A post to three peers is three rows carrying one body - the transcript
+    # must show it once.
+    db.queue_message(tconn, "a", "b", "same body", "p", kind="say",
+                     thread_id=tid, now=500.0)
+    db.queue_message(tconn, "a", "c", "same body", "p", kind="say",
+                     thread_id=tid, now=500.0)
+    ok &= check("thread_messages dedupes a fan-out post",
+                len(db.thread_messages(tconn, tid)) == 2)
+    ok &= check("open threads listed",
+                tid in [t["id"] for t in db.list_threads(tconn,
+                                                         state="open")])
+    ok &= check("close_thread sets state and outcome",
+                db.close_thread(tconn, tid, "agreed", "one per service"))
+    th = db.get_thread(tconn, tid)
+    ok &= check("closed thread is agreed", th["state"] == "agreed")
+    ok &= check("outcome stored", th["outcome"] == "one per service")
+    ok &= check("closed_at set", th["closed_at"] > 0)
+    ok &= check("closing twice is refused (no double-ping)",
+                not db.close_thread(tconn, tid, "unresolved", "x"))
+    ok &= check("close_thread rejects a bogus state",
+                _raises(lambda: db.close_thread(tconn, tid, "nonsense", "x")))
+    tconn.close()
+
     # --- persisted mode (restart survival): its own DB so the session-count
     # assertions later in run() aren't perturbed by an extra registration.
     ppath = _tmpdb()

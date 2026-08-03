@@ -24,7 +24,14 @@ ARM_REQUEST_MODES = ("safe", "wild", "insane")
 # Message kinds with dedicated rendering/behavior. 'wake' is reserved for
 # relay-generated wake-ups; custom kinds beyond this set are allowed and
 # render plain. Validation lives in the CLI - the DB stores what it is given.
-MESSAGE_KINDS = ("info", "done", "blocked", "escalation", "wake")
+MESSAGE_KINDS = ("info", "done", "blocked", "escalation", "wake",
+                 "say", "agree", "ask")
+
+# A discussion is open until it reaches a verdict. 'unresolved' is a NORMAL
+# outcome, not a failure: sessions that cannot converge is information the
+# operator wants, and the alternative is looping forever or fabricating an
+# agreement.
+THREAD_STATES = ("open", "agreed", "unresolved")
 
 PR_STATES = ("created", "review", "changes", "approved", "merged", "closed")
 
@@ -88,6 +95,18 @@ CREATE TABLE IF NOT EXISTS timers(
   fire_count INTEGER NOT NULL DEFAULT 0,
   key TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS threads(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL DEFAULT '',
+  topic TEXT NOT NULL,
+  opener TEXT NOT NULL,
+  participants TEXT NOT NULL,
+  rounds_cap INTEGER NOT NULL DEFAULT 3,
+  state TEXT NOT NULL DEFAULT 'open',
+  outcome TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  closed_at REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS prs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -488,6 +507,83 @@ def message_history(conn, with_name: Optional[str] = None,
         f"SELECT * FROM messages {w} ORDER BY created_at DESC, id DESC LIMIT ?",
         (*args, limit)).fetchall()
     return list(reversed(rows))
+
+
+# --- threads (discussions) -------------------------------------------------------
+#
+# The table holds only what cannot be derived: topic, participants, cap and the
+# recorded verdict. WHO HAS AGREED is deliberately NOT stored - it is computed
+# from the messages (see swarm.positions), so there is no second copy of the
+# truth to fall out of sync, and "a post retracts your agreement" needs no
+# bookkeeping at all.
+
+def participants_of(row) -> List[str]:
+    return [p for p in str(row["participants"]).split(",") if p]
+
+
+def create_thread(conn, topic: str, opener: str, participants,
+                  project: str = "", rounds_cap: int = 3,
+                  now: Optional[float] = None) -> int:
+    names = [opener] + [p for p in participants if p != opener]
+    cur = conn.execute(
+        """INSERT INTO threads(project, topic, opener, participants,
+                               rounds_cap, created_at)
+           VALUES(?,?,?,?,?,?)""",
+        (project, topic, opener, ",".join(names), int(rounds_cap), _now(now)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_thread(conn, tid: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM threads WHERE id=?", (tid,)).fetchone()
+
+
+def list_threads(conn, project: Optional[str] = None,
+                 state: Optional[str] = None) -> List[sqlite3.Row]:
+    where, args = [], []
+    if project is not None:
+        where.append("project=?")
+        args.append(project)
+    if state is not None:
+        where.append("state=?")
+        args.append(state)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    return conn.execute(
+        f"SELECT * FROM threads {w} ORDER BY id", tuple(args)).fetchall()
+
+
+def thread_messages(conn, tid: int) -> List[sqlite3.Row]:
+    """Every post in the thread, oldest first, deduped.
+
+    A post to three participants is three message rows carrying the same body
+    (one per recipient, so delivery/batching/inbox all keep working unchanged).
+    The transcript must show it once."""
+    rows = conn.execute(
+        "SELECT * FROM messages WHERE thread_id=? ORDER BY created_at, id",
+        (tid,)).fetchall()
+    seen, out = set(), []
+    for r in rows:
+        k = (r["from_name"], r["body"], r["kind"], round(r["created_at"], 3))
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
+def close_thread(conn, tid: int, state: str, outcome: str,
+                 now: Optional[float] = None) -> bool:
+    """Close an OPEN thread. Guarded on state inside the UPDATE so two watcher
+    ticks racing cannot double-close and ping the operator twice."""
+    if state not in THREAD_STATES or state == "open":
+        raise ValueError(f"state must be a terminal one of {THREAD_STATES}, "
+                         f"got {state!r}")
+    cur = conn.execute(
+        "UPDATE threads SET state=?, outcome=?, closed_at=? "
+        "WHERE id=? AND state='open'",
+        (state, outcome, _now(now), tid))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # --- tasks -----------------------------------------------------------------------
