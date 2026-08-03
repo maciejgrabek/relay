@@ -78,11 +78,11 @@ adjudicate by guessing, and do not ping-pong one message at a time.
 
     relay discuss <worker> <worker> "<the question>"
 
-Every participant sees every post, each gets a bounded number of them, and it
-ends when they all post `relay agree "<position>"` - or `unresolved` when they
-cannot converge, which hands it to the human with each worker's last stated
-position. Either way relay notifies the operator with the outcome, so you do
-not have to chase it.
+Every participant sees every post. It ends when they all post `relay agree
+"<position>"`, or when one of them ends it with `relay close`. Relay does not
+adjudicate: it never declares a discussion failed and never escalates one on
+the participants' behalf, because that decision is theirs. You are notified
+when one settles, so you do not have to chase it.
 
 Use it when the people with the context are the workers, not you. For a single
 factual question to a single worker, `relay ask <name> "<question>"` blocks and

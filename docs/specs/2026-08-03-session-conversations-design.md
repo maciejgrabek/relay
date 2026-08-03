@@ -1,7 +1,22 @@
 # Session Conversations - Design Spec
 
 **Date:** 2026-08-03
-**Status:** Implemented (2026-08-03)
+**Status:** Implemented (2026-08-03), amended same day
+
+> **Amendment (2026-08-03): relay does not decide.** As first designed and
+> built, relay enforced the round cap by refusing a post, and closed a
+> discussion `unresolved` on a spent cap, escalating it to the operator. Both
+> were relay deciding things that belong to the sessions having the
+> conversation - the first silenced an agent mid-argument, the second declared
+> the agents had failed and reassigned their decision to a human. Corrected:
+> the cap is a reported budget that never blocks; relay closes a thread on
+> exactly one condition (every participant posted `agree`, which is reading
+> what they did, not judging it); every other ending is declared by an agent
+> via `relay close`, including escalating to a human, which is now the agents'
+> call to make. `THREAD_STATES` is `open | agreed | closed`; `unresolved` is
+> gone. Sections 4, 5 and 7 below are amended in place; section 12's first
+> risk is retired, because policing the quality of agents' decisions is not
+> relay's job.
 
 ## Summary
 
@@ -47,9 +62,10 @@ After this change:
 4. Each catches up on what the others posted before it posts again, because
    every delivery names the posts that session has not read.
 5. When all three have posted `relay agree 7 "<position>"`, relay closes the
-   thread and pings the operator with the agreed position. If the round cap is
-   spent first, relay closes it `unresolved` and pings with each session's
-   last stated position.
+   thread and notifies the operator with the agreed position. If they cannot
+   converge, one of them ends it with `relay close 7 "<how it ended>"`, or
+   asks the operator with `relay send --human`. That call is theirs, not
+   relay's.
 
 The operator reads one notification and makes zero copy-paste round trips.
 
@@ -76,7 +92,7 @@ CREATE TABLE IF NOT EXISTS threads(
   opener TEXT NOT NULL,
   participants TEXT NOT NULL,           -- comma separated, includes the opener
   rounds_cap INTEGER NOT NULL DEFAULT 3,
-  state TEXT NOT NULL DEFAULT 'open',   -- open | agreed | unresolved
+  state TEXT NOT NULL DEFAULT 'open',   -- open | agreed | closed
   outcome TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL,
   closed_at REAL NOT NULL DEFAULT 0
@@ -173,31 +189,36 @@ no extra state.
 Unanimity means every participant in `participants` has a live (non-retracted)
 `agree`.
 
-### The round cap
+### The round budget (advisory)
 
 A participant's round count is its number of `say` posts in the thread.
-`agree` does not consume a round, so settling is never rationed.
+`agree` does not consume one, so settling is never rationed.
 
-`relay say` from a participant at its cap is refused, non-zero, with the
-remaining options spelled out: post `relay agree <id> "<position>"`, or stop
-and let the thread close.
+`relay say` past the budget is **allowed**, and reports what the post costs.
+Refusing it would silence an agent that still has something to say, and how
+long a conversation needs to be is part of the conversation - which belongs to
+the participants. Relay reports the cost; they decide whether to spend it.
 
-### Closing
+### Closing - and who does it
 
-The watcher evaluates open threads once per tick, in the same sweep as
-`_check_escalations`:
+**Relay closes a thread on exactly one condition:** every participant has a
+live `agree`. The watcher checks this once per tick, in the same sweep as
+`_check_escalations`, sets state `agreed` with the agreed positions as
+`outcome`, and queues an FYI to `human`. That is relay reading what the agents
+did, not judging it.
 
-- **Unanimous** - state `agreed`, `outcome` set to the agreed position, a
-  message queued to `human` with kind `escalation` so the existing operator
-  ping fires.
-- **Every participant at cap without unanimity** - state `unresolved`,
-  `outcome` set to each participant's last stated position, same ping.
+Relay never closes a discussion for any other reason - not for running long,
+not for failing to converge - and never escalates one on the participants'
+behalf. Every other ending is declared by an agent:
 
-`unresolved` is a normal outcome. Three sessions that cannot converge is
-information the operator wants, not a failure to retry.
+- `relay close <id> "<how it ended>"` sets state `closed` with the declaring
+  agent's summary. Use for converged-offline, agreed-to-disagree, or
+  stopped-being-useful.
+- If a human is genuinely needed, the agents decide that and say so with
+  `relay send --human`.
 
 Closing is idempotent and guarded by `state='open'`, so a tick that races
-another cannot double-ping.
+another cannot double-notify. `THREAD_STATES` is `open | agreed | closed`.
 
 ## 5. Delivery: a pointer, not the payload
 
@@ -253,9 +274,9 @@ exiting 0.
 
 **An ask is not a thread.** It creates no `threads` row, has no rounds and no
 agreement: it is one message plus its correlated answer. Routing it through the
-discussion object would hand it closing semantics it cannot satisfy - nobody
-posts `agree` to a question, so the watcher would eventually close every ask as
-`unresolved` and ping the operator about a conversation that worked perfectly.
+discussion object would hand it closing semantics it cannot satisfy: nobody
+posts `agree` to a question, so the thread would sit open forever and clutter
+the DISCUSSIONS pane with conversations that worked perfectly.
 
 - **Correlation.** The question row's id is the correlation key. The peer's
   envelope carries it, and `relay reply <id> "<body>"` sets `reply_to`, so a
@@ -283,20 +304,25 @@ received, resolving the recipient from that message's sender. If the last
 delivery was a **batch of more than one**, bare `reply` refuses and lists the
 ids. A silently mis-threaded reply is worse than one more argument.
 
-## 7. Anti-sycophancy
+## 7. Anti-sycophancy, within limits
 
-The plumbing is the easy half. Two Claude sessions asked to converge will
-either agree instantly with whatever was said first, or ping-pong politely
-until the cap.
+Relay may teach sessions **how to talk**; it may not touch **what they
+decide**. Everything here sits on the first side of that line.
 
-The opening envelope and `relay thread` output therefore instruct participants
-to **state a position and name where they disagree**, never to "reach
-consensus". Consensus as an instruction is how sycophancy is manufactured.
+`relay thread` and the protocol instruct participants to **state a position
+and name where they disagree**, and say plainly that agreement is not
+required. Consensus as an instruction is how sycophancy is manufactured, and
+"you must reach agreement" would also be relay dictating an outcome.
 
-`agree` requiring non-empty position text is the structural half of the same
-guard: "I agree" with no content is not expressible, so three participants who
-agree while describing three different things is visible in the outcome rather
-than hidden behind a unanimous close.
+`agree` requiring non-empty position text is the structural half: "I agree"
+with no content is not expressible, so three participants agreeing while
+describing three different things is visible in the outcome rather than hidden
+behind a unanimous close. That is a format rule, not a judgement.
+
+Relay does **not** go further. It does not score, gate, or retry a decision it
+thinks was reached too easily. If sessions converge badly, that is theirs to
+own - building machinery to police it would make relay the arbiter of
+decisions that are not its to make.
 
 ## 8. Surfacing
 
@@ -384,15 +410,13 @@ easiest to defer if phases 1 and 2 turn out to be enough.
 
 ## 12. Residual risks
 
-**Sycophantic unanimity.** The guards in section 7 are framing and structure,
-not enforcement. If sessions still agree in one round every time, the feature
-is decorative. This is the risk most worth watching after the first real use,
-and the cheapest signal is whether `unresolved` ever occurs.
-
-**Cost is invisible until it is not.** N participants times R rounds is N times
-R full Claude turns on real sessions, spent while the operator is away. The
-default cap of 3 is deliberately low, and the cap is per participant so the
-worst case is bounded before a thread opens.
+**Cost is not bounded by relay.** With the budget advisory, N participants
+times R rounds is a floor, not a ceiling: a pair that keeps posting keeps
+spending turns while the operator is away. This is the deliberate price of
+relay not overriding agents. Mitigations are visibility (the DISCUSSIONS pane,
+`relay doctor`) and the operator's own controls (pause, wipe) - the human has
+the brakes; relay does not apply them. Revisit only if a discussion actually
+runs away in practice.
 
 **A session can ignore the pointer** and post without running `relay thread`,
 which reintroduces exactly the talking-past-each-other the design exists to

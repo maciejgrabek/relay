@@ -469,22 +469,30 @@ Every participant sees every post. They are woken with a pointer
 who has settled, and what they can do next - as ordinary command output, so it
 is never squeezed onto one injected line.
 
-Each participant gets a bounded number of posts (`--rounds`, default 3).
 `relay agree <id> "<the position>"` records that a session is settled, and on
 what - the position text is required, so "I agree" with no content is not
 expressible. Posting again retracts it: a session still talking is not settled.
 
-It ends one of two ways, and **you get one notification either way, carrying
-the outcome rather than the transcript**:
+**The decision belongs to the sessions having it, not to relay.** Relay
+carries the conversation and stays out of the outcome:
 
-- everyone agreed - the thread closes `agreed` with the agreed position;
-- the round cap ran out first - it closes `unresolved`, recording what each
-  session last said, and the decision comes back to you.
+- it marks a discussion settled on exactly one condition - every participant
+  posted `agree` - which is reading what they did, not judging it;
+- any other ending is declared by an agent with `relay close <id> "<how it
+  ended>"`, including "we agreed to disagree";
+- if settling it genuinely needs you, **the agents decide that** and say so
+  with `relay send --human`. Relay never makes that call for them.
 
-`unresolved` is a normal outcome, not a failure. Two sessions that cannot
-converge is information worth having, and the alternative to admitting it is an
-unbounded loop of Claude turns spent while you are away. That is also why the
-cap is low by default: N participants times R rounds is N times R full turns.
+`--rounds` (default 3) is a suggested per-participant budget, **not a limit**.
+Relay tells a session when it goes past it and what another post costs, then
+gets out of the way - silencing an agent mid-argument would be relay deciding
+the conversation is over. The cost is real, though: N participants times R
+rounds is N times R full Claude turns, spent while you are away. If a
+discussion runs away, it is visible in the DISCUSSIONS pane and you can stop
+it from the panel - the operator has the brakes, relay does not.
+
+You are notified when a discussion settles, carrying the outcome rather than
+the transcript. That notice is information, not a request.
 
 For a single question to a single session, `relay ask <name> "<question>"` is
 lighter - it blocks and hands back the answer inside the asking session's
@@ -550,16 +558,18 @@ relay ask <name> "<question>" [--wait <seconds>]
 relay discuss <name> [<name>...] "<the question>" [--rounds N]
 relay say <id> "<your view>"
 relay agree <id> "<the position>"
+relay close <id> "<how it ended>"
 relay thread <id>
     Get two or more sessions to SETTLE something without you carrying
     messages between tabs. `discuss` opens a thread (topic LAST) where every
     participant sees every post; they are woken with a pointer and read it
-    with `relay thread`. Each gets N posts (default 3); `agree` does not
-    consume one, and posting after agreeing retracts it. When everyone has
-    agreed relay closes the thread and pings YOU with the agreed position -
-    not the transcript. If the cap runs out first it closes `unresolved`,
-    recording each session's last position. Both are real endings; two
-    sessions that cannot converge is information. Rules: relay help discuss
+    with `relay thread`. N (default 3) is a suggested post budget, not a
+    limit - relay reports the cost of going over and never refuses a post.
+    `agree` does not consume budget, and posting after agreeing retracts it.
+    Relay closes a thread on ONE condition, that everyone agreed, and pings
+    you with the position - not the transcript. Every other ending is the
+    agents': `relay close`. Relay never declares a discussion failed and
+    never hands them your decision. Rules: relay help discuss
 
 relay inbox
     Print your undelivered messages and mark them delivered. Check it when

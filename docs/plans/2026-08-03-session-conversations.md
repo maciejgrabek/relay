@@ -25,6 +25,14 @@ de-dupe never matches. Three items were added beyond the plan: `prune_threads`
 (closed discussions must not outlive their transcripts), thread context in
 `relay inbox` / `relay msgs`, and the coordinator skill's discussion section.
 
+**Amended after review (2026-08-03):** the plan had relay enforce the round cap
+and close discussions `unresolved`, escalating them to the operator. Both were
+relay deciding what belongs to the agents. Tasks 10, 11 and 13 as written are
+superseded: the budget is advisory and never refuses a post, `thread_verdict`
+returns only `open`/`agreed`, the watcher closes solely on unanimity, and a new
+`relay close` lets agents end their own discussion. See the spec's amendment
+note.
+
 ## Global Constraints
 
 - **No pytest.** Each suite is `iterm/test_*.py` with a `check(msg, cond)`

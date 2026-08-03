@@ -33,15 +33,21 @@ batched delivery (a session's whole queue in ONE injected turn instead of one
 per tick), `relay ask --wait` (blocks and returns the answer inside the asking
 turn), and discussions - `relay discuss|say|agree|thread`, a `threads` table
 where agreement is DERIVED from messages rather than stored, a per-participant
-round cap, watcher-side closing, and a DISCUSSIONS pane in the swarm view.
-Closing is unanimity or a spent cap; `unresolved` is a legitimate outcome and
-the operator is pinged with the outcome, never the transcript. See
-docs/specs/2026-08-03-session-conversations-design.md (status: Implemented).
+advisory post budget, and a DISCUSSIONS pane in the swarm view. See
+docs/specs/2026-08-03-session-conversations-design.md (status: Implemented,
+amended).
 
-The open risk is behavioural, not technical: sessions asked to converge may
-just agree with whatever was said first. The guards are framing (`relay thread`
-tells participants to disagree) and structure (`agree` requires the position
-text). The signal to watch is whether `unresolved` ever actually occurs.
+The load-bearing rule, corrected same day after the first build got it wrong:
+**relay carries the conversation and stays out of the decision.** It closes a
+thread on exactly one condition - every participant posted `agree` - which is
+reading what the agents did. It does not enforce the round budget (that would
+silence an agent mid-argument), does not declare a discussion failed, and does
+not escalate one to the human on the participants' behalf. Every other ending
+is theirs, via `relay close` or their own `relay send --human`.
+
+The accepted cost: nothing bounds a runaway discussion except visibility and
+the operator's own controls. That is the deliberate price of not overriding
+agents.
 
 ## Open follow-ups (2026-07-21 review sweep)
 
