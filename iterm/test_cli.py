@@ -1322,6 +1322,18 @@ def run():
     code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-A")
     ok &= check("a closed thread prints its outcome", "OUTCOME" in out)
 
+    # A thread post read through `relay inbox` (the batch pointer sends
+    # sessions here when traffic is mixed) must say WHICH discussion it
+    # belongs to - a bare body with no thread is unanswerable.
+    run_cli("discuss", "d-b", "inbox-visible topic", iterm_id="w0t1p0:D-A")
+    code, out, err = run_cli("inbox", iterm_id="w0t1p0:D-B")
+    ok &= check("inbox names the discussion a post belongs to",
+                "discussion #" in out)
+    ok &= check("inbox points at the thread read path",
+                "relay thread" in out)
+    code, out, err = run_cli("msgs", iterm_id="w0t1p0:D-A")
+    ok &= check("msgs marks discussion traffic", "#" in out)
+
     # --- reply ----------------------------------------------------------------
     run_cli("join", "rep-a", "--project", "repp", iterm_id="w0t1p0:REP-A")
     run_cli("join", "rep-b", "--project", "repp", iterm_id="w0t1p0:REP-B")

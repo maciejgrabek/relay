@@ -167,6 +167,25 @@ def run():
                 not db.close_thread(tconn, tid, "unresolved", "x"))
     ok &= check("close_thread rejects a bogus state",
                 _raises(lambda: db.close_thread(tconn, tid, "nonsense", "x")))
+    # Retention: a CLOSED discussion is history and ages out with its
+    # messages. An OPEN one is live state and is kept forever, exactly as
+    # queued messages are - pruning it would delete a conversation in flight.
+    old_closed = db.create_thread(tconn, "ancient", "a", ["a", "b"],
+                                  project="p", now=1000.0)
+    db.close_thread(tconn, old_closed, "agreed", "x", now=1000.0)
+    old_open = db.create_thread(tconn, "still going", "a", ["a", "b"],
+                                project="p", now=1000.0)
+    fresh_closed = db.create_thread(tconn, "recent", "a", ["a", "b"],
+                                    project="p")
+    db.close_thread(tconn, fresh_closed, "agreed", "y")
+    n = db.prune_threads(tconn, 7.0)
+    ok &= check("prune_threads drops an old closed thread",
+                db.get_thread(tconn, old_closed) is None and n == 1)
+    ok &= check("prune_threads keeps an OPEN thread however old",
+                db.get_thread(tconn, old_open) is not None)
+    ok &= check("prune_threads keeps a recently closed thread",
+                db.get_thread(tconn, fresh_closed) is not None)
+
     # A wipe must take the project's discussions with it, or the watcher keeps
     # evaluating threads whose participants no longer exist.
     wtid = db.create_thread(tconn, "doomed", "a", ["a", "b"], project="wipeme")
