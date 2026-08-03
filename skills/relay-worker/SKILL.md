@@ -66,18 +66,19 @@ The swarm only works if a stuck worker says so. A worker that stops without a
 word looks identical to one that is working - whoever is waiting waits
 forever.
 
-Reply to WHOEVER SENT YOU THE WORK - a message arrives tagged with its
-sender, and that sender is the one waiting. A swarm can be flat: do not
-assume a coordinator exists above you.
+Reply to WHOEVER SENT YOU THE WORK - and you do not have to work out who
+that was: **`relay reply "<body>"` answers the last message you received.**
+It resolves the recipient itself, so there is no name to parse out of your
+injected turn and mistype. If your last delivery was a batch of several, it
+tells you the ids and you pick one.
 
-**But check the sender name first.** A task assignment or an unblocked-task
-wake-up arrives `from relay` - that is relay's own automatic notice, not a
-person, and `relay` cannot receive a message (it is reserved, not a
-registered session). If the sender is `relay`, there is nobody there to
-reply to: report to the task's creator instead - `relay task list` shows `by
-<name>` on every task. If a task has no creator either, or the work came
-from no one at all (you found it on the board yourself) and you need a
-decision, escalate with `relay send --human "<the question>"`.
+`relay reply` also refuses, with the reason, when there is nobody to answer:
+a task assignment or unblocked-task wake-up arrives `from relay`, which is
+relay's own automatic notice rather than a person, and `relay` cannot receive
+a message. When that happens, report to the task's creator instead - `relay
+task list` shows `by <name>` on every task. If a task has no creator either,
+or the work came from no one at all (you found it on the board yourself) and
+you need a decision, escalate with `relay send --human "<the question>"`.
 
 - **Before your turn ends** with a task still `doing`, send a status to
   whoever sent you the work: `relay send <name> "still on #<id>: <where you
@@ -93,6 +94,30 @@ decision, escalate with `relay send --human "<the question>"`.
   blocked`, `relay send <name> "blocked on #<id>: <why>" --kind blocked`
   to whoever sent you the work, then stop - an injected message wakes you
   when the blocker clears. Do not spin or poll.
+
+## When a decision needs more than one session
+
+If settling something requires other sessions' judgement - an interface two of
+you share, a schema choice, which of two approaches to take - do not trade
+guesses one message at a time, and do not make the human carry it between
+tabs. Open a discussion:
+
+    relay who                                        find out who is here
+    relay discuss <name> <name> "<the question>"     everyone sees everyone
+
+Participants are woken with a pointer; each runs `relay thread <id>` to read
+what has been said, `relay say <id> "..."` to post, and `relay agree <id>
+"<the position>"` when settled. It ends when everyone agrees - or when the
+round cap runs out, which closes it `unresolved` and hands the decision to the
+human. Both are real endings.
+
+**State a position and say where you disagree.** You are not there to reach
+consensus, you are there to be right. Agreeing to be agreeable produces a
+decision nobody actually checked, and burns a turn on every participant.
+
+Full rules: `relay help discuss`. For a single question to a single session,
+`relay ask <name> "<question>"` is lighter - it blocks and hands you the
+answer inside your current turn.
 
 ## Discipline
 

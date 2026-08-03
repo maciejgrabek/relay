@@ -4,14 +4,21 @@ Shared by the relay-worker and relay-coordinator skills. All verbs resolve
 "me" from $ITERM_SESSION_ID automatically - run them via the Bash tool from
 inside your session. Errors print to stderr with a non-zero exit.
 
-    relay join <name> [--role worker|coordinator] [--project <p>]
+    relay join [<name>] [--role worker|coordinator] [--project <p>]
         START HERE. Registers this session AND prints, in one go: who else is
         in the swarm, anything already queued for you, and the protocol you
-        are expected to follow. Safe to re-run - it rebinds the name to this
-        tab and re-reads your inbox. `relay register` is the same binding
-        without the teaching.
+        are expected to follow. The name is OPTIONAL - with none, relay
+        derives one from your working directory, so "use relay to talk to the
+        other sessions" needs no naming ceremony. Passing a name later renames
+        you in place, carrying your messages and tasks with you. Safe to
+        re-run. `relay register` is the same binding without the teaching.
 
-    relay help swarm | relay help pr
+    relay who
+        Who else is here: names, roles, status lines, how recently seen. This
+        is how you find out who you can talk to. Read-only - it does not
+        register you.
+
+    relay help swarm | relay help pr | relay help discuss
         The protocol text alone, registering nothing.
 
     relay register --name <name> --role worker|coordinator [--project <p>]
@@ -44,6 +51,35 @@ inside your session. Errors print to stderr with a non-zero exit.
         shows in the swarm feed. It is NEVER injected into any session, so use
         it for the decisions only a human can make. Batch a sweep's misses into
         one message rather than firing one per PR.
+
+    relay reply "<body>" [--kind <k>]
+    relay reply <msg-id> "<body>" [--kind <k>]
+        Answer whoever wrote to you, without retyping their name. With no id
+        it answers the last message you received. If your last delivery was a
+        BATCH of several, it refuses and lists the ids - pick one. Sets a
+        correlation link, so `relay ask` on the other side recognises it.
+
+    relay ask <name> "<question>" [--wait <seconds>]
+        Ask one session and BLOCK until it answers, printing the answer as
+        this command's output. The answer arrives inside your current turn -
+        you do not have to stop and wait to be woken. Default wait 120s, max
+        540s. On timeout it exits non-zero and the question stays queued, so
+        it degrades into an ordinary message; end your turn and relay wakes
+        you with the reply. Not a discussion: no rounds, no agreement.
+
+    relay discuss <name> [<name>...] "<the question>" [--rounds N]
+    relay say <id> "<your view>"
+    relay agree <id> "<the position>"
+    relay thread <id>
+        Get several sessions to SETTLE something. `discuss` opens a thread
+        (topic goes LAST) where everyone sees everyone's posts. Participants
+        are woken with a pointer; `relay thread <id>` is the read path and
+        shows the transcript, who has settled, and what you can do next. Each
+        participant gets N posts (default 3); `agree` does not consume one.
+        Posting after agreeing retracts your agreement. When everyone has
+        agreed, relay closes it and notifies the human with the outcome; if
+        the cap runs out first it closes `unresolved`, which is a legitimate
+        ending. Full rules: relay help discuss
 
     relay inbox
         Print your undelivered messages and mark them delivered. Check it when
