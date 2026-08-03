@@ -37,8 +37,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 9",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 9)
+    ok &= check("fresh connect stamps user_version = 10",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 10)
 
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
@@ -59,14 +59,50 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 9
+                mig.execute("PRAGMA user_version").fetchone()[0] == 10
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 9
+                mig.execute("PRAGMA user_version").fetchone()[0] == 10
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
+
+    # --- migration 10: messages.reply_to / thread_id -------------------------
+    # Its own DB: the message-count assertions later in run() must not be
+    # perturbed by these rows.
+    rpath = _tmpdb()
+    rconn = db.connect(rpath)
+    _mid = db.queue_message(rconn, "a", "b", "hello")
+    _rid = db.queue_message(rconn, "b", "a", "hi back", reply_to=_mid)
+    _row = rconn.execute("SELECT * FROM messages WHERE id=?",
+                         (_rid,)).fetchone()
+    ok &= check("queue_message records reply_to", _row["reply_to"] == _mid)
+    ok &= check("thread_id defaults NULL", _row["thread_id"] is None)
+    _tmsg = db.queue_message(rconn, "a", "b", "in thread", thread_id=7)
+    _trow = rconn.execute("SELECT * FROM messages WHERE id=?",
+                          (_tmsg,)).fetchone()
+    ok &= check("queue_message records thread_id", _trow["thread_id"] == 7)
+    # A pre-v10 DB must gain both columns via the migration, not just fresh
+    # ones via _SCHEMA.
+    opath = _tmpdb()
+    oconn = _sq.connect(opath)
+    oconn.execute("""CREATE TABLE messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project TEXT NOT NULL DEFAULT '', from_name TEXT NOT NULL,
+        to_name TEXT NOT NULL, body TEXT NOT NULL, created_at REAL NOT NULL,
+        delivered_at REAL, kind TEXT NOT NULL DEFAULT 'info')""")
+    oconn.execute("PRAGMA user_version = 9")
+    oconn.commit()
+    oconn.close()
+    omig = db.connect(opath)
+    _oid = db.queue_message(omig, "a", "b", "post-migration", reply_to=1)
+    ok &= check("v9 db migrates and takes reply_to",
+                omig.execute("PRAGMA user_version").fetchone()[0] == 10
+                and omig.execute("SELECT reply_to FROM messages WHERE id=?",
+                                 (_oid,)).fetchone()[0] == 1)
+    omig.close()
+    rconn.close()
 
     # --- persisted mode (restart survival): its own DB so the session-count
     # assertions later in run() aren't perturbed by an extra registration.
@@ -208,7 +244,7 @@ def run():
     hold.close()
     hmig = db.connect(hpath)
     ok &= check("v8 -> v9 migration runs",
-                hmig.execute("PRAGMA user_version").fetchone()[0] == 9)
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 10)
     ok &= check("legacy 'human' session row is cleared",
                 db.get_session(hmig, "human") is None)
     legacy_task = hmig.execute(
@@ -404,7 +440,7 @@ def run():
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
     ok &= check("fresh DB is schema v9",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 9)
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 10)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -446,7 +482,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 9)
+                up.execute("PRAGMA user_version").fetchone()[0] == 10)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -604,7 +640,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 9)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 10)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -677,7 +713,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 9)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 10)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")
