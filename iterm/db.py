@@ -450,6 +450,28 @@ def mark_delivered(conn, msg_id: int, now: Optional[float] = None) -> None:
     conn.commit()
 
 
+def get_message(conn, msg_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM messages WHERE id=?",
+                        (msg_id,)).fetchone()
+
+
+def last_batch(conn, to_name: str) -> List[sqlite3.Row]:
+    """The messages delivered to `to_name` in its most recent delivery.
+
+    The watcher stamps ONE delivered_at across a whole batch, so a shared
+    timestamp is the batch. Used by `relay reply` with no id: replying to "the
+    last message" is only unambiguous when the last delivery held exactly one,
+    and a silently mis-threaded reply is worse than one more argument."""
+    row = conn.execute(
+        "SELECT MAX(delivered_at) AS t FROM messages "
+        "WHERE to_name=? AND delivered_at IS NOT NULL", (to_name,)).fetchone()
+    if row is None or row["t"] is None:
+        return []
+    return conn.execute(
+        "SELECT * FROM messages WHERE to_name=? AND delivered_at=? "
+        "ORDER BY id", (to_name, row["t"])).fetchall()
+
+
 def message_history(conn, with_name: Optional[str] = None,
                     project: Optional[str] = None,
                     limit: int = 200) -> List[sqlite3.Row]:
