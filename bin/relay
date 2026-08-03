@@ -5,8 +5,18 @@
 #                    ARMED sessions, pings you on dangerous ones, delivers
 #                    swarm messages into idle sessions)
 #   relay --dry-run  watch + notify but NEVER inject (safe first run)
-#   relay join|register|send|status|task|pr|inbox|msgs|help|spawn|doctor|clean|restore|wipe ...
-#                    swarm CLI verbs (see: relay register -h etc.)
+#
+# TALKING TO OTHER SESSIONS (start here if you were told to use relay):
+#   relay join       register this session and print the rules (no name needed)
+#   relay who        who else is here
+#   relay send <name> "<body>"        message one session
+#   relay reply "<body>"              answer whoever wrote to you last
+#   relay discuss <name> <name> "<question>"
+#                    open a discussion and settle something together
+#   relay help discuss                the full discussion protocol
+#
+#   relay register|status|task|pr|inbox|msgs|help|spawn|doctor|clean|restore|wipe ...
+#                    the rest of the swarm CLI (see: relay register -h etc.)
 #   relay timer ...  register/list/remove a timer on your own tab
 #   relay demo       guided 60s tour: spawns a demo worker, you watch the loop
 #   relay doctor     print swarm health from outside the TUI (debugging)
@@ -23,7 +33,9 @@
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
-  -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  # Range must cover the whole header comment block above (through the line
+  # before `set -e`) - a stale upper bound silently truncates the help.
+  -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   # Keep this list in sync with cli.py's subparsers - a verb missing here does
   # NOT error, it silently falls through and launches a second TUI. Guarded by
   # test_cli.py's "every cli.py verb is routed by bin/relay" check.

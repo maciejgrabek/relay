@@ -16,13 +16,22 @@ next user turn. There is no polling loop to write and no server to call.
 
 THE VERBS YOU WILL ACTUALLY USE
 
+  relay who                        who else is here, and what they are doing
   relay status "<one line>"        what you are doing right now
   relay inbox                      your queued messages (marks them read)
   relay send <name> "<body>"       message another session
+  relay reply "<body>"             answer whoever wrote to you last
   relay send --human "<body>"      escalate to the operator (pings them)
   relay task list [--mine]         the board
   relay task add "<title>" [--owner <name>] [--parent <id>]
   relay task update <id> --state todo|doing|blocked|done
+
+NEED SEVERAL SESSIONS TO AGREE ON SOMETHING?
+
+  relay discuss <name> <name> "<the question>"
+
+  That opens a discussion: everyone sees everyone's posts, and it ends when
+  you all post `relay agree`. Full reference:  relay help discuss
 
   Full PR reference (claiming, routing, escalating):  relay help pr
 
@@ -98,4 +107,62 @@ Relay stores what you last told it, never what is true right now. Everything
 that shows a PR state also shows how old that report is.
 """
 
-TOPICS = {"swarm": SWARM_PROTOCOL, "pr": PR_PROTOCOL}
+DISCUSS_PROTOCOL = """\
+DISCUSSIONS - GETTING SEVERAL SESSIONS TO SETTLE A QUESTION
+
+A discussion is a thread with participants, a shared transcript, and a hard
+limit on how long it can run. Use one when a decision needs more than one
+session's judgement. For a single question to a single session, plain
+`relay send` (or `relay ask`) is lighter.
+
+  relay who                              find out who you can talk to
+  relay discuss <name> [<name>...] "<the question>"
+                                         open one (topic goes LAST)
+  relay thread <id>                      READ IT - transcript, positions,
+                                         what you can do next
+  relay say <id> "<your view>"           post to everyone in it
+  relay agree <id> "<the position>"      record that you are settled
+
+HOW IT REACHES YOU
+
+You are woken with a POINTER, not the contents:
+
+  [relay discussion #7] 2 new post(s) from api - read them first: relay thread 7
+
+Run `relay thread 7` BEFORE you post. It shows everything said since you last
+looked. Skipping it is how three sessions end up answering three different
+questions.
+
+THE RULES
+
+1. STATE A POSITION AND SAY WHERE YOU DISAGREE. You are not here to reach
+   consensus, you are here to be right. If you think the others are wrong,
+   say so and say why. Agreeing to be agreeable wastes everyone's turn and
+   produces a decision nobody actually checked.
+
+2. THERE IS A ROUND CAP. Each participant gets a fixed number of `say` posts
+   (3 by default). `relay agree` does NOT consume one, so you can always
+   settle. When your posts run out you can only agree or stop.
+
+3. AGREEING REQUIRES SAYING WHAT TO. `relay agree <id> "<position>"` will not
+   accept an empty position. Three sessions agreeing while describing three
+   different things is the exact failure this prevents.
+
+4. POSTING AGAIN RETRACTS YOUR AGREEMENT. If you have agreed and then `say`
+   something, you are talking again, so you are no longer settled. That is
+   intended - use it when new information changes your mind.
+
+5. DEADLOCK IS A LEGITIMATE ENDING. If the cap runs out without everyone
+   agreeing, the discussion closes `unresolved`, records what each of you last
+   said, and hands the decision to the operator. That is a real outcome, not a
+   failure. Do not manufacture agreement to avoid it.
+
+HOW IT ENDS
+
+When every participant has a live `agree`, relay closes the discussion and
+notifies the operator with the agreed position. Nobody has to chase it, and
+nobody should keep posting after that.
+"""
+
+TOPICS = {"swarm": SWARM_PROTOCOL, "pr": PR_PROTOCOL,
+          "discuss": DISCUSS_PROTOCOL}
