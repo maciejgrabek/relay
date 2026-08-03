@@ -290,6 +290,33 @@ def get_session(conn, name: str) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM sessions WHERE name=?", (name,)).fetchone()
 
 
+def rename_session(conn, old: str, new: str) -> bool:
+    """Rebind a session to a new name, carrying its mail and tasks with it.
+
+    Auto-derived names exist to be replaced, so a rename must not orphan the
+    session's history: messages addressed to the old name would otherwise sit
+    undelivered forever, and its tasks would show an owner nobody can find.
+    One transaction - a half-applied rename is worse than none."""
+    if new in RESERVED_NAMES:
+        raise ValueError(f"'{new}' is reserved")
+    if old == new:
+        return False
+    with conn:
+        cur = conn.execute("UPDATE sessions SET name=? WHERE name=?",
+                           (new, old))
+        if cur.rowcount == 0:
+            return False
+        conn.execute("UPDATE messages SET from_name=? WHERE from_name=?",
+                     (new, old))
+        conn.execute("UPDATE messages SET to_name=? WHERE to_name=?",
+                     (new, old))
+        conn.execute("UPDATE tasks SET owner=? WHERE owner=?", (new, old))
+        conn.execute("UPDATE tasks SET created_by=? WHERE created_by=?",
+                     (new, old))
+        conn.execute("UPDATE prs SET owner=? WHERE owner=?", (new, old))
+    return True
+
+
 def registered_names(conn) -> set:
     """Every name currently bound to a non-closed session. Distinct from
     swarm.live_names, which is watcher-side and additionally requires the tab

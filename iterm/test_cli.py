@@ -1197,6 +1197,44 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    # --- join with no name ----------------------------------------------------
+    code, out, err = run_cli("join", iterm_id="w0t1p0:BARE-1")
+    ok &= check("bare join exits 0", code == 0)
+    c = db.connect()
+    brow = c.execute("SELECT * FROM sessions WHERE iterm_session_id=?",
+                     ("BARE-1",)).fetchone()
+    c.close()
+    ok &= check("bare join registers a derived name", brow is not None)
+    ok &= check("bare join prints the roster", "SWARM ROSTER" in out)
+    ok &= check("bare join prints the protocol", "relay send" in out)
+    # Bare join on an ALREADY registered session is re-orientation, not a
+    # rename: it must keep the name that session already answers to.
+    bare_name = brow["name"] if brow is not None else ""
+    run_cli("join", iterm_id="w0t1p0:BARE-1")
+    c = db.connect()
+    brow2 = c.execute("SELECT * FROM sessions WHERE iterm_session_id=?",
+                      ("BARE-1",)).fetchone()
+    c.close()
+    ok &= check("bare join twice keeps the same name",
+                brow2 is not None and brow2["name"] == bare_name)
+    # An explicit name renames in place, carrying mail with it.
+    db.connect().execute("INSERT INTO messages(project,from_name,to_name,"
+                         "body,created_at,kind) VALUES('','who-a',?,'carry',"
+                         "1,'info')", (bare_name,)).connection.commit()
+    code, out, err = run_cli("join", "renamed-1", iterm_id="w0t1p0:BARE-1")
+    ok &= check("join <name> renames in place", code == 0)
+    c = db.connect()
+    n_bare = c.execute("SELECT COUNT(*) FROM sessions WHERE "
+                       "iterm_session_id=?", ("BARE-1",)).fetchone()[0]
+    old_gone = c.execute("SELECT COUNT(*) FROM sessions WHERE name=?",
+                         (bare_name,)).fetchone()[0]
+    carried = c.execute("SELECT COUNT(*) FROM messages WHERE to_name=? "
+                        "AND body='carry'", ("renamed-1",)).fetchone()[0]
+    c.close()
+    ok &= check("rename leaves exactly one row for the tab", n_bare == 1)
+    ok &= check("rename frees the old name", old_gone == 0)
+    ok &= check("rename carries queued mail", carried == 1)
+
     # --- who ------------------------------------------------------------------
     run_cli("join", "who-a", "--project", "whop", iterm_id="w0t1p0:WHO-A")
     run_cli("join", "who-b", "--project", "whop", iterm_id="w0t1p0:WHO-B")
