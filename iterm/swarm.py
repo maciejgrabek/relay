@@ -154,6 +154,75 @@ def kind_of(m) -> str:
     return k or "info"
 
 
+# --- discussions: agreement is derived, never stored ---------------------------
+
+def _ordered(msgs):
+    return sorted(msgs, key=lambda x: (_get(x, "created_at", 0) or 0,
+                                       _get(x, "id", 0) or 0))
+
+
+def round_counts(msgs) -> dict:
+    """`say` posts per participant.
+
+    `agree` deliberately does not count: settling must never be rationed, or a
+    session that spent its last round reaching a conclusion would be unable to
+    record it."""
+    out = {}
+    for m in msgs:
+        if kind_of(m) == "say":
+            n = _get(m, "from_name", "")
+            out[n] = out.get(n, 0) + 1
+    return out
+
+
+def positions(msgs) -> dict:
+    """Each participant's LIVE position: its most recent `agree`, unless it has
+    posted a `say` since.
+
+    A session that is still talking is not settled. That is the whole
+    retraction rule, and storing agreement in a column instead would have made
+    it bookkeeping."""
+    out = {}
+    for m in _ordered(msgs):
+        k, who = kind_of(m), _get(m, "from_name", "")
+        if k == "agree":
+            out[who] = _get(m, "body", "")
+        elif k == "say":
+            out.pop(who, None)
+    return out
+
+
+def last_said(msgs) -> dict:
+    """Each participant's most recent utterance of any kind - what an
+    unresolved thread reports in place of an agreement."""
+    out = {}
+    for m in _ordered(msgs):
+        if kind_of(m) in ("say", "agree"):
+            out[_get(m, "from_name", "")] = _get(m, "body", "")
+    return out
+
+
+def thread_verdict(participants, msgs, rounds_cap: int):
+    """(state, outcome) for a discussion. 'open' means keep going.
+
+    Two terminal states, and both are legitimate endings. Unanimity closes it
+    `agreed`. A spent round cap closes it `unresolved`, recording what each
+    participant last said - because the alternative to admitting deadlock is an
+    unbounded loop of Claude turns spent while the operator is away."""
+    parts = list(participants)
+    if not parts:
+        return "open", ""
+    pos = positions(msgs)
+    if all(p in pos for p in parts):
+        return "agreed", " | ".join(f"{p}: {pos[p]}" for p in parts)
+    counts = round_counts(msgs)
+    if all(counts.get(p, 0) >= rounds_cap for p in parts):
+        said = last_said(msgs)
+        return "unresolved", " | ".join(
+            f"{p}: {said.get(p, '(never posted)')}" for p in parts)
+    return "open", ""
+
+
 def escalation_pings(msgs, already: set) -> list:
     """Queued messages that should ping the human NOW: kind 'escalation' and
     not already pinged. Delivery still waits for the target's idle prompt;
