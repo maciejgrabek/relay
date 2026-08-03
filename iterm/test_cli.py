@@ -116,9 +116,13 @@ def run():
                            iterm_id="w0t1p0:EMPTY-ID")
     ok &= check("empty name -> exit 1", code == 1 and "empty" in err)
 
-    # status requires registration
-    code, _, err = run_cli("status", "working on #1", iterm_id="w9t9p9:GHOST")
-    ok &= check("status unregistered -> error", code == 1 and "register" in err)
+    # status no longer requires prior registration: an unregistered session
+    # auto-registers under a derived name (see the auto-registration block at
+    # the end of run()). This assertion used to demand an error; the rule it
+    # encoded is the one this feature deliberately removed.
+    code, out, _ = run_cli("status", "working on #1", iterm_id="w9t9p9:GHOST")
+    ok &= check("status unregistered -> auto-registers",
+                code == 0 and "registered this session" in out)
     code, out, _ = run_cli("status", "working on #1", iterm_id="w0t1p0:BFF-ID")
     ok &= check("status ok", code == 0
                 and db.get_session(conn, "bff-worker")["status_text"] == "working on #1")
@@ -1192,6 +1196,33 @@ def run():
     missing = sorted(verbs - routed)
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
+
+    # --- auto-registration ---------------------------------------------------
+    # A session that never ran `relay register` still gets an identity the
+    # first time it uses a verb that needs one. This is what makes "just talk
+    # to the other session" a one-command instruction.
+    code, out, err = run_cli("status", "auto-registered and working",
+                             iterm_id="w0t9p0:AUTO-9999")
+    ok &= check("status auto-registers an unknown session", code == 0)
+    c = db.connect()
+    auto = c.execute("SELECT * FROM sessions WHERE iterm_session_id=?",
+                     ("AUTO-9999",)).fetchone()
+    c.close()
+    ok &= check("auto-registered session exists", auto is not None)
+    ok &= check("auto-registered as worker",
+                auto is not None and auto["role"] == "worker")
+    ok &= check("auto-register announces the derived name",
+                auto is not None and auto["name"] in out)
+    ok &= check("auto-register teaches how to rename", "relay join" in out)
+    ok &= check("auto-register records the workdir",
+                auto is not None and auto["workdir"] != "")
+    # Second call must NOT create a second identity for the same tab.
+    run_cli("status", "still working", iterm_id="w0t9p0:AUTO-9999")
+    c = db.connect()
+    n_auto = c.execute("SELECT COUNT(*) FROM sessions WHERE "
+                       "iterm_session_id=?", ("AUTO-9999",)).fetchone()[0]
+    c.close()
+    ok &= check("auto-registration is not repeated", n_auto == 1)
 
     conn.close()
     print()
