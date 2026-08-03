@@ -39,7 +39,7 @@ case "${1:-}" in
   # Keep this list in sync with cli.py's subparsers - a verb missing here does
   # NOT error, it silently falls through and launches a second TUI. Guarded by
   # test_cli.py's "every cli.py verb is routed by bin/relay" check.
-  join|who|register|send|reply|ask|discuss|say|agree|thread|status|task|pr|inbox|msgs|help|spawn|doctor|demo|recap|version|update|clean|restore|wipe|timer)
+  join|who|register|send|reply|ask|discuss|say|agree|close|thread|status|task|pr|inbox|msgs|help|spawn|doctor|demo|recap|version|update|clean|restore|wipe|timer)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 # TUI start: quiet self-update BEFORE the app boots, so the code that runs is

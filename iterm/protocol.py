@@ -110,10 +110,11 @@ that shows a PR state also shows how old that report is.
 DISCUSS_PROTOCOL = """\
 DISCUSSIONS - GETTING SEVERAL SESSIONS TO SETTLE A QUESTION
 
-A discussion is a thread with participants, a shared transcript, and a hard
-limit on how long it can run. Use one when a decision needs more than one
-session's judgement. For a single question to a single session, plain
-`relay send` (or `relay ask`) is lighter.
+A discussion is a thread with participants and a shared transcript. Use one
+when a decision needs more than one session's judgement. The decision is
+YOURS - relay carries the conversation and stays out of the outcome. For a
+single question to a single session, plain `relay send` (or `relay ask`) is
+lighter.
 
   relay who                              find out who you can talk to
   relay discuss <name> [<name>...] "<the question>"
@@ -122,6 +123,7 @@ session's judgement. For a single question to a single session, plain
                                          what you can do next
   relay say <id> "<your view>"           post to everyone in it
   relay agree <id> "<the position>"      record that you are settled
+  relay close <id> "<how it ended>"      end it, agreed or not
 
 HOW IT REACHES YOU
 
@@ -136,13 +138,12 @@ questions.
 THE RULES
 
 1. STATE A POSITION AND SAY WHERE YOU DISAGREE. You are not here to reach
-   consensus, you are here to be right. If you think the others are wrong,
-   say so and say why. Agreeing to be agreeable wastes everyone's turn and
-   produces a decision nobody actually checked.
+   consensus, you are here to be right. If you think the others are wrong, say
+   so and say why. Agreeing to be agreeable produces a decision nobody
+   actually checked.
 
-2. THERE IS A ROUND CAP. Each participant gets a fixed number of `say` posts
-   (3 by default). `relay agree` does NOT consume one, so you can always
-   settle. When your posts run out you can only agree or stop.
+2. YOU ARE NOT REQUIRED TO AGREE. A discussion that ends in honest
+   disagreement is a real outcome. Do not manufacture agreement to close it.
 
 3. AGREEING REQUIRES SAYING WHAT TO. `relay agree <id> "<position>"` will not
    accept an empty position. Three sessions agreeing while describing three
@@ -152,16 +153,28 @@ THE RULES
    something, you are talking again, so you are no longer settled. That is
    intended - use it when new information changes your mind.
 
-5. DEADLOCK IS A LEGITIMATE ENDING. If the cap runs out without everyone
-   agreeing, the discussion closes `unresolved`, records what each of you last
-   said, and hands the decision to the operator. That is a real outcome, not a
-   failure. Do not manufacture agreement to avoid it.
+5. THE ROUND BUDGET IS ADVICE, NOT A LIMIT. Each discussion carries a
+   suggested number of posts per participant (3 by default). Relay tells you
+   when you pass it and will NOT stop you - but every post costs each
+   participant a full turn, so going long is a real cost you are choosing to
+   spend. Keep posting only while you are still saying something new.
 
-HOW IT ENDS
+HOW IT ENDS - AND WHO ENDS IT
 
-When every participant has a live `agree`, relay closes the discussion and
-notifies the operator with the agreed position. Nobody has to chase it, and
-nobody should keep posting after that.
+The decision is yours. Relay does not adjudicate, does not judge a discussion
+failed, and does not hand your decision to the human.
+
+  - Everyone posts `relay agree` -> relay marks it settled and tells the
+    operator what you concluded. That is relay reading what you did, not
+    deciding anything.
+  - Otherwise, one of you ends it: `relay close <id> "<how it ended>"`. Use it
+    when you have converged offline, when you have agreed to disagree, or when
+    the discussion has stopped being useful. Say honestly what happened.
+  - If settling it genuinely needs a human, YOU decide that and say so:
+    `relay send --human "<what you need decided, and the options>"`. Relay
+    will never make that call for you.
+
+Nobody should keep posting after a discussion is closed.
 """
 
 TOPICS = {"swarm": SWARM_PROTOCOL, "pr": PR_PROTOCOL,

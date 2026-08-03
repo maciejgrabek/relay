@@ -644,7 +644,7 @@ def run():
     ok &= check("thread_row counts settled participants",
                 r_open["settled"] == 1 and r_open["total"] == 2)
     ok &= check("an open thread is not flagged", not r_open["flag"])
-    r_done = swarm.thread_row(_th(2, "cache?", state="unresolved",
+    r_done = swarm.thread_row(_th(2, "cache?", state="closed",
                                   outcome="a: yes | b: no"), [], now=100.0)
     ok &= check("a closed thread is flagged for the operator",
                 r_done["flag"])
@@ -653,7 +653,7 @@ def run():
     body = "\n".join(pane)
     ok &= check("pane shows the topic", "one DB or many?" in body)
     ok &= check("pane shows settled counts", "1/2" in body)
-    ok &= check("pane shows a verdict", "unresolved" in body)
+    ok &= check("pane shows how it ended", "closed" in body)
     ok &= check("pane duplicates what needs attention on top",
                 body.count("cache?") == 2)
     ids = [ln for ln in pane if "#1" in ln or "#2" in ln]
@@ -693,22 +693,23 @@ def run():
                     parts, retracted + [_m("b", "agree", "ok X", 5)],
                     3)[0] == "agreed")
 
+    # Relay never closes a discussion for running long. A spent budget is not
+    # a verdict, and declaring one would be relay deciding the agents failed.
     capped = []
     for i in (1, 2, 3):
         capped.append(_m("a", "say", f"a post {i}", i * 10))
         capped.append(_m("b", "say", f"b post {i}", i * 10 + 1))
-    st2, out2 = swarm.thread_verdict(parts, capped, 3)
-    ok &= check("cap spent with no unanimity is unresolved",
-                st2 == "unresolved")
-    ok &= check("unresolved records last positions",
-                "a post 3" in out2 and "b post 3" in out2)
-    ok &= check("one participant at cap is not enough to close",
-                swarm.thread_verdict(parts, capped[:5], 3)[0] == "open")
-    ok &= check("agreement wins over a spent cap",
+    ok &= check("a spent budget does NOT close the discussion",
+                swarm.thread_verdict(parts, capped, 3)[0] == "open")
+    ok &= check("relay never produces an 'unresolved' verdict itself",
+                swarm.thread_verdict(parts, capped * 5, 1)[0] == "open")
+    ok &= check("only the agents' own agreement closes it",
                 swarm.thread_verdict(
                     parts, capped + [_m("a", "agree", "fine", 99),
                                      _m("b", "agree", "fine", 100)],
                     3)[0] == "agreed")
+    ok &= check("round_counts still reports the budget for display",
+                swarm.round_counts(capped) == {"a": 3, "b": 3})
     ok &= check("a participant who never posted blocks agreement",
                 swarm.thread_verdict(["a", "b", "c"], both, 3)[0] == "open")
 
