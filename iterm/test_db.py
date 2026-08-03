@@ -104,6 +104,29 @@ def run():
     omig.close()
     rconn.close()
 
+    # --- find_reply (relay ask correlation) -----------------------------------
+    apath = _tmpdb()
+    aconn = db.connect(apath)
+    aid = db.queue_message(aconn, "x", "y", "question?", kind="ask", now=100.0)
+    ok &= check("no reply yet",
+                db.find_reply(aconn, "x", aid, "y", 100.0) is None)
+    db.queue_message(aconn, "y", "x", "answer!", reply_to=aid, now=150.0)
+    ok &= check("correlated reply is found",
+                db.find_reply(aconn, "x", aid, "y", 100.0)["body"] == "answer!")
+    # Unrelated traffic arriving mid-wait must NOT be mistaken for the answer.
+    aid2 = db.queue_message(aconn, "x", "z", "q2?", kind="ask", now=200.0)
+    db.queue_message(aconn, "w", "x", "unrelated chatter", now=210.0)
+    ok &= check("another session's message is not the answer",
+                db.find_reply(aconn, "x", aid2, "z", 200.0) is None)
+    # But a peer that answered with a plain `send` has still answered.
+    db.queue_message(aconn, "z", "x", "sloppy answer", now=220.0)
+    ok &= check("an uncorrelated reply from the peer still counts",
+                db.find_reply(aconn, "x", aid2, "z", 200.0)["body"]
+                == "sloppy answer")
+    ok &= check("a message predating the question is not the answer",
+                db.find_reply(aconn, "x", aid2, "z", 900.0) is None)
+    aconn.close()
+
     # --- threads --------------------------------------------------------------
     tpath = _tmpdb()
     tconn = db.connect(tpath)

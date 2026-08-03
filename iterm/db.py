@@ -491,6 +491,27 @@ def last_batch(conn, to_name: str) -> List[sqlite3.Row]:
         "ORDER BY id", (to_name, row["t"])).fetchall()
 
 
+def find_reply(conn, to_name: str, ask_id: int, peer: str,
+               since: float) -> Optional[sqlite3.Row]:
+    """The answer to `ask_id`, correlated, with a forgiving fallback.
+
+    Strict correlation first: `reply_to` is what stops unrelated traffic
+    arriving mid-wait from being read as the answer. But a peer that answers
+    with a plain `relay send` instead of `relay reply` has still answered, and
+    hanging until timeout because it used the wrong verb would make the feature
+    look broken when it was merely informal - so fall back to any message from
+    that peer sent after the question."""
+    row = conn.execute(
+        "SELECT * FROM messages WHERE to_name=? AND reply_to=? "
+        "ORDER BY id LIMIT 1", (to_name, ask_id)).fetchone()
+    if row is not None:
+        return row
+    return conn.execute(
+        "SELECT * FROM messages WHERE to_name=? AND from_name=? "
+        "AND created_at > ? ORDER BY id LIMIT 1",
+        (to_name, peer, since)).fetchone()
+
+
 def message_history(conn, with_name: Optional[str] = None,
                     project: Optional[str] = None,
                     limit: int = 200) -> List[sqlite3.Row]:
