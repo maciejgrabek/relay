@@ -647,12 +647,23 @@ def cmd_inbox(args) -> int:
     if not msgs:
         print("no new messages")
         return 0
+    threaded = set()
     for m in msgs:
         k = swarm.kind_of(m)
         tag = f" [{k}]" if k != "info" else ""
-        print(f"#{m['id']} from {m['from_name']}{tag} "
+        # A discussion post read here instead of via `relay thread` must still
+        # say which discussion it belongs to - a bare body with no thread is
+        # unanswerable, and `relay reply` is the wrong verb for it.
+        tid = m["thread_id"] if "thread_id" in m.keys() else None
+        where = f" (discussion #{tid})" if tid else ""
+        if tid:
+            threaded.add(tid)
+        print(f"#{m['id']} from {m['from_name']}{tag}{where} "
               f"({_ago(m['created_at'])}): {m['body']}")
         db.mark_delivered(conn, m["id"])
+    for tid in sorted(threaded):
+        print(f"  -> discussion #{tid}: read it with `relay thread {tid}`, "
+              f'post with `relay say {tid} "<your view>"`')
     return 0
 
 
@@ -690,8 +701,11 @@ def cmd_msgs(args) -> int:
         tick = "" if m["delivered_at"] else "  [queued]"
         k = swarm.kind_of(m)
         tag = f" [{k}]" if k != "info" else ""
+        tid = m["thread_id"] if "thread_id" in m.keys() else None
+        where = f" (#{tid})" if tid else ""
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(m['created_at']))} "
-              f"{m['from_name']} -> {m['to_name']}{tag}: {m['body']}{tick}")
+              f"{m['from_name']} -> {m['to_name']}{tag}{where}: "
+              f"{m['body']}{tick}")
     return 0
 
 

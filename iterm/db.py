@@ -837,6 +837,22 @@ def delete_undelivered_to(conn, name: str) -> int:
     return cur.rowcount
 
 
+def prune_threads(conn, older_than_days: float, now=None) -> int:
+    """Drop CLOSED discussions past the retention window.
+
+    Open threads are never pruned however old, for the same reason queued
+    messages are not: they are live state, and deleting a conversation still in
+    flight would strand its participants. A closed one is history, and its
+    transcript ages out with prune_messages anyway - leaving the thread row
+    behind would mean a discussion whose posts are gone."""
+    cutoff = _now(now) - older_than_days * 86400
+    cur = conn.execute(
+        "DELETE FROM threads WHERE state != 'open' AND closed_at > 0 "
+        "AND closed_at < ?", (cutoff,))
+    conn.commit()
+    return cur.rowcount
+
+
 def prune_messages(conn, older_than_days: float, now=None) -> int:
     """Drop delivered messages older than the retention window. Queued
     (undelivered) messages are always kept."""

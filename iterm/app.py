@@ -961,8 +961,12 @@ class RelayApp(App):
             pass
         try:
             _mc = swarmdb.connect()
-            swarmdb.prune_messages(
-                _mc, float(os.environ.get("RELAY_MSG_RETENTION_DAYS", "7")))
+            _retention = float(
+                os.environ.get("RELAY_MSG_RETENTION_DAYS", "7"))
+            swarmdb.prune_messages(_mc, _retention)
+            # Same window as the messages: a thread outliving its transcript
+            # is a discussion you cannot read.
+            swarmdb.prune_threads(_mc, _retention)
             swarmdb.prune_prs(_mc, _pr_retention_days())
             _mc.close()
         except Exception:
