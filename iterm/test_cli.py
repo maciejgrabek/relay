@@ -1225,6 +1225,23 @@ def run():
     code, out, err = run_cli("say", str(tid), "one per service",
                              iterm_id="w0t1p0:D-B")
     ok &= check("say exits 0", code == 0)
+    # Regression: a post fans out to one row PER RECIPIENT, and the transcript
+    # must show it once. Exercised through the CLI with real timestamps - the
+    # db-level test hard-codes `now`, which hid that each row was stamped
+    # microseconds apart and so never de-duped.
+    run_cli("join", "d-c", "--project", "dp", iterm_id="w0t1p0:D-C")
+    code, out, err = run_cli("discuss", "d-b", "d-c", "three-way topic",
+                             iterm_id="w0t1p0:D-A")
+    c = db.connect()
+    tid3 = c.execute("SELECT id FROM threads ORDER BY id DESC "
+                     "LIMIT 1").fetchone()[0]
+    c.close()
+    run_cli("say", str(tid3), "a fanned-out post", iterm_id="w0t1p0:D-B")
+    code, out, err = run_cli("thread", str(tid3), iterm_id="w0t1p0:D-A")
+    ok &= check("a fan-out post appears once in the transcript",
+                out.count("a fanned-out post") == 1)
+    ok &= check("the opening topic appears once too",
+                out.count("three-way topic") == 2)   # header + transcript
     code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-B")
     ok &= check("thread shows the transcript", "one per service" in out)
     ok &= check("thread shows the topic", "one DB or many?" in out)
