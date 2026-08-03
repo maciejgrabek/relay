@@ -1225,6 +1225,17 @@ def cmd_doctor(args) -> int:
                 print(f"  ‼ {r['ref']:<22} {r['state']:<9} {age:>4} ago  "
                       f"{r['owner_label']}")
 
+    threads = db.list_threads(conn, state="open")
+    print()
+    print(f"DISCUSSIONS  {len(threads)} open")
+    for th in threads:
+        parts = db.participants_of(th)
+        msgs = db.thread_messages(conn, th["id"])
+        settled = len([p for p in parts if p in swarm.positions(msgs)])
+        print(f"  #{th['id']} {th['topic'][:44]:<44} "
+              f"{settled}/{len(parts)} settled  "
+              f"{swarm.fmt_age(time.time() - th['created_at']):>5} old")
+
     _doctor_notify()
     _doctor_statusbar(cfg)
     return 0

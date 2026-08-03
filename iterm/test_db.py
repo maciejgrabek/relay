@@ -144,6 +144,12 @@ def run():
                 not db.close_thread(tconn, tid, "unresolved", "x"))
     ok &= check("close_thread rejects a bogus state",
                 _raises(lambda: db.close_thread(tconn, tid, "nonsense", "x")))
+    # A wipe must take the project's discussions with it, or the watcher keeps
+    # evaluating threads whose participants no longer exist.
+    wtid = db.create_thread(tconn, "doomed", "a", ["a", "b"], project="wipeme")
+    db.wipe_project(tconn, "wipeme")
+    ok &= check("wipe_project removes its threads",
+                db.get_thread(tconn, wtid) is None)
     tconn.close()
 
     # --- persisted mode (restart survival): its own DB so the session-count

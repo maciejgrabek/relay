@@ -1197,6 +1197,9 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    code, out, err = run_cli("doctor")
+    ok &= check("doctor reports open discussions", "DISCUSSIONS" in out)
+
     # --- discussions ----------------------------------------------------------
     run_cli("join", "d-a", "--project", "dp", iterm_id="w0t1p0:D-A")
     run_cli("join", "d-b", "--project", "dp", iterm_id="w0t1p0:D-B")
