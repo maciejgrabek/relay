@@ -70,16 +70,20 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay discuss <name> [<name>...] "<the question>" [--rounds N]
     relay say <id> "<your view>"
     relay agree <id> "<the position>"
+    relay close <id> "<how it ended>"
     relay thread <id>
         Get several sessions to SETTLE something. `discuss` opens a thread
         (topic goes LAST) where everyone sees everyone's posts. Participants
         are woken with a pointer; `relay thread <id>` is the read path and
-        shows the transcript, who has settled, and what you can do next. Each
-        participant gets N posts (default 3); `agree` does not consume one.
-        Posting after agreeing retracts your agreement. When everyone has
-        agreed, relay closes it and notifies the human with the outcome; if
-        the cap runs out first it closes `unresolved`, which is a legitimate
-        ending. Full rules: relay help discuss
+        shows the transcript, who has settled, and what you can do next.
+        N (default 3) is a SUGGESTED post budget, not a limit - relay tells
+        you when you pass it and never refuses a post. `agree` does not spend
+        budget; posting after agreeing retracts your agreement.
+        THE DECISION IS YOURS. Relay marks a discussion settled only when
+        every participant has agreed, and never judges one failed or routes it
+        to the human. Any other ending is yours to declare with `relay close`,
+        and if it genuinely needs a human, YOU say so with
+        `relay send --human`. Full rules: relay help discuss
 
     relay inbox
         Print your undelivered messages and mark them delivered. Check it when

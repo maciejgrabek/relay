@@ -107,13 +107,22 @@ tabs. Open a discussion:
 
 Participants are woken with a pointer; each runs `relay thread <id>` to read
 what has been said, `relay say <id> "..."` to post, and `relay agree <id>
-"<the position>"` when settled. It ends when everyone agrees - or when the
-round cap runs out, which closes it `unresolved` and hands the decision to the
-human. Both are real endings.
+"<the position>"` when settled.
+
+**The decision is yours, not relay's.** Relay marks it settled only when
+everyone has agreed; it never judges a discussion failed and never hands it to
+the human on your behalf. Any other ending you declare yourself with `relay
+close <id> "<how it ended>"` - including agreeing to disagree. If it genuinely
+needs a human, that is your call too: `relay send --human "..."`.
 
 **State a position and say where you disagree.** You are not there to reach
 consensus, you are there to be right. Agreeing to be agreeable produces a
-decision nobody actually checked, and burns a turn on every participant.
+decision nobody actually checked, and burns a turn on every participant. You
+are never required to agree.
+
+`--rounds` is a suggested budget, not a limit - relay tells you when you pass
+it and gets out of the way. Spend it deliberately: every post costs each
+participant a full turn.
 
 Full rules: `relay help discuss`. For a single question to a single session,
 `relay ask <name> "<question>"` is lighter - it blocks and hands you the
