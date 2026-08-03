@@ -176,14 +176,26 @@ def cmd_join(args) -> int:
     sid = my_iterm_id()
     if not sid:
         return _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
-    name = args.name.strip()
-    if not name:
-        return _err("name cannot be empty")
-    if name in db.RESERVED_NAMES:
-        return _err(f"'{name}' is reserved - 'relay' is the sender of system "
-                    f"wake-ups and 'human' is the operator's escalation "
-                    f"mailbox; pick another name")
     conn = db.connect()
+    me_now = whoami(conn)
+    if args.name is None:
+        # Bare `relay join` is the zero-setup entry point. On a session that
+        # already has an identity it is a RE-ORIENTATION (show me the roster
+        # and the rules again), never a rename - silently renaming a session
+        # mid-swarm would break every peer that already knows it.
+        name = (me_now["name"] if me_now is not None
+                else swarm.derive_name(os.getcwd(),
+                                       db.registered_names(conn)))
+    else:
+        name = args.name.strip()
+        if not name:
+            return _err("name cannot be empty")
+        if name in db.RESERVED_NAMES:
+            return _err(f"'{name}' is reserved - 'relay' is the sender of "
+                        f"system wake-ups and 'human' is the operator's "
+                        f"escalation mailbox; pick another name")
+        if me_now is not None and me_now["name"] != name:
+            db.rename_session(conn, me_now["name"], name)
     existing = db.get_session(conn, name)
     if args.project is not None:
         project = args.project
@@ -1407,7 +1419,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     j = sub.add_parser("join", help="register AND print the swarm protocol "
                                     "(start here)")
-    j.add_argument("name")
+    j.add_argument("name", nargs="?", default=None,
+                   help="your swarm name (omit to derive one from the "
+                        "working directory)")
     j.add_argument("--role", default="worker", choices=db.ROLES)
     j.add_argument("--project", default=None)
     j.set_defaults(fn=cmd_join)
