@@ -25,6 +25,24 @@ dry-run. The strip-on-read + self-heal makes it crash-safe. Later evolution
 added a shadow-mode glyph and swapped the stale glyph to one users can't type.
 See docs/specs/2026-07-15-tab-title-prefixes-design.md (status: Implemented).
 
+## 3. Sessions that can talk to each other and agree (2026-08-03) - SHIPPED (2026-08-03)
+
+Done: `relay join` with no name (auto-derived identity, so "use relay to talk
+to the other sessions" is a complete instruction), `relay who`, `relay reply`,
+batched delivery (a session's whole queue in ONE injected turn instead of one
+per tick), `relay ask --wait` (blocks and returns the answer inside the asking
+turn), and discussions - `relay discuss|say|agree|thread`, a `threads` table
+where agreement is DERIVED from messages rather than stored, a per-participant
+round cap, watcher-side closing, and a DISCUSSIONS pane in the swarm view.
+Closing is unanimity or a spent cap; `unresolved` is a legitimate outcome and
+the operator is pinged with the outcome, never the transcript. See
+docs/specs/2026-08-03-session-conversations-design.md (status: Implemented).
+
+The open risk is behavioural, not technical: sessions asked to converge may
+just agree with whatever was said first. The guards are framing (`relay thread`
+tells participants to disagree) and structure (`agree` requires the position
+text). The signal to watch is whether `unresolved` ever actually occurs.
+
 ## Open follow-ups (2026-07-21 review sweep)
 
 - ~~`wipe --project X --all` does not remove relay-created worktrees~~ FIXED

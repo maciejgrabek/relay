@@ -66,8 +66,30 @@ discipline as a good implementation plan.
   stay idle.
 - On "done": review, then assign follow-ups or mark the parent epic done.
 - On "blocked": resolve the blocker (answer, re-scope, reassign) and reply
-  with `relay send <worker> "..."`.
+  with `relay reply "..."` - it answers whoever wrote to you, so there is no
+  name to retype and no chance of routing a fix to the wrong worker.
 - `relay task list --project <project>` is your board when you need a sweep.
+
+## When the answer is not yours to give
+
+Some blockers are not decisions you should make alone - an interface two
+workers share, a schema choice, which of two approaches wins. Do not
+adjudicate by guessing, and do not ping-pong one message at a time.
+
+    relay discuss <worker> <worker> "<the question>"
+
+Every participant sees every post, each gets a bounded number of them, and it
+ends when they all post `relay agree "<position>"` - or `unresolved` when they
+cannot converge, which hands it to the human with each worker's last stated
+position. Either way relay notifies the operator with the outcome, so you do
+not have to chase it.
+
+Use it when the people with the context are the workers, not you. For a single
+factual question to a single worker, `relay ask <name> "<question>"` blocks and
+returns the answer inside your current turn. Full rules: `relay help discuss`.
+
+**Do not open a discussion to avoid deciding something that is yours.** A
+discussion costs every participant a full Claude turn per round.
 
 ## Integrating worktree branches
 

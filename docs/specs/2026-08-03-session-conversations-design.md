@@ -1,7 +1,7 @@
 # Session Conversations - Design Spec
 
 **Date:** 2026-08-03
-**Status:** Designed
+**Status:** Implemented (2026-08-03)
 
 ## Summary
 
@@ -105,10 +105,12 @@ calling session instead of failing with instructions.
 
 **Derived name**, in order:
 
-1. The iTerm2 tab title, run through `titles.strip` so relay's own status
-   prefixes never leak into a name.
-2. The basename of the working directory.
-3. `session` as a last resort.
+1. The basename of the working directory.
+2. `session` as a last resort.
+
+(An earlier draft derived from the iTerm2 tab title first. That is not
+available: iTerm2 exports only `$ITERM_SESSION_ID`, and reading a title needs
+the iTerm2 API, i.e. the TUI process. The CLI must work without it.)
 
 The result is slugified to the same character class names already use, and
 deduped with a `-2` / `-3` suffix against live sessions. `RESERVED_NAMES` are

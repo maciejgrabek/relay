@@ -17,6 +17,14 @@ plain script.
 
 **Spec:** `docs/specs/2026-08-03-session-conversations-design.md`
 
+**Status: COMPLETE (2026-08-03).** All 17 tasks implemented, `./test/run.sh`
+green. Two corrections made during execution, both folded back into the spec:
+name derivation cannot use the iTerm2 tab title (the CLI has no access to it),
+and a fan-out post must carry ONE timestamp across its rows or the transcript
+de-dupe never matches. Three items were added beyond the plan: `prune_threads`
+(closed discussions must not outlive their transcripts), thread context in
+`relay inbox` / `relay msgs`, and the coordinator skill's discussion section.
+
 ## Global Constraints
 
 - **No pytest.** Each suite is `iterm/test_*.py` with a `check(msg, cond)`
