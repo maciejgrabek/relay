@@ -456,13 +456,19 @@ A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
 automatically), so every verb below resolves "me" without you passing an id:
 
 ```
-relay join <name> [--role worker|coordinator] [--project <p>]
+relay join [<name>] [--role worker|coordinator] [--project <p>]
     START HERE. Registers this session AND prints, in one go: who else is
     in the swarm, anything already queued for you, and the protocol you are
-    expected to follow. Safe to re-run. `relay register` is the same
-    binding without the teaching.
+    expected to follow. The name is OPTIONAL - with none, relay derives one
+    from the working directory, so "use relay to talk to the other sessions"
+    is a complete instruction. Passing a name later renames in place,
+    carrying messages and tasks along. Safe to re-run. `relay register` is
+    the same binding without the teaching.
 
-relay help swarm | relay help pr
+relay who
+    Who else is here: names, roles, status, last seen. Read-only.
+
+relay help swarm | relay help pr | relay help discuss
     The protocol text alone, registering nothing.
 
 relay register --name <name> --role worker|coordinator [--project <p>]
@@ -490,6 +496,32 @@ relay send --human "<body>"
     Escalate to the operator: pings them (sound + notification) when the
     relay TUI is running, and shows in the swarm feed. Never injected into
     any session.
+
+relay reply ["<body>" | <msg-id> "<body>"] [--kind <k>]
+    Answer whoever wrote to you, without retyping their name. With no id it
+    answers the last message received; if the last delivery was a batch of
+    several it refuses and lists the ids. Records a correlation link.
+
+relay ask <name> "<question>" [--wait <seconds>]
+    Ask one session and BLOCK until it answers, printing the answer as this
+    command's output - so the answer lands inside the asking session's
+    current turn instead of costing it a turn boundary. Default 120s, max
+    540s. On timeout the question stays queued and degrades into an ordinary
+    message.
+
+relay discuss <name> [<name>...] "<the question>" [--rounds N]
+relay say <id> "<your view>"
+relay agree <id> "<the position>"
+relay thread <id>
+    Get two or more sessions to SETTLE something without you carrying
+    messages between tabs. `discuss` opens a thread (topic LAST) where every
+    participant sees every post; they are woken with a pointer and read it
+    with `relay thread`. Each gets N posts (default 3); `agree` does not
+    consume one, and posting after agreeing retracts it. When everyone has
+    agreed relay closes the thread and pings YOU with the agreed position -
+    not the transcript. If the cap runs out first it closes `unresolved`,
+    recording each session's last position. Both are real endings; two
+    sessions that cannot converge is information. Rules: relay help discuss
 
 relay inbox
     Print your undelivered messages and mark them delivered. Check it when
