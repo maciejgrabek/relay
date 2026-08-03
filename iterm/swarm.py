@@ -8,8 +8,43 @@ support [] access.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import List, Optional
+
+# Mirrors db.RESERVED_NAMES. Duplicated rather than imported so this module
+# stays dependency-free (it is unit-tested standalone, like gates.py).
+# db.register enforces the real rule; this only stops us ever PROPOSING a name
+# that would be refused - which matters because the relay repo is itself
+# called 'relay'.
+_RESERVED = ("relay", "human")
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_NAME_MAX = 24
+
+
+def derive_name(cwd: str, taken) -> str:
+    """A session name for a session nobody named, from its working directory.
+
+    The operator's mental model is "the tab in <repo>", so the basename is the
+    least surprising handle. Collisions are the common case (three sessions in
+    one repo), so dedupe with a numeric suffix rather than something opaque:
+    a human has to read these in `relay who` and type them into `relay send`.
+    """
+    base = str(cwd or "").rstrip("/")
+    base = _SLUG_RE.sub("-", os.path.basename(base).lower()).strip("-")
+    base = base[:_NAME_MAX].rstrip("-") or "session"
+    taken = set(taken or ())
+
+    def free(n: str) -> bool:
+        return n not in taken and n not in _RESERVED
+
+    if free(base):
+        return base
+    n = 2
+    while not free(f"{base}-{n}"):
+        n += 1
+    return f"{base}-{n}"
 
 
 def parse_blockers(s: Optional[str]) -> List[int]:
