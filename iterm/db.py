@@ -31,7 +31,11 @@ MESSAGE_KINDS = ("info", "done", "blocked", "escalation", "wake",
 # outcome, not a failure: sessions that cannot converge is information the
 # operator wants, and the alternative is looping forever or fabricating an
 # agreement.
-THREAD_STATES = ("open", "agreed", "unresolved")
+# 'agreed' is the only state relay reaches on its own, and only by reading that
+# every participant posted `agree`. 'closed' is an ending the AGENTS declared
+# via `relay close`. Relay never judges a discussion failed - deciding that,
+# and deciding what happens next, belongs to the sessions having it.
+THREAD_STATES = ("open", "agreed", "closed")
 
 PR_STATES = ("created", "review", "changes", "approved", "merged", "closed")
 

@@ -1298,27 +1298,43 @@ def run():
                              iterm_id="w0t1p0:D-OUT")
     ok &= check("a non-participant cannot post", code != 0)
 
-    # Cap enforcement: the opener's topic post counts as its first round.
+    # The budget is advisory. Relay reports the cost of another post but must
+    # never refuse one - silencing an agent mid-argument would be relay
+    # deciding the conversation is over, which is not relay's call.
     code, out, err = run_cli("say", str(tid), "second", iterm_id="w0t1p0:D-A")
     ok &= check("second post allowed", code == 0)
     code, out, err = run_cli("say", str(tid), "third", iterm_id="w0t1p0:D-A")
     ok &= check("third post allowed", code == 0)
-    code, out, err = run_cli("say", str(tid), "one too many",
+    code, out, err = run_cli("say", str(tid), "past the budget",
                              iterm_id="w0t1p0:D-A")
-    ok &= check("say past the cap is refused", code != 0)
-    ok &= check("cap refusal offers agree", "relay agree" in err)
+    ok &= check("say past the budget is ALLOWED", code == 0)
+    ok &= check("going over the budget reports the cost",
+                "budget" in out and "turn" in out)
+    ok &= check("going over the budget offers a way to end it",
+                "relay agree" in out or "relay close" in out)
 
     code, out, err = run_cli("say", "99999", "ghost", iterm_id="w0t1p0:D-A")
     ok &= check("say to an unknown thread is refused", code != 0)
 
-    # A closed thread refuses posts and reports its verdict.
+    # Agents can end their own discussion, agreed or not.
+    code, out, err = run_cli("close", str(tid), "", iterm_id="w0t1p0:D-A")
+    ok &= check("close with no summary is refused", code != 0)
+    code, out, err = run_cli("close", str(tid),
+                             "settled offline: per service",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("a participant can close the discussion", code == 0)
     c = db.connect()
-    db.close_thread(c, tid, "agreed", "one per service")
+    ok &= check("closing records who ended it and how",
+                db.get_thread(c, tid)["state"] == "closed"
+                and "d-a" in db.get_thread(c, tid)["outcome"])
+    ok &= check("closing tells the other participants",
+                any("closed discussion" in r["body"] for r in
+                    c.execute("SELECT body FROM messages WHERE to_name='d-b'")))
     c.close()
     code, out, err = run_cli("say", str(tid), "too late",
                              iterm_id="w0t1p0:D-A")
     ok &= check("say to a closed thread is refused", code != 0)
-    ok &= check("the refusal reports the outcome", "one per service" in err)
+    ok &= check("the refusal reports the outcome", "per service" in err)
     code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-A")
     ok &= check("a closed thread prints its outcome", "OUTCOME" in out)
 

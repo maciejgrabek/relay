@@ -65,17 +65,26 @@ def run():
     d = protocol.TOPICS["discuss"]
     ok &= check("discuss protocol names every verb",
                 all(v in d for v in ("relay discuss", "relay say",
-                                     "relay agree", "relay thread")))
+                                     "relay agree", "relay thread",
+                                     "relay close")))
     ok &= check("discuss protocol says to READ before posting",
                 "relay thread" in d and "before" in d.lower())
     ok &= check("discuss protocol warns against consensus-seeking",
                 "disagree" in d.lower() and "consensus" in d.lower())
-    ok &= check("discuss protocol explains the round cap",
-                "cap" in d.lower() or "rounds" in d.lower())
+    ok &= check("discuss protocol calls the budget advice, not a limit",
+                "advice, not a limit" in d.lower())
+    ok &= check("discuss protocol says relay will not stop you",
+                "will not stop you" in d.lower())
     ok &= check("discuss protocol explains retraction",
                 "retract" in d.lower())
-    ok &= check("discuss protocol tells you deadlock is allowed",
-                "unresolved" in d.lower())
+    ok &= check("discuss protocol tells you agreement is not required",
+                "not required to agree" in d.lower())
+    # The load-bearing promise: relay carries the conversation and stays out
+    # of the outcome. If this line ever goes, the feature has drifted.
+    ok &= check("discuss protocol says relay does not adjudicate",
+                "relay does not adjudicate" in d.lower())
+    ok &= check("discuss protocol puts escalation in the agents' hands",
+                "you decide that" in d.lower())
 
     # The swarm protocol - what `relay join` prints - must POINT at the
     # conversation verbs. A session that only ever reads join's output is the

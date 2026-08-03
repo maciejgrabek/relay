@@ -910,33 +910,39 @@ class Watcher:
             self._note(f"timers load error: {e}")
 
     def _close_threads(self) -> None:
-        """Close discussions that have reached a verdict and ping the operator
-        with the OUTCOME, not the transcript.
+        """Mark a discussion agreed once every participant has posted `agree`,
+        and tell the operator what they concluded.
 
-        Runs in dry-run too: stamping a thread and queueing a message are DB
-        writes, not keystrokes, and whether the operator learns how a
-        discussion ended must not depend on relay being allowed to type.
-        Best-effort - a DB error is logged, never breaks the loop."""
+        This is bookkeeping, not judgement. Relay closes a thread on exactly
+        one condition - the agents all said they were settled - and it never
+        decides that a discussion has failed, run too long, or needs a human.
+        An earlier version closed threads `unresolved` on a spent round cap and
+        escalated them; that made relay the arbiter of a decision that belongs
+        to the sessions having it. Any other ending is declared by an agent via
+        `relay close`.
+
+        The operator notice is FYI, not a request: it reports what was decided
+        so nobody has to go looking. Runs in dry-run too (DB writes, not
+        keystrokes). Best-effort - a DB error is logged, never breaks the loop.
+        """
         try:
             conn = self._swarm_conn()
             for th in swarmdb.list_threads(conn, state="open"):
                 parts = swarmdb.participants_of(th)
                 msgs = swarmdb.thread_messages(conn, th["id"])
-                state, outcome = swarm.thread_verdict(
-                    parts, msgs, th["rounds_cap"])
-                if state == "open":
+                state, outcome = swarm.thread_verdict(parts, msgs)
+                if state != "agreed":
                     continue
                 # close_thread is guarded on state='open', so two ticks racing
-                # cannot double-close and ping the operator twice.
+                # cannot double-close and notify the operator twice.
                 if not swarmdb.close_thread(conn, th["id"], state, outcome):
                     continue
-                verdict = "agreed" if state == "agreed" else "could NOT agree"
                 swarmdb.queue_message(
                     conn, "relay", "human",
-                    f"discussion #{th['id']} ({th['topic']}) {verdict}: "
+                    f"discussion #{th['id']} ({th['topic']}) settled: "
                     f"{outcome}",
                     th["project"], kind="escalation", thread_id=th["id"])
-                self._note(f"THREAD #{th['id']} {state}: {outcome[:80]}")
+                self._note(f"THREAD #{th['id']} agreed: {outcome[:80]}")
         except Exception as e:
             self._note(f"thread close error: {e}")
 

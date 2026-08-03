@@ -446,13 +446,51 @@ def cmd_say(args) -> int:
         return _err("say something - an empty post is not a position")
     msgs = db.thread_messages(conn, th["id"])
     used = swarm.round_counts(msgs).get(me["name"], 0)
-    if used >= th["rounds_cap"]:
-        return _err(f"you have used all {th['rounds_cap']} of your posts in "
-                    f"#{th['id']}. Either settle it - relay agree "
-                    f'{th["id"]} "<the position>" - or stop and let it close.')
     _broadcast(conn, th, me["name"], body, "say")
+    # The budget is INFORMATION, not a gate. Refusing the post would be relay
+    # overriding an agent that still has something to say - and how long a
+    # conversation needs to be is part of the conversation, which is theirs.
+    # Relay reports the cost; the agents decide whether to keep spending it.
     left = th["rounds_cap"] - used - 1
-    print(f"posted to #{th['id']} ({left} post(s) left)")
+    if left > 0:
+        print(f"posted to #{th['id']} ({left} of your suggested "
+              f"{th['rounds_cap']} posts left)")
+    else:
+        over = used + 1 - th["rounds_cap"]
+        print(f"posted to #{th['id']} - that is {over} past the suggested "
+              f"budget of {th['rounds_cap']}. Every post costs each "
+              f"participant a turn, so settle it if you can: "
+              f'relay agree {th["id"]} "<the position>", or end it: '
+              f'relay close {th["id"]} "<how it ended>"')
+    return 0
+
+
+def cmd_close(args) -> int:
+    """End a discussion the participants have finished with.
+
+    Relay closes a thread on its own ONLY when everyone has agreed, because
+    that is reading what the agents did rather than judging it. Every other
+    ending is theirs to declare - including "we disagree and we are done",
+    which is a real outcome and not a failure."""
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    th, rc = _thread_or_err(conn, args.id, me)
+    if th is None:
+        return rc
+    summary = (args.summary or "").strip()
+    if not summary:
+        return _err(f'say how it ended: relay close {th["id"]} '
+                    f'"<what you concluded, or what you could not settle>"')
+    db.close_thread(conn, th["id"], "closed", f"{me['name']}: {summary}")
+    for p in db.participants_of(th):
+        if p == me["name"]:
+            continue
+        db.queue_message(conn, me["name"], p,
+                         f"closed discussion #{th['id']}: {summary}",
+                         th["project"], kind="info")
+    print(f"closed discussion #{th['id']}: {summary}")
     return 0
 
 
@@ -514,19 +552,21 @@ def cmd_thread(args) -> int:
         print(f"OUTCOME ({th['state']}): {th['outcome']}")
         return 0
     print()
-    print("STATE YOUR POSITION AND SAY WHERE YOU DISAGREE. Do not aim for")
-    print("consensus, aim to be right - an honest deadlock is a useful")
-    print("outcome here, and agreeing to be agreeable wastes everyone's turn.")
+    print("STATE YOUR POSITION AND SAY WHERE YOU DISAGREE. You are not")
+    print("required to reach agreement, and agreeing to be agreeable produces")
+    print("a decision nobody checked. The call is yours, not relay's.")
     if me is not None and me["name"] in parts:
         left = th["rounds_cap"] - counts.get(me["name"], 0)
+        budget = (f"({left} of your suggested {th['rounds_cap']} posts left)"
+                  if left > 0 else
+                  f"(past the suggested budget of {th['rounds_cap']} - still "
+                  f"allowed, but each post costs everyone a turn)")
         print()
         print("YOU CAN:")
-        if left > 0:
-            print(f'  relay say {th["id"]} "<your view>"'
-                  f'        ({left} post(s) left)')
-        else:
-            print("  (no posts left - you can only settle or stop)")
+        print(f'  relay say {th["id"]} "<your view>"        {budget}')
         print(f'  relay agree {th["id"]} "<the position>"   settle it')
+        print(f'  relay close {th["id"]} "<how it ended>"   end it, agreed '
+              f'or not')
     return 0
 
 
@@ -1786,6 +1826,11 @@ def build_parser() -> argparse.ArgumentParser:
     ag.add_argument("id", type=int)
     ag.add_argument("position")
     ag.set_defaults(fn=cmd_agree)
+
+    cs = sub.add_parser("close", help="end a discussion you are in")
+    cs.add_argument("id", type=int)
+    cs.add_argument("summary")
+    cs.set_defaults(fn=cmd_close)
 
     tr = sub.add_parser("thread", help="read a discussion")
     tr.add_argument("id", type=int)

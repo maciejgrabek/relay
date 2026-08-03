@@ -1385,7 +1385,9 @@ def close_threads_tests():
     w._close_threads()
     chk("closing is idempotent across ticks", len(_pings()) == 1)
 
-    # CAP SPENT with no agreement -> unresolved, last positions recorded.
+    # CAP SPENT with no agreement: relay must do NOTHING. Closing it here
+    # would be relay deciding the agents failed and that a human should
+    # settle it - a decision that belongs to the sessions having it.
     t2 = realdb.create_thread(conn, "shared cache?", "a", ["a", "b"],
                               project="p", rounds_cap=1)
     realdb.queue_message(conn, "a", "b", "yes cache", "p", kind="say",
@@ -1394,10 +1396,18 @@ def close_threads_tests():
                          thread_id=t2, now=11.0)
     w._close_threads()
     th2 = realdb.get_thread(conn, t2)
-    chk("spent cap -> unresolved", th2["state"] == "unresolved")
-    chk("unresolved records both last positions",
-        "yes cache" in th2["outcome"] and "no cache" in th2["outcome"])
-    chk("unresolved pings the human too", len(_pings()) == 2)
+    chk("a spent budget does not close the thread", th2["state"] == "open")
+    chk("relay never declares a discussion unresolved", th2["outcome"] == "")
+    chk("a spent budget does not ping the human", len(_pings()) == 1)
+    # Long-running disagreement, still relay's business to stay out of.
+    for i in range(6):
+        realdb.queue_message(conn, "a" if i % 2 else "b", "b" if i % 2 else "a",
+                             f"round {i}", "p", kind="say", thread_id=t2,
+                             now=20.0 + i)
+    w._close_threads()
+    chk("relay leaves a long argument alone",
+        realdb.get_thread(conn, t2)["state"] == "open")
+    chk("a long argument never pings the human", len(_pings()) == 1)
 
     # An OPEN thread short of a verdict is left alone.
     t3 = realdb.create_thread(conn, "still going", "a", ["a", "b"],
@@ -1407,7 +1417,7 @@ def close_threads_tests():
     w._close_threads()
     chk("an undecided thread stays open",
         realdb.get_thread(conn, t3)["state"] == "open")
-    chk("an undecided thread does not ping", len(_pings()) == 2)
+    chk("an undecided thread does not ping", len(_pings()) == 1)
 
     conn.close()
     return ok

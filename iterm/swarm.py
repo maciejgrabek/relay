@@ -219,24 +219,27 @@ def last_said(msgs) -> dict:
     return out
 
 
-def thread_verdict(participants, msgs, rounds_cap: int):
+def thread_verdict(participants, msgs, rounds_cap: int = 0):
     """(state, outcome) for a discussion. 'open' means keep going.
 
-    Two terminal states, and both are legitimate endings. Unanimity closes it
-    `agreed`. A spent round cap closes it `unresolved`, recording what each
-    participant last said - because the alternative to admitting deadlock is an
-    unbounded loop of Claude turns spent while the operator is away."""
+    ONE automatic terminal state, and it is not a judgement: when every
+    participant has a live `agree`, the discussion is over because the agents
+    ended it, and relay is only reading what they did.
+
+    Relay deliberately does NOT close a discussion for any other reason. An
+    earlier version closed it `unresolved` once a round cap was spent and
+    escalated to the operator - that was relay deciding the agents had failed
+    and that a human should settle it. Neither is relay's call. The decision
+    belongs to the agents: they settle it, or they end it themselves
+    (db.close_thread via `relay close`), or they escalate it themselves.
+
+    `rounds_cap` is accepted and ignored, kept so callers need not change."""
     parts = list(participants)
     if not parts:
         return "open", ""
     pos = positions(msgs)
     if all(p in pos for p in parts):
         return "agreed", " | ".join(f"{p}: {pos[p]}" for p in parts)
-    counts = round_counts(msgs)
-    if all(counts.get(p, 0) >= rounds_cap for p in parts):
-        said = last_said(msgs)
-        return "unresolved", " | ".join(
-            f"{p}: {said.get(p, '(never posted)')}" for p in parts)
     return "open", ""
 
 

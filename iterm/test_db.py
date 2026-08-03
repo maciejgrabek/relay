@@ -164,7 +164,7 @@ def run():
     ok &= check("outcome stored", th["outcome"] == "one per service")
     ok &= check("closed_at set", th["closed_at"] > 0)
     ok &= check("closing twice is refused (no double-ping)",
-                not db.close_thread(tconn, tid, "unresolved", "x"))
+                not db.close_thread(tconn, tid, "closed", "x"))
     ok &= check("close_thread rejects a bogus state",
                 _raises(lambda: db.close_thread(tconn, tid, "nonsense", "x")))
     # Retention: a CLOSED discussion is history and ages out with its
