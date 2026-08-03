@@ -34,7 +34,8 @@ arm/disarm them with the arrow keys.
 
 The list is on top and the selected session's **live terminal feed** is stacked
 below it, both full-width. `TAB` flips to the **swarm view** (a kanban board of
-tasks + a message feed) when you're running a coordinated fleet.
+tasks, open discussions, pull requests and a message feed) when you're running
+a coordinated fleet.
 
 > **`relay`** is iTerm2-native: one Python process, no Claude Code hooks,
 > no session restart. It watches iTerm2 screens and auto-clears safe permission
@@ -225,7 +226,7 @@ can't silently auto-approve.)
 | `t` | **Timers overlay**: the selected session's timers (see [Session timers](#session-timers)); `t` again or `esc` closes it |
 | `m` | **Mascot widget**: open / close the floating desktop creature (see [The desktop widget](#the-desktop-widget)). Inert while an overlay is open, where `m` belongs to that overlay |
 | `?` | Help overlay: key map + arm-level cheat sheet |
-| `TAB` | Toggle the **swarm view** (kanban board + message feed) |
+| `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
 | `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
@@ -436,21 +437,58 @@ open" contract as everything else in this repo.
 
 ### Telling sessions to work together
 
-Point each session at relay by name and it self-onboards - no skill required,
-because the CLI teaches the protocol itself:
+Point a session at relay and it self-onboards - no skill required, and no name
+required either, because the CLI teaches the protocol itself:
 
-    you are api-worker. run: relay join api-worker
-    then work with the other sessions through relay.
+    use relay to talk to the other sessions.
 
-`relay join` registers the session, shows it who else is in the swarm, hands it
-anything already queued, and prints the rules it is expected to follow: keep
-your status fresh (it is your heartbeat), reply to whoever messaged you, never
-end a turn silent with a task still `doing`, and escalate rather than guess.
+That is a complete instruction. `relay join` with no arguments registers the
+session under a name derived from its working directory, shows it who else is
+here, hands it anything already queued, and prints the rules it is expected to
+follow: keep your status fresh (it is your heartbeat), reply to whoever
+messaged you, never end a turn silent with a task still `doing`, and escalate
+rather than guess. Naming is still yours if you want it - `relay join
+api-worker` renames in place, carrying the session's messages and tasks along.
 
 `relay help swarm` prints the same protocol without registering anything, for
-reading first. Joining stays an explicit act: relay will not enrol a session it
-merely watches, because an enrolled session is one any local process can send
-text to.
+reading first. Enrolment stays an act of the session itself: relay will not
+enrol a tab it merely watches, because an enrolled session is one any local
+process can send text to. What changed is that the act no longer has to be a
+separate command carrying a name you invented.
+
+#### Getting two or three sessions to agree on something
+
+When a decision needs more than one session's judgement, you should not be the
+one carrying messages between tabs. Open a discussion from any session:
+
+    relay discuss bff-worker web-worker "one shared DB or one per service?"
+
+Every participant sees every post. They are woken with a pointer
+(`[relay discussion #7] 2 new post(s) from api - read them first: relay thread
+7`) rather than the contents, and `relay thread 7` gives them the transcript,
+who has settled, and what they can do next - as ordinary command output, so it
+is never squeezed onto one injected line.
+
+Each participant gets a bounded number of posts (`--rounds`, default 3).
+`relay agree <id> "<the position>"` records that a session is settled, and on
+what - the position text is required, so "I agree" with no content is not
+expressible. Posting again retracts it: a session still talking is not settled.
+
+It ends one of two ways, and **you get one notification either way, carrying
+the outcome rather than the transcript**:
+
+- everyone agreed - the thread closes `agreed` with the agreed position;
+- the round cap ran out first - it closes `unresolved`, recording what each
+  session last said, and the decision comes back to you.
+
+`unresolved` is a normal outcome, not a failure. Two sessions that cannot
+converge is information worth having, and the alternative to admitting it is an
+unbounded loop of Claude turns spent while you are away. That is also why the
+cap is low by default: N participants times R rounds is N times R full turns.
+
+For a single question to a single session, `relay ask <name> "<question>"` is
+lighter - it blocks and hands back the answer inside the asking session's
+current turn, so a question costs no turn boundary at all.
 
 A session binds its identity from `$ITERM_SESSION_ID` (iTerm2 sets this
 automatically), so every verb below resolves "me" without you passing an id:
@@ -656,6 +694,10 @@ your call; Relay's job is just telling you in time.
 - an **INTERACTIONS** map - who talks to whom: per-pair sent/received
   counts, last message kind and age, `‼` when the pair's last word was
   `blocked` or `escalation`;
+- a **DISCUSSIONS** pane: open discussions with how many participants have
+  settled and how old they are, and any that have reached a verdict
+  duplicated into an attention strip on top (same rule as the PR pane - the
+  main list never reorders);
 - the recent-messages feed, **colored by kind** (done green, blocked
   yellow, escalation red, wake dim).
 
