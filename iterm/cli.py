@@ -354,6 +354,29 @@ def cmd_inbox(args) -> int:
     return 0
 
 
+def cmd_who(args) -> int:
+    """Who can I talk to? Read-only on purpose: reading the roster is not
+    joining it, and a session that only wants to look should not become
+    addressable as a side effect."""
+    conn = db.connect()
+    me = whoami(conn)
+    rows = [s for s in db.list_sessions(conn, args.project)
+            if not s["closed_at"]]
+    if not rows:
+        print("nobody is registered yet - a session joins with: relay join")
+        return 0
+    print(f"{'NAME':<18} {'ROLE':<12} {'SEEN':<10} STATUS")
+    for s in rows:
+        mine = "  (you)" if me is not None and s["name"] == me["name"] else ""
+        print(f"{s['name']:<18} {s['role']:<12} "
+              f"{_ago(s['last_seen']):<10} {s['status_text'] or '-'}{mine}")
+    print()
+    print('talk to one:                    relay send <name> "<body>"')
+    print('settle something with several:  '
+          'relay discuss <name> <name> "<topic>"')
+    return 0
+
+
 def cmd_msgs(args) -> int:
     conn = db.connect()
     rows = db.message_history(conn, with_name=args.with_name,
@@ -1412,6 +1435,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ib = sub.add_parser("inbox", help="print + mark delivered my queued messages")
     ib.set_defaults(fn=cmd_inbox)
+
+    wh = sub.add_parser("who", help="who else is here (read-only)")
+    wh.add_argument("--project", default=None)
+    wh.set_defaults(fn=cmd_who)
 
     ms = sub.add_parser("msgs", help="message history")
     ms.add_argument("--with", dest="with_name", default=None)

@@ -1197,6 +1197,29 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    # --- who ------------------------------------------------------------------
+    run_cli("join", "who-a", "--project", "whop", iterm_id="w0t1p0:WHO-A")
+    run_cli("join", "who-b", "--project", "whop", iterm_id="w0t1p0:WHO-B")
+    code, out, err = run_cli("who", "--project", "whop",
+                             iterm_id="w0t1p0:WHO-A")
+    ok &= check("who exits 0", code == 0)
+    ok &= check("who lists peers", "who-b" in out)
+    ok &= check("who marks me", "(you)" in out)
+    ok &= check("who teaches the talk verbs",
+                "relay send" in out and "relay discuss" in out)
+    # Read-only: reading the roster must not put you on it.
+    c = db.connect()
+    before = c.execute("SELECT COUNT(*) FROM sessions WHERE "
+                       "iterm_session_id=?", ("WHO-C",)).fetchone()[0]
+    c.close()
+    run_cli("who", iterm_id="w0t1p0:WHO-C")
+    c = db.connect()
+    after = c.execute("SELECT COUNT(*) FROM sessions WHERE "
+                      "iterm_session_id=?", ("WHO-C",)).fetchone()[0]
+    c.close()
+    ok &= check("who does not auto-register the caller",
+                before == 0 and after == 0)
+
     # --- auto-registration ---------------------------------------------------
     # A session that never ran `relay register` still gets an identity the
     # first time it uses a verb that needs one. This is what makes "just talk
