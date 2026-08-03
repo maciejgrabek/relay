@@ -800,6 +800,10 @@ def wipe_project(conn, project: str) -> tuple:
                       (project,)).rowcount
     nm = conn.execute("DELETE FROM messages WHERE project=?",
                       (project,)).rowcount
+    # Threads too, or a wipe leaves discussions whose participants no longer
+    # exist: the watcher would keep evaluating them every tick and could still
+    # ping the operator about a project that was deliberately erased.
+    conn.execute("DELETE FROM threads WHERE project=?", (project,))
     conn.commit()
     return (nt, ns, nm)
 
