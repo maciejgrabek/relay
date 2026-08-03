@@ -45,8 +45,8 @@ def run():
                 "relay pr claim" in protocol.PR_PROTOCOL
                 and "--pr" in protocol.PR_PROTOCOL)
 
-    ok &= check("TOPICS exposes both topics",
-                set(protocol.TOPICS) == {"swarm", "pr"})
+    ok &= check("TOPICS exposes every topic",
+                set(protocol.TOPICS) == {"swarm", "pr", "discuss"})
     ok &= check("no em-dash anywhere in the protocol text",
                 all("\u2014" not in t for t in protocol.TOPICS.values()))
 
@@ -59,6 +59,30 @@ def run():
                 "PR_PROTOCOL doesn't have",
                 "spawn" not in p.lower()
                 or "spawn" in protocol.PR_PROTOCOL.lower())
+
+    # --- discussions ---------------------------------------------------------
+    ok &= check("discuss is a help topic", "discuss" in protocol.TOPICS)
+    d = protocol.TOPICS["discuss"]
+    ok &= check("discuss protocol names every verb",
+                all(v in d for v in ("relay discuss", "relay say",
+                                     "relay agree", "relay thread")))
+    ok &= check("discuss protocol says to READ before posting",
+                "relay thread" in d and "before" in d.lower())
+    ok &= check("discuss protocol warns against consensus-seeking",
+                "disagree" in d.lower() and "consensus" in d.lower())
+    ok &= check("discuss protocol explains the round cap",
+                "cap" in d.lower() or "rounds" in d.lower())
+    ok &= check("discuss protocol explains retraction",
+                "retract" in d.lower())
+    ok &= check("discuss protocol tells you deadlock is allowed",
+                "unresolved" in d.lower())
+
+    # The swarm protocol - what `relay join` prints - must POINT at the
+    # conversation verbs. A session that only ever reads join's output is the
+    # common case, and it is the one that needs to know it can talk.
+    ok &= check("the swarm protocol points at who", "relay who" in p)
+    ok &= check("the swarm protocol points at reply", "relay reply" in p)
+    ok &= check("the swarm protocol points at discuss", "relay discuss" in p)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
