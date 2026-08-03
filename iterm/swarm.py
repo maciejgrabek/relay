@@ -103,6 +103,47 @@ def delivery_text(from_name: str, body: str, kind: str = "info") -> str:
     return f"[relay {tag} from {from_name}] {flat}"
 
 
+_DELIVERY_MAX = 700
+
+
+def _flatten(s: str) -> str:
+    """Flatten to one line, drop anything that isn't printable, and bound the
+    length. Injected text is raw keystrokes, so a stray ESC would be
+    interpreted by the terminal rather than typed. (Distinct from _clip below,
+    which is a display-width truncator for the TUI.)"""
+    flat = " ".join(str(s).splitlines())
+    flat = "".join(c for c in flat if c.isprintable() or c == " ")
+    return flat[:_DELIVERY_MAX]
+
+
+def batch_delivery_text(msgs) -> str:
+    """The literal text typed into a session for its whole queued batch.
+
+    One injected turn per batch, not per message: every delivery costs the
+    recipient a full Claude turn, so three queued messages used to cost three
+    turns to convey what one turn can carry. Still ONE line and one Enter -
+    the bracketed-paste constraint has not changed - so a batch degrades to a
+    count plus a pointer rather than trying to inline everything.
+    """
+    msgs = list(msgs or ())
+    if not msgs:
+        return ""
+    if len(msgs) == 1:
+        m = msgs[0]
+        base = delivery_text(_get(m, "from_name", ""), _get(m, "body", ""),
+                             kind_of(m))
+        return _flatten(f'{base}  (reply: relay reply {_get(m, "id", "")} '
+                        f'"<your answer>")')
+    senders = []
+    for m in msgs:
+        s = _get(m, "from_name", "")
+        if s not in senders:
+            senders.append(s)
+    who = ", ".join(senders[:4]) + (", ..." if len(senders) > 4 else "")
+    return _flatten(f"[relay {len(msgs)} messages from {who}] "
+                    f"read them: relay inbox")
+
+
 def kind_of(m) -> str:
     """A message row/dict's kind, defaulting 'info' for pre-v5 rows and plain
     dict fixtures (sqlite Row and dict both support .keys())."""

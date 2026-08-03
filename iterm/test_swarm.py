@@ -624,6 +624,35 @@ def run():
                 "or not prs is passed",
                 line15_no_pr == line15_with_pr)
 
+    # --- batch_delivery_text ------------------------------------------------
+    one = [{"id": 5, "from_name": "a", "body": "just this", "kind": "info"}]
+    bt = swarm.batch_delivery_text(one)
+    ok &= check("single message keeps the inline body", "just this" in bt)
+    ok &= check("single message names its id", "5" in bt)
+    ok &= check("single message teaches reply", "relay reply" in bt)
+    ok &= check("delivery text is one line", "\n" not in bt)
+    ok &= check("empty batch is empty", swarm.batch_delivery_text([]) == "")
+
+    many = [{"id": i, "from_name": f"s{i}", "body": f"body{i}",
+             "kind": "info"} for i in range(1, 4)]
+    btm = swarm.batch_delivery_text(many)
+    ok &= check("batch is one line", "\n" not in btm)
+    ok &= check("batch counts the messages", "3" in btm)
+    ok &= check("batch points at inbox", "relay inbox" in btm)
+    ok &= check("batch names its senders", "s1" in btm and "s3" in btm)
+
+    huge = [{"id": 1, "from_name": "a", "body": "x" * 5000, "kind": "info"}]
+    ok &= check("delivery text is bounded",
+                len(swarm.batch_delivery_text(huge)) <= 700)
+    ok &= check("control characters are stripped",
+                "\x1b" not in swarm.batch_delivery_text(
+                    [{"id": 1, "from_name": "a", "body": "a\x1b[Bb",
+                      "kind": "info"}]))
+    ok &= check("a newline in a body cannot split the injected turn",
+                "\n" not in swarm.batch_delivery_text(
+                    [{"id": 1, "from_name": "a", "body": "one\ntwo",
+                      "kind": "info"}]))
+
     # --- derive_name --------------------------------------------------------
     ok &= check("derive_name uses the cwd basename",
                 swarm.derive_name("/Users/x/Work/api", set()) == "api")
