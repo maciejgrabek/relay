@@ -318,10 +318,39 @@ async def deliver_tests():
     w._db = object()                     # non-None so _swarm_conn won't connect
     info, fs = _mk(w, "sid1", "worker-1")
     await w._deliver(info)
-    body = S.delivery_text("coord", "hi")
+    body = S.batch_delivery_text([{"id": 7, "from_name": "coord",
+                                   "body": "hi"}])
     chk("deliver: body sent then Enter (two sends)", fs.sent == [body, "\r"])
     chk("deliver: marked delivered after the sends", delivered == [7])
     chk("deliver: audited once", len(audited) == 1)
+
+    # BATCH: three queued messages must cost ONE injected turn, be audited
+    # once EACH (the audit trail still accounts for every message), and share
+    # a single delivered_at - the timestamp `relay reply` uses to recognise
+    # "the last batch" and refuse an ambiguous bare reply.
+    audited.clear()
+    delivered.clear()
+    stamps = []
+    W.swarmdb.mark_delivered = lambda conn, mid, **k: (
+        delivered.append(mid), stamps.append(k.get("now")))[0]
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 21, "from_name": "a", "body": "one"},
+        {"id": 22, "from_name": "b", "body": "two"},
+        {"id": 23, "from_name": "a", "body": "three"}]
+    infoB, fsB = _mk(w, "sidB", "worker-batch")
+    await w._deliver(infoB)
+    chk("batch: one injected turn for three messages", len(fsB.sent) == 2)
+    chk("batch: all three marked delivered",
+        sorted(delivered) == [21, 22, 23])
+    chk("batch: one shared delivered_at",
+        len(set(stamps)) == 1 and stamps[0] is not None)
+    chk("batch: audited once per message", len(audited) == 3)
+    chk("batch: the turn is a pointer, not three bodies",
+        "relay inbox" in fsB.sent[0] and "\n" not in fsB.sent[0])
+    W.swarmdb.mark_delivered = lambda conn, mid, **k: delivered.append(mid)
+    delivered.clear()
+    audited.clear()
+    W.audit.record = lambda *a, **k: (audited.append(a), True)[1]
 
     # AUDIT FAILS: nothing sent, message NOT marked delivered.
     W.audit.record = lambda *a, **k: False

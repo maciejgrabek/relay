@@ -782,21 +782,30 @@ class Watcher:
             return
         if not msgs:
             return
-        m = msgs[0]
-        text = swarm.delivery_text(m["from_name"], m["body"], swarm.kind_of(m))
+        # The WHOLE queue in one injected turn, not one message per tick. Every
+        # delivery costs the recipient a full Claude turn, so three queued
+        # messages used to cost three turns to say what one turn can carry.
+        text = swarm.batch_delivery_text(msgs)
+        ids = [m["id"] for m in msgs]
         if self.dry_run:
-            if m["id"] not in self._dryrun_delivered:
+            fresh = [m for m in msgs if m["id"] not in self._dryrun_delivered]
+            for m in fresh:
                 self._dryrun_delivered.add(m["id"])
                 audit.record("would-deliver", info.title, text[:500],
                              f"msg {m['id']} to {reg['name']}")
+            if fresh:
                 self._note(f"DRY-RUN would deliver -> {reg['name']}: "
-                           f"{m['body'][:60]}")
+                           f"{len(fresh)} msg(s)")
             return
-        # LOG BEFORE ACT (same contract as approvals).
-        if not audit.record("delivered", info.title, text[:500],
+        # LOG BEFORE ACT (same contract as approvals). One record per message
+        # even though they share one turn: the audit trail must still account
+        # for every message individually.
+        for m in msgs:
+            if audit.record("delivered", info.title, text[:500],
                             f"msg {m['id']} from {m['from_name']} "
                             f"to {reg['name']}"):
-            # The message stays queued and retries next tick, but the 2s poll
+                continue
+            # The batch stays queued and retries next tick, but the 2s poll
             # would otherwise fire a notification + log line EVERY tick while
             # the log stays unwritable. Gate it on the session's notify
             # cooldown (approvals are debounced; delivery must be too).
@@ -812,10 +821,15 @@ class Watcher:
         await info._iterm_session.async_send_text(text)
         await asyncio.sleep(0.3)
         await info._iterm_session.async_send_text("\r")
-        # Mark AFTER the send: if the send raises, the message stays queued
-        # and retries next tick (a rare duplicate beats a lost wake-up).
-        swarmdb.mark_delivered(self._swarm_conn(), m["id"])
-        self._note(f"DELIVER -> {reg['name']}: {m['body'][:60]}")
+        # Mark AFTER the send: if the send raises, the batch stays queued and
+        # retries next tick (a rare duplicate beats a lost wake-up). ONE
+        # timestamp for the whole batch - `relay reply` with no id refuses when
+        # the last delivery held more than one message, and a shared
+        # delivered_at is what makes "the last batch" answerable at all.
+        stamp = time.time()
+        for mid in ids:
+            swarmdb.mark_delivered(self._swarm_conn(), mid, now=stamp)
+        self._note(f"DELIVER -> {reg['name']}: {len(ids)} msg(s)")
 
     async def _fire_timers(self, info: SessionInfo) -> None:
         """Fire at most one due, firable timer for this session per tick. now
