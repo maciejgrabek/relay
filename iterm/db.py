@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS messages(
   body TEXT NOT NULL,
   created_at REAL NOT NULL,
   delivered_at REAL,
-  kind TEXT NOT NULL DEFAULT 'info'
+  kind TEXT NOT NULL DEFAULT 'info',
+  reply_to INTEGER,
+  thread_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS tasks(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,7 +151,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 9
+_CURRENT_VERSION = 10
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -203,6 +205,13 @@ _MIGRATIONS = {
     # list` and reassignable by `relay clean`/`relay task update`. A no-op
     # DELETE (no such row) is the common case and costs nothing.
     8: ("DELETE FROM sessions WHERE name = 'human'",),
+    # v10: session conversations. `reply_to` correlates an answer with the
+    # message it answers, so `relay ask` cannot mistake unrelated traffic
+    # arriving mid-wait for its reply; `thread_id` marks a message as a post in
+    # a discussion. Both NULL on ordinary `relay send` traffic, which is why
+    # every existing message path keeps working untouched.
+    9: ("ALTER TABLE messages ADD COLUMN reply_to INTEGER",
+        "ALTER TABLE messages ADD COLUMN thread_id INTEGER"),
 }
 
 
@@ -378,12 +387,14 @@ def list_sessions(conn, project: Optional[str] = None) -> List[sqlite3.Row]:
 
 def queue_message(conn, from_name: str, to_name: str, body: str,
                   project: str = "", now: Optional[float] = None,
-                  kind: str = "info") -> int:
+                  kind: str = "info", reply_to: Optional[int] = None,
+                  thread_id: Optional[int] = None) -> int:
     cur = conn.execute(
         """INSERT INTO messages(project, from_name, to_name, body, created_at,
-                                kind)
-           VALUES(?,?,?,?,?,?)""",
-        (project, from_name, to_name, body, _now(now), kind or "info"))
+                                kind, reply_to, thread_id)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (project, from_name, to_name, body, _now(now), kind or "info",
+         reply_to, thread_id))
     conn.commit()
     return cur.lastrowid
 
