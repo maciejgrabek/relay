@@ -587,6 +587,57 @@ def cmd_reply(args) -> int:
     return 0
 
 
+_ASK_WAIT_MAX = 540      # under Claude Code's bash timeout ceiling (600s)
+_ASK_POLL_S = 0.5
+
+
+def cmd_ask(args) -> int:
+    """Ask a peer and block until it answers, so a question does not cost the
+    asker a turn boundary.
+
+    NOT a discussion: no rounds, no agreement, no threads row. Routing it
+    through the discussion object would hand it closing semantics it cannot
+    satisfy - nobody posts `agree` to a question - so every successful ask
+    would eventually close as `unresolved` and ping the operator about a
+    conversation that worked perfectly."""
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    if args.to == me["name"]:
+        return _err("you cannot ask yourself")
+    if args.to in db.RESERVED_NAMES:
+        return _err(f"'{args.to}' is relay itself, not a session that can "
+                    f'answer. For a human decision: relay send --human "..."')
+    peer = db.get_session(conn, args.to)
+    if peer is None or peer["closed_at"]:
+        return _err(f"unknown session '{args.to}' - relay who lists who "
+                    f"is here")
+    if not str(args.body).strip():
+        return _err('usage: relay ask <name> "<question>"')
+    wait = max(0, min(int(args.wait), _ASK_WAIT_MAX))
+    started = time.time()
+    aid = db.queue_message(conn, me["name"], args.to, args.body,
+                           me["project"], kind="ask", now=started)
+    deadline = started + wait
+    while True:
+        row = db.find_reply(conn, me["name"], aid, args.to, started)
+        if row is not None:
+            # Consume it here: the asker is blocked and therefore not idle, so
+            # the watcher would not deliver it anyway - marking makes that
+            # guarantee explicit instead of incidental, and stops the answer
+            # arriving again later as a stray injected turn.
+            db.mark_delivered(conn, row["id"])
+            print(f"{args.to}: {row['body']}")
+            return 0
+        if time.time() >= deadline:
+            break
+        time.sleep(_ASK_POLL_S)
+    return _err(f"no answer from {args.to} within {wait}s - your question is "
+                f"queued and will be delivered when they are idle. End your "
+                f"turn; relay wakes you with the reply.")
+
+
 def cmd_inbox(args) -> int:
     conn = db.connect()
     me, rc = _require_me(conn)
@@ -1696,6 +1747,13 @@ def build_parser() -> argparse.ArgumentParser:
     sd.add_argument("--human", action="store_true",
                     help="escalate to the operator (pings; never injected)")
     sd.set_defaults(fn=cmd_send)
+
+    ak = sub.add_parser("ask", help="ask a session and wait for the answer")
+    ak.add_argument("to")
+    ak.add_argument("body")
+    ak.add_argument("--wait", type=int, default=120,
+                    help="seconds to block waiting (default 120, max 540)")
+    ak.set_defaults(fn=cmd_ask)
 
     dc = sub.add_parser("discuss", help="open a discussion with other "
                                         "sessions and settle a question")

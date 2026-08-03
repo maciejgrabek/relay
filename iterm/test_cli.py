@@ -1197,6 +1197,40 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    # --- ask ------------------------------------------------------------------
+    # Only the non-blocking paths: the suite must never sleep.
+    run_cli("join", "ask-a", "--project", "askp", iterm_id="w0t1p0:ASK-A")
+    run_cli("join", "ask-b", "--project", "askp", iterm_id="w0t1p0:ASK-B")
+    code, out, err = run_cli("ask", "nobody", "q", "--wait", "0",
+                             iterm_id="w0t1p0:ASK-A")
+    ok &= check("ask to an unknown session is refused", code != 0)
+    code, out, err = run_cli("ask", "ask-a", "q", "--wait", "0",
+                             iterm_id="w0t1p0:ASK-A")
+    ok &= check("ask yourself is refused", code != 0)
+    code, out, err = run_cli("ask", "ask-b", "which table?", "--wait", "0",
+                             iterm_id="w0t1p0:ASK-A")
+    ok &= check("ask with no answer times out non-zero", code != 0)
+    ok &= check("timeout explains the async fallback", "queued" in err)
+    qrow = _one_message("ask-b")
+    ok &= check("the question is still queued as an ask",
+                qrow is not None and qrow["kind"] == "ask")
+    ok &= check("ask creates no thread row",
+                db.get_thread(db.connect(), 9999) is None)
+    # Success path without sleeping: plant an answer from the peer dated after
+    # any ask this test can issue, so the very next ask finds it on its first
+    # poll. That exercises the forgiving fallback (a peer that replied with a
+    # plain `send`); reply_to correlation itself is covered in test_db.py.
+    c = db.connect()
+    db.queue_message(c, "ask-b", "ask-a", "accounts.email",
+                     now=time.time() + 3600)
+    c.close()
+    code, out, err = run_cli("ask", "ask-b", "which table?", "--wait", "0",
+                             iterm_id="w0t1p0:ASK-A")
+    ok &= check("ask returns the peer's answer in-band",
+                code == 0 and "accounts.email" in out)
+    ok &= check("ask consumes the answer so it is not injected later",
+                _one_message("ask-a")["delivered_at"] is not None)
+
     code, out, err = run_cli("doctor")
     ok &= check("doctor reports open discussions", "DISCUSSIONS" in out)
 
