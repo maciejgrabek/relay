@@ -348,6 +348,180 @@ def cmd_send(args) -> int:
     return 0
 
 
+def _thread_or_err(conn, tid, me, *, must_participate=True):
+    """(thread_row, 0) or (None, exit_code). Every thread verb needs the same
+    checks, and each failure teaches the way out rather than just saying no."""
+    th = db.get_thread(conn, tid)
+    if th is None:
+        return None, _err(f"no discussion #{tid} - relay who lists sessions, "
+                          f'relay discuss <name> "<topic>" opens one')
+    if th["state"] != "open":
+        return None, _err(f"discussion #{tid} is closed ({th['state']}): "
+                          f"{th['outcome'] or '(no outcome recorded)'}")
+    if must_participate and me["name"] not in db.participants_of(th):
+        return None, _err(f"you are not in discussion #{tid} - its "
+                          f"participants are "
+                          f"{', '.join(db.participants_of(th))}")
+    return th, 0
+
+
+def _broadcast(conn, th, sender: str, body: str, kind: str) -> None:
+    """Post to every participant except the sender - one message row each.
+
+    Fan-out rather than a shared mailbox, so delivery, batching, the inbox and
+    the audit trail all keep working exactly as they already do. The
+    transcript de-dupes these back into one post (db.thread_messages)."""
+    for p in db.participants_of(th):
+        if p == sender:
+            continue
+        db.queue_message(conn, sender, p, body, th["project"], kind=kind,
+                         thread_id=th["id"])
+
+
+def cmd_discuss(args) -> int:
+    """Open a discussion: a thread with participants, a shared transcript and
+    a round cap."""
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    words = list(args.peers or ())
+    if len(words) < 2:
+        return _err('usage: relay discuss <name> [<name>...] "<topic>"  '
+                    "(relay who lists names)")
+    topic = words.pop().strip()      # the LAST positional is the topic
+    if not topic:
+        return _err("the topic cannot be empty")
+    if args.rounds < 1 or args.rounds > 10:
+        return _err("--rounds must be between 1 and 10 - every round costs "
+                    "each participant a full Claude turn")
+    seen, names = set(), []
+    for p in words:
+        if p == me["name"] or p in seen:
+            continue
+        seen.add(p)
+        if p in db.RESERVED_NAMES:
+            return _err(f"'{p}' is relay itself, not a session you can talk "
+                        f"to - relay who lists who is here")
+        s = db.get_session(conn, p)
+        if s is None or s["closed_at"]:
+            return _err(f"unknown session '{p}' - relay who lists who is here")
+        names.append(p)
+    if not names:
+        return _err("name at least one OTHER session to discuss this with - "
+                    "relay who lists them")
+    tid = db.create_thread(conn, topic, me["name"], names,
+                           project=me["project"], rounds_cap=args.rounds)
+    th = db.get_thread(conn, tid)
+    # The opening post IS the topic, and it counts as the opener's first round
+    # - stating the question is taking a turn.
+    _broadcast(conn, th, me["name"], topic, "say")
+    print(f"opened discussion #{tid} with {', '.join(names)}")
+    print(f"topic: {topic}")
+    print(f"each participant may post {args.rounds} time(s) "
+          f"(you have used 1). Settle it with: "
+          f'relay agree {tid} "<the position>"')
+    print(f"read it any time: relay thread {tid}")
+    return 0
+
+
+def cmd_say(args) -> int:
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    th, rc = _thread_or_err(conn, args.id, me)
+    if th is None:
+        return rc
+    body = (args.body or "").strip()
+    if not body:
+        return _err("say something - an empty post is not a position")
+    msgs = db.thread_messages(conn, th["id"])
+    used = swarm.round_counts(msgs).get(me["name"], 0)
+    if used >= th["rounds_cap"]:
+        return _err(f"you have used all {th['rounds_cap']} of your posts in "
+                    f"#{th['id']}. Either settle it - relay agree "
+                    f'{th["id"]} "<the position>" - or stop and let it close.')
+    _broadcast(conn, th, me["name"], body, "say")
+    left = th["rounds_cap"] - used - 1
+    print(f"posted to #{th['id']} ({left} post(s) left)")
+    return 0
+
+
+def cmd_agree(args) -> int:
+    conn = db.connect()
+    me, rc = _ensure_me(conn)
+    if me is None:
+        return rc
+    th, rc = _thread_or_err(conn, args.id, me)
+    if th is None:
+        return rc
+    position = (args.position or "").strip()
+    if not position:
+        # Requiring the text is structural anti-sycophancy: "I agree" with no
+        # content is not expressible, so three sessions agreeing while
+        # describing three different things shows up in the outcome instead of
+        # hiding behind a unanimous close.
+        return _err(f"state WHAT you are agreeing to: relay agree "
+                    f'{th["id"]} "<the position>"')
+    _broadcast(conn, th, me["name"], position, "agree")
+    print(f"recorded your position on #{th['id']}: {position}")
+    print("(posting again with relay say retracts it)")
+    return 0
+
+
+def cmd_thread(args) -> int:
+    """The read path, and the surface a participant reads most often - so it
+    carries the most teaching weight. Ends with what THIS session can do right
+    now, computed from its actual state, not generic help."""
+    conn = db.connect()
+    me = whoami(conn)
+    th = db.get_thread(conn, args.id)
+    if th is None:
+        return _err(f"no discussion #{args.id}")
+    parts = db.participants_of(th)
+    msgs = db.thread_messages(conn, th["id"])
+    print(f"DISCUSSION #{th['id']}  [{th['state']}]")
+    print(f"topic: {th['topic']}")
+    print(f"with:  {', '.join(parts)}")
+    print()
+    print("TRANSCRIPT")
+    if not msgs:
+        print("  (nothing posted yet)")
+    for m in msgs:
+        mark = "AGREES:" if swarm.kind_of(m) == "agree" else "       "
+        print(f"  {m['from_name']:<14} {mark} {m['body']}")
+    print()
+    pos = swarm.positions(msgs)
+    counts = swarm.round_counts(msgs)
+    print("POSITIONS")
+    for p in parts:
+        if p in pos:
+            print(f"  {p:<14} settled: {pos[p]}")
+        else:
+            left = th["rounds_cap"] - counts.get(p, 0)
+            print(f"  {p:<14} not settled ({left} post(s) left)")
+    if th["state"] != "open":
+        print()
+        print(f"OUTCOME ({th['state']}): {th['outcome']}")
+        return 0
+    print()
+    print("STATE YOUR POSITION AND SAY WHERE YOU DISAGREE. Do not aim for")
+    print("consensus, aim to be right - an honest deadlock is a useful")
+    print("outcome here, and agreeing to be agreeable wastes everyone's turn.")
+    if me is not None and me["name"] in parts:
+        left = th["rounds_cap"] - counts.get(me["name"], 0)
+        print()
+        print("YOU CAN:")
+        if left > 0:
+            print(f'  relay say {th["id"]} "<your view>"'
+                  f'        ({left} post(s) left)')
+        else:
+            print("  (no posts left - you can only settle or stop)")
+        print(f'  relay agree {th["id"]} "<the position>"   settle it')
+    return 0
+
+
 def cmd_reply(args) -> int:
     """Answer whoever wrote to you, without having to know their name.
 
@@ -1503,6 +1677,28 @@ def build_parser() -> argparse.ArgumentParser:
     sd.add_argument("--human", action="store_true",
                     help="escalate to the operator (pings; never injected)")
     sd.set_defaults(fn=cmd_send)
+
+    dc = sub.add_parser("discuss", help="open a discussion with other "
+                                        "sessions and settle a question")
+    dc.add_argument("peers", nargs="*",
+                    help="peer names, then the topic as the LAST argument")
+    dc.add_argument("--rounds", type=int, default=3,
+                    help="posts allowed per participant (default 3)")
+    dc.set_defaults(fn=cmd_discuss)
+
+    sy = sub.add_parser("say", help="post to a discussion")
+    sy.add_argument("id", type=int)
+    sy.add_argument("body")
+    sy.set_defaults(fn=cmd_say)
+
+    ag = sub.add_parser("agree", help="record the position you are settled on")
+    ag.add_argument("id", type=int)
+    ag.add_argument("position")
+    ag.set_defaults(fn=cmd_agree)
+
+    tr = sub.add_parser("thread", help="read a discussion")
+    tr.add_argument("id", type=int)
+    tr.set_defaults(fn=cmd_thread)
 
     rp_ = sub.add_parser("reply", help="answer the last message you received")
     rp_.add_argument("target", nargs="?", default=None,

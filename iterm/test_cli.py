@@ -1197,6 +1197,77 @@ def run():
     ok &= check(f"every cli.py verb is routed by bin/relay (missing: {missing})",
                 bool(routed) and not missing)
 
+    # --- discussions ----------------------------------------------------------
+    run_cli("join", "d-a", "--project", "dp", iterm_id="w0t1p0:D-A")
+    run_cli("join", "d-b", "--project", "dp", iterm_id="w0t1p0:D-B")
+    code, out, err = run_cli("discuss", "d-b", "one DB or many?",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("discuss exits 0", code == 0)
+    c = db.connect()
+    tid = c.execute("SELECT id FROM threads ORDER BY id DESC "
+                    "LIMIT 1").fetchone()[0]
+    c.close()
+    ok &= check("discuss prints the thread id", str(tid) in out)
+    ok &= check("discuss queues the topic to the peer",
+                _one_message("d-b")["thread_id"] == tid)
+    ok &= check("discuss does not queue to itself",
+                _one_message("d-a") is None
+                or _one_message("d-a")["thread_id"] != tid)
+
+    code, out, err = run_cli("discuss", "nobody-here", "topic",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("unknown peer is refused", code != 0)
+    ok &= check("unknown peer names relay who", "relay who" in err)
+    code, out, err = run_cli("discuss", "solo topic only",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("discuss with no peer is refused", code != 0)
+
+    code, out, err = run_cli("say", str(tid), "one per service",
+                             iterm_id="w0t1p0:D-B")
+    ok &= check("say exits 0", code == 0)
+    code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-B")
+    ok &= check("thread shows the transcript", "one per service" in out)
+    ok &= check("thread shows the topic", "one DB or many?" in out)
+    ok &= check("thread shows what I can do next", "relay agree" in out)
+    ok &= check("thread warns against consensus-seeking",
+                "disagree" in out.lower())
+
+    code, out, err = run_cli("agree", str(tid), "", iterm_id="w0t1p0:D-B")
+    ok &= check("an empty agreement is refused", code != 0)
+    code, out, err = run_cli("agree", str(tid), "one per service",
+                             iterm_id="w0t1p0:D-B")
+    ok &= check("agree exits 0", code == 0)
+
+    # A non-participant cannot post.
+    run_cli("join", "d-out", "--project", "dp", iterm_id="w0t1p0:D-OUT")
+    code, out, err = run_cli("say", str(tid), "butting in",
+                             iterm_id="w0t1p0:D-OUT")
+    ok &= check("a non-participant cannot post", code != 0)
+
+    # Cap enforcement: the opener's topic post counts as its first round.
+    code, out, err = run_cli("say", str(tid), "second", iterm_id="w0t1p0:D-A")
+    ok &= check("second post allowed", code == 0)
+    code, out, err = run_cli("say", str(tid), "third", iterm_id="w0t1p0:D-A")
+    ok &= check("third post allowed", code == 0)
+    code, out, err = run_cli("say", str(tid), "one too many",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("say past the cap is refused", code != 0)
+    ok &= check("cap refusal offers agree", "relay agree" in err)
+
+    code, out, err = run_cli("say", "99999", "ghost", iterm_id="w0t1p0:D-A")
+    ok &= check("say to an unknown thread is refused", code != 0)
+
+    # A closed thread refuses posts and reports its verdict.
+    c = db.connect()
+    db.close_thread(c, tid, "agreed", "one per service")
+    c.close()
+    code, out, err = run_cli("say", str(tid), "too late",
+                             iterm_id="w0t1p0:D-A")
+    ok &= check("say to a closed thread is refused", code != 0)
+    ok &= check("the refusal reports the outcome", "one per service" in err)
+    code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-A")
+    ok &= check("a closed thread prints its outcome", "OUTCOME" in out)
+
     # --- reply ----------------------------------------------------------------
     run_cli("join", "rep-a", "--project", "repp", iterm_id="w0t1p0:REP-A")
     run_cli("join", "rep-b", "--project", "repp", iterm_id="w0t1p0:REP-B")
