@@ -128,6 +128,23 @@ def batch_delivery_text(msgs) -> str:
     msgs = list(msgs or ())
     if not msgs:
         return ""
+    # A batch that is ENTIRELY one discussion delivers a POINTER, not the
+    # payload. The transcript arrives as bash output from `relay thread`, where
+    # it can be multi-line and unabridged; injected text is one flattened line,
+    # and a three-way transcript flattened onto one line is unreadable. Mixed
+    # traffic falls through to the generic inbox pointer below, or the plain
+    # messages would be silently invisible.
+    tids = {_get(m, "thread_id", None) for m in msgs}
+    if len(tids) == 1 and None not in tids:
+        tid = tids.pop()
+        senders = []
+        for m in msgs:
+            s = _get(m, "from_name", "")
+            if s not in senders:
+                senders.append(s)
+        return _flatten(f"[relay discussion #{tid}] {len(msgs)} new post(s) "
+                        f"from {', '.join(senders)} - read them first: "
+                        f"relay thread {tid}")
     if len(msgs) == 1:
         m = msgs[0]
         base = delivery_text(_get(m, "from_name", ""), _get(m, "body", ""),
