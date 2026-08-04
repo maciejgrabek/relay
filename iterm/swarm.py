@@ -47,6 +47,58 @@ def derive_name(cwd: str, taken) -> str:
     return f"{base}-{n}"
 
 
+# --- working copies -------------------------------------------------------------
+#
+# Two sessions editing one checkout clobber each other, and relay knows every
+# session's workdir - so this is a fact it can check rather than a rule it has
+# to teach and hope was read. Kept here (pure) so the CLI's refusal and the TUI
+# and doctor's reporting all read the same definition of "the same directory".
+
+def real_workdir(p) -> str:
+    """A workdir normalized for comparison: symlinks resolved, trailing slash
+    dropped. /tmp vs /private/tmp is the same checkout on macOS, and reading it
+    as two would silently disarm every check built on this."""
+    s = str(p or "").rstrip("/")
+    if not s:
+        return ""
+    try:
+        return os.path.realpath(s) or s
+    except Exception:
+        return s
+
+
+def same_checkout(a, b) -> bool:
+    """Whether two recorded workdirs are one working copy.
+
+    An unknown (empty) workdir never matches: relay REFUSES work on the back of
+    this, and manufacturing a conflict out of missing data would block a spawn
+    that is fine."""
+    ra, rb = real_workdir(a), real_workdir(b)
+    return bool(ra) and ra == rb
+
+
+def checkout_occupants(sessions, workdir, *, exclude=(), roles=("worker",)) -> List[str]:
+    """Live sessions already working in `workdir`.
+
+    Filtered to workers by default, because the common and correct setup is a
+    coordinator sitting in the repo it delegates from: it writes specs and
+    messages, not code. Two WORKERS in one checkout is the collision worth
+    refusing."""
+    ex = set(exclude or ())
+    out = []
+    for s in sessions:
+        if _get(s, "closed_at", 0):
+            continue
+        name = _get(s, "name", "")
+        if name in ex:
+            continue
+        if roles and _get(s, "role", "") not in roles:
+            continue
+        if same_checkout(_get(s, "workdir", ""), workdir):
+            out.append(name)
+    return out
+
+
 def parse_blockers(s: Optional[str]) -> List[int]:
     if not s:
         return []

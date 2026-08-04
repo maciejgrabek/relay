@@ -77,8 +77,13 @@ inside your session. Errors print to stderr with a non-zero exit.
         are woken with a pointer; `relay thread <id>` is the read path and
         shows the transcript, who has settled, and what you can do next.
         N (default 3) is a SUGGESTED post budget, not a limit - relay tells
-        you when you pass it and never refuses a post. `agree` does not spend
-        budget; posting after agreeing retracts your agreement.
+        you when you pass it and never refuses a post for being long. `agree`
+        does not spend budget; posting after agreeing retracts your agreement.
+        THE ONE REFUSAL: `say`, `agree` and `close` are blocked while posts
+        are waiting for you. The refusal PRINTS them and marks them read, so
+        re-running your command goes through - it costs a bash call, not a
+        turn. Reading the transcript with `relay thread <id>` clears them the
+        same way.
         THE DECISION IS YOURS. Relay marks a discussion settled only when
         every participant has agreed, and never judges one failed or routes it
         to the human. Any other ending is yours to declare with `relay close`,
@@ -155,12 +160,20 @@ inside your session. Errors print to stderr with a non-zero exit.
 
     relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
                 [--role worker|coordinator] [--arm off|safe|wild|insane]
-                [--worktree]
+                [--worktree] [--share]
         Open a new iTerm2 tab running claude, pre-registered under <name>.
         --worktree (with --dir <repo>): create branch relay/<name> and a
         sibling git worktree <repo>-<name>, and spawn the worker THERE - use it
         whenever 2+ workers touch the same repo, so they cannot clobber each
         other's files.
+        Two REFUSALS you will meet, both conditions relay can check rather
+        than advice it can only give:
+          - no arm level (no --arm, no [swarm] spawn_arm) -> refused. An
+            unarmed worker stops at its first permission prompt with nobody
+            at that tab to clear it. Pass --arm wild, or --arm off if you
+            will sit there yourself.
+          - another live worker already in that --dir -> refused. Add
+            --worktree, or --share if the new session will only read there.
 
     relay doctor
         Print swarm health from outside the TUI: registered sessions and their

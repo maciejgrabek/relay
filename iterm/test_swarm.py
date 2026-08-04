@@ -796,6 +796,42 @@ def run():
     ok &= check("derive_name tolerates an empty cwd",
                 swarm.derive_name("", set()) == "session")
 
+    # --- working copies ------------------------------------------------------
+    import tempfile
+    d = tempfile.mkdtemp()
+    ok &= check("same_checkout ignores a trailing slash",
+                swarm.same_checkout(d, d + "/"))
+    link = os.path.join(tempfile.mkdtemp(), "alias")
+    os.symlink(d, link)
+    ok &= check("same_checkout resolves symlinks (one dir, two paths)",
+                swarm.same_checkout(d, link))
+    ok &= check("different directories are different checkouts",
+                not swarm.same_checkout(d, tempfile.mkdtemp()))
+    # Unknown must never read as a match: a spawn is REFUSED on the back of
+    # this, and missing data must not manufacture a collision.
+    ok &= check("an unknown workdir matches nothing",
+                not swarm.same_checkout("", d)
+                and not swarm.same_checkout("", ""))
+
+    def _sess_row(name, workdir, role="worker", closed_at=0):
+        return {"name": name, "workdir": workdir, "role": role,
+                "closed_at": closed_at}
+
+    rows = [_sess_row("w1", d), _sess_row("w2", link),
+            _sess_row("dead", d, closed_at=123.0),
+            _sess_row("coord", d, role="coordinator"),
+            _sess_row("elsewhere", tempfile.mkdtemp())]
+    held = swarm.checkout_occupants(rows, d)
+    ok &= check("occupants find every live worker in that checkout",
+                held == ["w1", "w2"])
+    ok &= check("a closed session holds nothing", "dead" not in held)
+    ok &= check("a coordinator in the repo is not a collision",
+                "coord" not in held)
+    ok &= check("occupants can exclude the session being (re)spawned",
+                swarm.checkout_occupants(rows, d, exclude=("w1",)) == ["w2"])
+    ok &= check("occupants of an empty directory list is empty",
+                swarm.checkout_occupants(rows, tempfile.mkdtemp()) == [])
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

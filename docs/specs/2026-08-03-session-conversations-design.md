@@ -1,7 +1,7 @@
 # Session Conversations - Design Spec
 
 **Date:** 2026-08-03
-**Status:** Implemented (2026-08-03), amended same day
+**Status:** Implemented (2026-08-03), amended twice the same day
 
 > **Amendment (2026-08-03): relay does not decide.** As first designed and
 > built, relay enforced the round cap by refusing a post, and closed a
@@ -17,6 +17,25 @@
 > gone. Sections 4, 5 and 7 below are amended in place; section 12's first
 > risk is retired, because policing the quality of agents' decisions is not
 > relay's job.
+
+> **Amendment 2 (2026-08-03): enforce the physical, keep teaching the social.**
+> Amendment 1 pulled relay out of the agents' decisions, which left open what
+> relay may still refuse. The line: relay enforces **conditions it can read off
+> its own rows**, and teaches everything else in prose. `say` / `agree` /
+> `close` are now refused while the caller has undelivered posts in that
+> thread - not a judgement about the conversation, just the fact that those
+> rows have not reached it yet - and the refusal prints those posts and marks
+> them read, so the retry costs a bash call instead of a turn. `relay thread`
+> consumes the caller's queued posts for the same reason. Section 5's catch-up
+> paragraph and section 12's ignore-the-pointer risk are amended below. Nothing
+> about HOW to argue moved from prose into structure: section 7 stands
+> unchanged and the round budget is still advisory.
+>
+> The same line applied to spawn - outside this spec's scope, in the same pass:
+> `relay spawn` refuses an unarmed worker (unless `--arm off` is explicit) and
+> refuses a workdir a live worker already occupies (unless `--worktree` or the
+> new `--share`). Both were prose in `relay-coordinator`; both are facts relay
+> already stores.
 
 ## Summary
 
@@ -249,12 +268,27 @@ paste limits, no control-character hazard. The cost is one extra tool call.
 Plain point-to-point `relay send` keeps its inline body. A one-line message
 should not become two round trips.
 
-### Catch-up
+### Catch-up (amended: enforced, not only encouraged)
 
 The pointer names how many posts that session has not been delivered, and
-`relay thread` renders the whole transcript in order. A session therefore
-always reads what its peers said before it posts again, which is what stops
-three participants from talking past each other.
+`relay thread` renders the whole transcript in order.
+
+Wording alone could not guarantee this, so the gate is mechanical: `say`,
+`agree` and `close` are **refused while the caller has undelivered rows in
+that thread**. Undelivered is exactly the right predicate - it is relay's own
+record that those posts have not reached that session - so this is enforcing a
+fact, not adjudicating a conversation.
+
+The refusal is designed to cost nothing: it **prints the unread posts and
+marks them delivered**, so re-running the command succeeds immediately. A
+session cannot post over posts it has not seen, but what it does having seen
+them - including re-posting the same text verbatim - stays its call. Blocking
+until the watcher delivered would have cost a full turn instead; the CLI
+consuming its own messages is the pattern `relay ask` already uses.
+
+`relay thread` consumes the caller's queued rows for the same thread for the
+same reason: reading the transcript IS reading them, and leaving them queued
+would wake the session later with a pointer to posts already in its context.
 
 ### Batching
 
@@ -418,10 +452,12 @@ relay not overriding agents. Mitigations are visibility (the DISCUSSIONS pane,
 the brakes; relay does not apply them. Revisit only if a discussion actually
 runs away in practice.
 
-**A session can ignore the pointer** and post without running `relay thread`,
-which reintroduces exactly the talking-past-each-other the design exists to
-prevent. Mitigated only by envelope wording. If it proves common, the fallback
-is refusing a `say` from a participant with undelivered posts.
+~~**A session can ignore the pointer**~~ - retired by amendment 2. The
+fallback named here (refusing a write from a participant with undelivered
+posts) is now the shipped behaviour, extended to `agree` and `close` and made
+free to recover from. What remains is narrower: a session can still post
+without having *understood* what it read, which is not something relay can or
+should check.
 
 **Auto-registration loosens the injection boundary.** Accepted deliberately,
 bounded as described in section 2. The operator-visible consequence is that

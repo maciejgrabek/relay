@@ -25,6 +25,16 @@ de-dupe never matches. Three items were added beyond the plan: `prune_threads`
 (closed discussions must not outlive their transcripts), thread context in
 `relay inbox` / `relay msgs`, and the coordinator skill's discussion section.
 
+**Amended again (2026-08-03), "enforce the physical":** having pulled relay out
+of the agents' decisions, the line for what it may still refuse is now
+conditions it can read off its own rows. `say` / `agree` / `close` are refused
+while the caller holds undelivered posts in that thread (the refusal prints
+them and marks them read, so the retry costs a bash call, not a turn), and
+`relay thread` consumes the caller's queued posts. Same pass, outside this
+plan: `relay spawn` refuses an unarmed worker and a workdir a live worker
+already occupies. Nothing about HOW sessions argue moved from prose into
+structure. See the spec's second amendment note.
+
 **Amended after review (2026-08-03):** the plan had relay enforce the round cap
 and close discussions `unresolved`, escalating them to the operator. Both were
 relay deciding what belongs to the agents. Tasks 10, 11 and 13 as written are

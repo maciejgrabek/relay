@@ -22,16 +22,23 @@ relay-cli-reference.md next to this skill (../relay-cli-reference.md).
    (e.g. `specs/<area>.md`) with enough context for a fresh session.
 2. Create workers that don't exist yet, ARMED so they can act unattended:
    `relay spawn --name <worker> --project <project> --dir <repo-path> --arm wild "<short mission>"`
-   An unarmed worker stalls at its first permission prompt with nobody to
-   clear it. Use `--arm wild` (or `insane` for throwaway work); or set
-   `[swarm] spawn_arm` in ~/.relay/config so every spawn arms by default.
    When 2+ workers will touch the SAME repo, add --worktree so each gets an
    isolated git worktree (branch relay/<name>, sibling dir <repo>-<name>):
    `relay spawn --name <worker> --project <project> --dir <repo-path> --worktree --arm wild "<short mission>"`
-   Prefer this over pointing two workers at one working copy - parallel
-   sessions editing the same files clobber each other. If you need a custom
-   layout, create the worktree yourself (`git worktree add`) and pass --dir;
-   relay never forces the layout.
+   Relay REFUSES a spawn that gets either of these wrong, so you will not
+   find out at review time:
+   - no arm level -> refused. An unarmed worker stops at its first permission
+     prompt with nobody at that tab to clear it, and looks exactly like a
+     worker that is thinking. `--arm wild` (or `insane` for throwaway work),
+     or set `[swarm] spawn_arm` in ~/.relay/config. `--arm off` is allowed
+     when you say it explicitly: that means you are sitting at that tab.
+   - a live worker already in that --dir -> refused. Parallel sessions editing
+     one working copy overwrite each other and neither notices. Add
+     --worktree, or `--share` if the new session will only READ there.
+   Your own directory is not a collision: a coordinator sitting in the repo it
+   delegates from is the normal setup. If you need a custom layout, create the
+   worktree yourself (`git worktree add`) and pass --dir; relay never forces
+   the layout.
 3. Create one epic per worker:
    `relay task add "<epic title>" --owner <worker> --spec <abs-spec-path> --project <project>`
    The owner is woken automatically with the task id and spec path.

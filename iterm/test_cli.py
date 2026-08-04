@@ -61,6 +61,16 @@ def _session_count():
     return n
 
 
+def _deliver_all(name):
+    """Stand in for the watcher's delivery leg: mark everything queued for
+    `name` delivered. The catch-up gate on say/agree/close reads exactly this,
+    so a test that posts without it is testing a session that was never woken."""
+    c = db.connect()
+    for m in db.undelivered(c, name):
+        db.mark_delivered(c, m["id"])
+    c.close()
+
+
 def _sess(name):
     c = db.connect()
     row = c.execute("SELECT * FROM sessions WHERE name = ?",
@@ -750,12 +760,71 @@ def run():
     # guard (not a cli.py-level one) - without it, `relay spawn --name human`
     # would create a live session literally named 'human', and the watcher
     # would inject the operator's escalations straight into it.
+    # --dir is an EMPTY scratch dir: spawning into the test process's own cwd
+    # now trips the shared-working-copy refusal (auto-registered sessions above
+    # recorded that cwd as theirs), which would mask the guard under test.
     code, out, err = run_cli("spawn", "watch the PRs", "--name", "human",
-                             "--project", "webshop", iterm_id="w0t0p0:CO-ID")
+                             "--project", "webshop", "--arm", "wild",
+                             "--dir", tempfile.mkdtemp(),
+                             iterm_id="w0t0p0:CO-ID")
     ok &= check("spawn --name human fails instead of creating a session",
                 code == 1 and db.get_session(conn, "human") is None)
     ok &= check("spawn --name human error explains the reservation",
                 "reserved" in err)
+
+    # --- spawn refuses what it can check ---------------------------------------
+    # Both refusals are physical conditions relay already stores, not opinions
+    # about the work: an unarmed worker stalls at its first permission prompt,
+    # and two workers in one working copy overwrite each other.
+    scratch = tempfile.mkdtemp()
+    code, out, err = run_cli("spawn", "go", "--name", "unarmed", "--project",
+                             "webshop", "--dir", scratch,
+                             iterm_id="w0t0p0:CO-ID")
+    ok &= check("spawn without an arm level is refused", code == 1
+                and db.get_session(conn, "unarmed") is None)
+    ok &= check("the refusal names the fix", "--arm wild" in err
+                and "spawn_arm" in err)
+    code, out, err = run_cli("spawn", "go", "--name", "unarmed", "--project",
+                             "webshop", "--dir", scratch, "--arm", "off",
+                             iterm_id="w0t0p0:CO-ID")
+    ok &= check("an EXPLICIT --arm off is a decision, and is allowed",
+                code == 0 and spawn_calls[-1]["arm"] == "off")
+
+    shared = tempfile.mkdtemp()
+    code, out, err = run_cli("spawn", "go", "--name", "occupant", "--project",
+                             "webshop", "--dir", shared, "--arm", "wild",
+                             iterm_id="w0t0p0:CO-ID")
+    ok &= check("first worker into an empty checkout is fine", code == 0)
+    code, out, err = run_cli("spawn", "go", "--name", "clobberer", "--project",
+                             "webshop", "--dir", shared, "--arm", "wild",
+                             iterm_id="w0t0p0:CO-ID")
+    ok &= check("a second worker into that checkout is refused", code == 1
+                and db.get_session(conn, "clobberer") is None)
+    ok &= check("the refusal names the occupant and both ways out",
+                "occupant" in err and "--worktree" in err and "--share" in err)
+    code, out, err = run_cli("spawn", "go", "--name", "clobberer", "--project",
+                             "webshop", "--dir", shared, "--arm", "wild",
+                             "--share", iterm_id="w0t0p0:CO-ID")
+    ok &= check("--share is the explicit override", code == 0)
+    # A closed session does not hold its checkout, and neither does a
+    # coordinator: sitting in the repo you delegate from is the normal setup.
+    solo = tempfile.mkdtemp()
+    run_cli("spawn", "go", "--name", "gone", "--project", "webshop",
+            "--dir", solo, "--arm", "wild", iterm_id="w0t0p0:CO-ID")
+    db.mark_closed(conn, "gone", time.time())
+    code, out, err = run_cli("spawn", "go", "--name", "successor",
+                             "--project", "webshop", "--dir", solo,
+                             "--arm", "wild", iterm_id="w0t0p0:CO-ID")
+    ok &= check("a closed session no longer holds its checkout", code == 0)
+    coord_dir = tempfile.mkdtemp()
+    c = db.connect()
+    db.register(c, "dir-coord", "DIR-CO", "coordinator", "webshop")
+    db.set_session_context(c, "dir-coord", coord_dir, "")
+    c.close()
+    code, out, err = run_cli("spawn", "go", "--name", "under-coord",
+                             "--project", "webshop", "--dir", coord_dir,
+                             "--arm", "wild", iterm_id="w0t0p0:CO-ID")
+    ok &= check("a coordinator's own directory is not a collision", code == 0)
 
     # --- spawn --worktree -----------------------------------------------------
     import subprocess
@@ -770,19 +839,21 @@ def run():
     ok &= check("--worktree requires --dir", code == 1 and "--dir" in err)
 
     code, _, err = run_cli("spawn", "go", "--name", "bad/name", "--worktree",
-                           "--dir", repo, iterm_id="w0t0p0:CO-ID")
+                           "--dir", repo, "--arm", "wild",
+                           iterm_id="w0t0p0:CO-ID")
     ok &= check("--worktree refuses path-y names", code == 1
                 and "simple --name" in err)
 
     nogit = tempfile.mkdtemp()
     code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
-                           "--dir", nogit, iterm_id="w0t0p0:CO-ID")
+                           "--dir", nogit, "--arm", "wild",
+                           iterm_id="w0t0p0:CO-ID")
     ok &= check("--worktree needs a git repo", code == 1
                 and "not a git repository" in err)
 
     code, out, _ = run_cli("spawn", "go", "--name", "wt1", "--project",
                            "webshop", "--worktree", "--dir", repo,
-                           iterm_id="w0t0p0:CO-ID")
+                           "--arm", "wild", iterm_id="w0t0p0:CO-ID")
     wt = os.path.join(os.path.dirname(repo), "webshop-wt1")
     ok &= check("worktree created + spawned there", code == 0
                 and os.path.isdir(wt) and spawn_calls[-1]["workdir"] == wt)
@@ -793,8 +864,22 @@ def run():
                 db.get_session(conn, "wt1")["worktree_repo"] == repo)
 
     code, _, err = run_cli("spawn", "go", "--name", "wt1", "--worktree",
-                           "--dir", repo, iterm_id="w0t0p0:CO-ID")
+                           "--dir", repo, "--arm", "wild",
+                           iterm_id="w0t0p0:CO-ID")
     ok &= check("existing worktree path refused", code == 1)
+
+    # --worktree IS the answer to an occupied checkout, so it must never be
+    # refused by the occupancy check: the worker lands in a directory of its
+    # own, not in the repo it was cut from.
+    c = db.connect()
+    db.register(c, "repo-sitter", "SITTER-ID", "worker", "webshop")
+    db.set_session_context(c, "repo-sitter", repo, "")
+    c.close()
+    code, out, err = run_cli("spawn", "go", "--name", "wt3", "--project",
+                             "webshop", "--worktree", "--dir", repo,
+                             "--arm", "wild", iterm_id="w0t0p0:CO-ID")
+    ok &= check("--worktree is exempt from the occupancy refusal", code == 0
+                and spawn_calls[-1]["workdir"].endswith("webshop-wt3"))
 
     # spawn failure AFTER worktree creation cleans the worktree back up
     real_fake = spawnmod.spawn_worker
@@ -805,7 +890,7 @@ def run():
     spawnmod.spawn_worker = _boom
     code, out, err = run_cli("spawn", "go", "--name", "wtfail", "--project",
                              "webshop", "--worktree", "--dir", repo,
-                             iterm_id="w0t0p0:CO-ID")
+                             "--arm", "wild", iterm_id="w0t0p0:CO-ID")
     wtf = os.path.join(os.path.dirname(repo), "webshop-wtfail")
     ok &= check("failed spawn -> error surfaced", code == 1
                 and "spawn failed" in err)
@@ -816,7 +901,8 @@ def run():
     # --- wipe removes clean worktrees, keeps dirty ones -----------------------
     # second worktree worker, made dirty
     run_cli("spawn", "go", "--name", "wt2", "--project", "webshop",
-            "--worktree", "--dir", repo, iterm_id="w0t0p0:CO-ID")
+            "--worktree", "--dir", repo, "--arm", "wild",
+            iterm_id="w0t0p0:CO-ID")
     wt2 = os.path.join(os.path.dirname(repo), "webshop-wt2")
     with open(os.path.join(wt2, "uncommitted.txt"), "w") as f:
         f.write("wip")
@@ -1259,6 +1345,22 @@ def run():
                              iterm_id="w0t1p0:D-A")
     ok &= check("discuss with no peer is refused", code != 0)
 
+    # The catch-up gate. Nothing has delivered the opening post to d-b yet
+    # (no watcher in-process), so d-b is about to answer something it has not
+    # read - the one thing relay refuses in a discussion, because it is a fact
+    # in the rows rather than a judgement about the conversation.
+    code, out, err = run_cli("say", str(tid), "one per service",
+                             iterm_id="w0t1p0:D-B")
+    ok &= check("say with unread posts is refused", code != 0)
+    ok &= check("the refusal hands over the unread post",
+                "one DB or many?" in out)
+    ok &= check("the refusal points at the transcript",
+                f"relay thread {tid}" in err)
+    ok &= check("the refusal consumes what it printed, so a retry works",
+                not db.undelivered(db.connect(), "d-b"))
+    ok &= check("the refusal posted nothing",
+                not any(m["from_name"] == "d-b"
+                        for m in db.thread_messages(db.connect(), tid)))
     code, out, err = run_cli("say", str(tid), "one per service",
                              iterm_id="w0t1p0:D-B")
     ok &= check("say exits 0", code == 0)
@@ -1273,6 +1375,7 @@ def run():
     tid3 = c.execute("SELECT id FROM threads ORDER BY id DESC "
                      "LIMIT 1").fetchone()[0]
     c.close()
+    _deliver_all("d-b")
     run_cli("say", str(tid3), "a fanned-out post", iterm_id="w0t1p0:D-B")
     code, out, err = run_cli("thread", str(tid3), iterm_id="w0t1p0:D-A")
     ok &= check("a fan-out post appears once in the transcript",
@@ -1301,6 +1404,7 @@ def run():
     # The budget is advisory. Relay reports the cost of another post but must
     # never refuse one - silencing an agent mid-argument would be relay
     # deciding the conversation is over, which is not relay's call.
+    _deliver_all("d-a")
     code, out, err = run_cli("say", str(tid), "second", iterm_id="w0t1p0:D-A")
     ok &= check("second post allowed", code == 0)
     code, out, err = run_cli("say", str(tid), "third", iterm_id="w0t1p0:D-A")
@@ -1337,6 +1441,47 @@ def run():
     ok &= check("the refusal reports the outcome", "per service" in err)
     code, out, err = run_cli("thread", str(tid), iterm_id="w0t1p0:D-A")
     ok &= check("a closed thread prints its outcome", "OUTCOME" in out)
+
+    # Reading the transcript counts as reading its posts: `relay thread` is
+    # what the pointer tells you to run, so a session that ran it must not then
+    # be refused (or woken again) over posts already in its context.
+    run_cli("join", "rd-a", "--project", "rdp", iterm_id="w0t1p0:RD-A")
+    run_cli("join", "rd-b", "--project", "rdp", iterm_id="w0t1p0:RD-B")
+    run_cli("discuss", "rd-b", "read-first topic", iterm_id="w0t1p0:RD-A")
+    c = db.connect()
+    rtid = c.execute("SELECT id FROM threads ORDER BY id DESC "
+                     "LIMIT 1").fetchone()[0]
+    ok &= check("the peer starts with the post queued",
+                len(db.undelivered(c, "rd-b")) == 1)
+    run_cli("thread", str(rtid), iterm_id="w0t1p0:RD-B")
+    ok &= check("relay thread consumes that session's queued posts",
+                not db.undelivered(db.connect(), "rd-b"))
+    code, out, err = run_cli("say", str(rtid), "having read it, here is my view",
+                             iterm_id="w0t1p0:RD-B")
+    ok &= check("a post right after reading the thread goes through", code == 0)
+    # The reader's own queue only: reading must not consume the OTHER
+    # participant's copy of the same fan-out.
+    ok &= check("thread leaves the other participant's copy queued",
+                len(db.undelivered(db.connect(), "rd-a")) == 1)
+    # agree and close are gated too - settling or ending a conversation you
+    # have not finished reading is the same mistake with a wider blast radius.
+    code, out, err = run_cli("agree", str(rtid), "fine by me",
+                             iterm_id="w0t1p0:RD-A")
+    ok &= check("agree with unread posts is refused", code != 0
+                and "having read it" in out)
+    code, out, err = run_cli("agree", str(rtid), "fine by me",
+                             iterm_id="w0t1p0:RD-A")
+    ok &= check("agree goes through once they are read", code == 0)
+    _deliver_all("rd-b")
+    run_cli("say", str(rtid), "actually, one more thing",
+            iterm_id="w0t1p0:RD-B")
+    code, out, err = run_cli("close", str(rtid), "done here",
+                             iterm_id="w0t1p0:RD-A")
+    ok &= check("close with unread posts is refused", code != 0
+                and "one more thing" in out)
+    ok &= check("the thread is still open after a refused close",
+                db.get_thread(db.connect(), rtid)["state"] == "open")
+    c.close()
 
     # A thread post read through `relay inbox` (the batch pointer sends
     # sessions here when traffic is mixed) must say WHICH discussion it
