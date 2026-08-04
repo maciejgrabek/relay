@@ -217,9 +217,12 @@ def cmd_join(args) -> int:
               if s["name"] != name and not s["closed_at"]]
     print("SWARM ROSTER")
     if others:
+        here = os.getcwd()
         for s in others:
+            shared = ("  (your working copy - do not both edit it)"
+                      if swarm.same_checkout(s["workdir"], here) else "")
             print(f"  {s['name']:<16} {s['role']:<12} "
-                  f"{s['status_text'] or '-'}")
+                  f"{s['status_text'] or '-'}{shared}")
     else:
         print("  (nobody else yet - you are first)")
     print()
@@ -365,6 +368,43 @@ def _thread_or_err(conn, tid, me, *, must_participate=True):
     return th, 0
 
 
+def _thread_msgs_for(conn, tid: int, name: str):
+    """This session's undelivered rows for one thread - the posts it provably
+    has not seen, since a delivered row is one the watcher already typed into
+    its prompt (or it read via `relay inbox` / `relay thread`)."""
+    return [m for m in db.undelivered(conn, name)
+            if (m["thread_id"] if "thread_id" in m.keys() else None) == tid]
+
+
+def _catch_up_or_err(conn, th, me, verb: str) -> int:
+    """Refuse a write to a discussion whose newest posts this session has not
+    read - and hand it those posts on the way out.
+
+    The design's one enforceable half. Everything about HOW to argue is prose
+    the session may or may not follow, and rightly so; but "you are about to
+    reply to something you have not read" is not a judgement about the
+    conversation, it is a fact relay holds - the rows are still undelivered.
+    This is what stops three participants answering three different questions,
+    which the pointer envelope could only ask them not to do.
+
+    The refusal prints the unread posts and marks them delivered, so the retry
+    costs one bash call rather than a whole turn waiting to be woken - and the
+    session cannot post again without those posts having entered its context.
+    What it does with them (including re-posting the same thing verbatim) stays
+    its call."""
+    unread = _thread_msgs_for(conn, th["id"], me["name"])
+    if not unread:
+        return 0
+    print(f"{len(unread)} post(s) in discussion #{th['id']} you have not read:")
+    for m in unread:
+        mark = "AGREES:" if swarm.kind_of(m) == "agree" else "       "
+        print(f"  {m['from_name']:<14} {mark} {m['body']}")
+        db.mark_delivered(conn, m["id"])
+    return _err(f"read before you {verb} - the posts above arrived after you "
+                f"last looked. Full transcript: relay thread {th['id']}. "
+                f"Re-run your command if it still stands.")
+
+
 def _broadcast(conn, th, sender: str, body: str, kind: str) -> None:
     """Post to every participant except the sender - one message row each.
 
@@ -444,6 +484,9 @@ def cmd_say(args) -> int:
     body = (args.body or "").strip()
     if not body:
         return _err("say something - an empty post is not a position")
+    rc = _catch_up_or_err(conn, th, me, "post")
+    if rc:
+        return rc
     msgs = db.thread_messages(conn, th["id"])
     used = swarm.round_counts(msgs).get(me["name"], 0)
     _broadcast(conn, th, me["name"], body, "say")
@@ -483,6 +526,12 @@ def cmd_close(args) -> int:
     if not summary:
         return _err(f'say how it ended: relay close {th["id"]} '
                     f'"<what you concluded, or what you could not settle>"')
+    # Ending a conversation you have not finished reading is the same mistake
+    # as replying to one, with a worse blast radius: it takes the decision away
+    # from every other participant.
+    rc = _catch_up_or_err(conn, th, me, "close it")
+    if rc:
+        return rc
     db.close_thread(conn, th["id"], "closed", f"{me['name']}: {summary}")
     for p in db.participants_of(th):
         if p == me["name"]:
@@ -510,6 +559,9 @@ def cmd_agree(args) -> int:
         # hiding behind a unanimous close.
         return _err(f"state WHAT you are agreeing to: relay agree "
                     f'{th["id"]} "<the position>"')
+    rc = _catch_up_or_err(conn, th, me, "agree")
+    if rc:
+        return rc
     _broadcast(conn, th, me["name"], position, "agree")
     print(f"recorded your position on #{th['id']}: {position}")
     print("(posting again with relay say retracts it)")
@@ -537,6 +589,15 @@ def cmd_thread(args) -> int:
     for m in msgs:
         mark = "AGREES:" if swarm.kind_of(m) == "agree" else "       "
         print(f"  {m['from_name']:<14} {mark} {m['body']}")
+    # Reading the transcript IS reading the posts in it: consume this session's
+    # queued rows for the thread. Otherwise a session that dutifully followed
+    # the pointer is still woken later with a pointer to posts already in its
+    # context (a wasted turn), and is still refused a post by the catch-up gate
+    # for messages it demonstrably read. Same self-consumption the `ask` path
+    # already does when it collects its own answer.
+    if me is not None and me["name"] in parts:
+        for m in _thread_msgs_for(conn, th["id"], me["name"]):
+            db.mark_delivered(conn, m["id"])
     print()
     pos = swarm.positions(msgs)
     counts = swarm.round_counts(msgs)
@@ -721,6 +782,13 @@ def cmd_who(args) -> int:
     print(f"{'NAME':<18} {'ROLE':<12} {'SEEN':<10} STATUS")
     for s in rows:
         mine = "  (you)" if me is not None and s["name"] == me["name"] else ""
+        # Naming a shared working copy here is the reporting half of what
+        # `relay spawn` refuses outright: a session that joined on its own
+        # cannot be un-spawned, so the peers who would be clobbered by it are
+        # told instead.
+        if (not mine and me is not None
+                and swarm.same_checkout(s["workdir"], me["workdir"])):
+            mine = "  (your working copy - do not both edit it)"
         print(f"{s['name']:<18} {s['role']:<12} "
               f"{_ago(s['last_seen']):<10} {s['status_text'] or '-'}{mine}")
     print()
@@ -1277,6 +1345,21 @@ def cmd_doctor(args) -> int:
             arm = f"  arm_request={s['arm_request']}" if s["arm_request"] else ""
             print(f"    {s['name']:<14} {s['role']:<12} "
                   f"{(s['project'] or '-'):<12} mode={mode}{task}{arm}")
+        # Sessions relay spawned cannot land in one checkout (spawn refuses it),
+        # but sessions that joined on their own can, and the symptom - edits
+        # quietly reverting - never points here on its own.
+        shared = {}
+        for s in sessions:
+            if s["closed_at"] or s["role"] != "worker":
+                continue
+            d = swarm.real_workdir(s["workdir"])
+            if d:
+                shared.setdefault(d, []).append(s["name"])
+        for d, names in sorted(shared.items()):
+            if len(names) > 1:
+                print(f"    !! {', '.join(names)} share one working copy ({d})"
+                      f" - parallel edits overwrite each other; give all but "
+                      f"one its own git worktree")
 
     queued = db.undelivered(conn)
     now = time.time()
@@ -1511,25 +1594,54 @@ def cmd_spawn(args) -> int:
     import asyncio
     import config as relay_config
     import spawn as spawnmod
-    if args.worktree and not args.dir:
-        return _err("--worktree requires --dir <repo>")
-    workdir = os.path.abspath(args.dir or os.getcwd())
-    if not os.path.isdir(workdir):
-        return _err(f"workdir not found: {workdir}")
-    repo = None
     if args.worktree:
+        if not args.dir:
+            return _err("--worktree requires --dir <repo>")
         # The name becomes a branch (relay/<name>) and a sibling directory
         # (<repo>-<name>) - keep it a simple token so it can't redirect either.
+        # Checked here, with the other argument-shape errors, so a malformed
+        # command is never reported as a policy refusal.
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", args.name):
             return _err("--worktree requires a simple --name (letters, "
                         "digits, - or _): it becomes a branch and dir name")
+    workdir = os.path.abspath(args.dir or os.getcwd())
+    if not os.path.isdir(workdir):
+        return _err(f"workdir not found: {workdir}")
+
+    # --arm beats config [swarm] spawn_arm beats "off".
+    arm = args.arm if args.arm is not None else relay_config.load()[0].spawn_arm
+
+    # Both refusals below are PHYSICAL facts relay already holds, checked
+    # before any side effect (no worktree is created only to be abandoned).
+    # Relay stays out of what a session decides; where a session runs and
+    # whether anyone can clear its prompts are not decisions, they are
+    # conditions under which unattended work either happens or silently
+    # doesn't. Teaching these in a skill only works if the skill was loaded.
+    if arm == "off" and args.arm is None:
+        return _err(
+            f"refusing to spawn '{args.name}' unarmed: it stops at its first "
+            f"permission prompt with nobody at that tab to clear it, and looks "
+            f"identical to a worker that is thinking. Arm it: --arm wild (or "
+            f"safe / insane), or set [swarm] spawn_arm in ~/.relay/config. If "
+            f"you will sit at that tab yourself, say so: --arm off")
+    if not args.worktree and not args.share:
+        held = swarm.checkout_occupants(db.list_sessions(db.connect()), workdir,
+                                        exclude=(args.name,))
+        if held:
+            return _err(
+                f"{', '.join(held)} already working in {workdir} - two sessions "
+                f"editing one working copy overwrite each other's edits, and "
+                f"neither notices. Give this one its own: add --worktree "
+                f"(branch relay/{args.name}, dir "
+                f"{os.path.basename(workdir)}-{args.name}). If it will only "
+                f"read there, say so: --share")
+    repo = None
+    if args.worktree:
         repo = workdir
         workdir, wt_err = _worktree_add(repo, args.name)
         if wt_err:
             return _err(wt_err)
         print(f"worktree {workdir} (branch relay/{args.name})")
-    # --arm beats config [swarm] spawn_arm beats "off".
-    arm = args.arm if args.arm is not None else relay_config.load()[0].spawn_arm
     try:
         sid = asyncio.run(spawnmod.spawn_worker(
             args.name, args.project or "", args.prompt, workdir, args.role,
@@ -1952,6 +2064,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--worktree", action="store_true",
                     help="create a git worktree of --dir (branch relay/<name>, "
                          "sibling dir <repo>-<name>) and spawn the worker there")
+    sp.add_argument("--share", action="store_true",
+                    help="allow spawning into a working copy another worker "
+                         "already occupies (they will overwrite each other's "
+                         "edits if both write)")
     sp.set_defaults(fn=cmd_spawn)
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")

@@ -133,7 +133,9 @@ You are woken with a POINTER, not the contents:
 
 Run `relay thread 7` BEFORE you post. It shows everything said since you last
 looked. Skipping it is how three sessions end up answering three different
-questions.
+questions - so this is the one thing relay does NOT leave to you: `say`,
+`agree` and `close` are refused while posts are waiting for you, and the
+refusal prints them. Re-run your command and it goes through.
 
 THE RULES
 

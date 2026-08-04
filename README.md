@@ -469,6 +469,14 @@ Every participant sees every post. They are woken with a pointer
 who has settled, and what they can do next - as ordinary command output, so it
 is never squeezed onto one injected line.
 
+Reading first is the one thing relay does not leave to the sessions: `say`,
+`agree` and `close` are refused while a participant has posts waiting for it -
+which relay knows exactly, they are its own undelivered rows - and the refusal
+prints those posts and marks them read, so re-running the command goes
+straight through. It costs a bash call, not a turn. That is enforcing a fact,
+not adjudicating a conversation: what a session does having read them stays
+its call.
+
 `relay agree <id> "<the position>"` records that a session is settled, and on
 what - the position text is required, so "I agree" with no content is not
 expressible. Posting again retracts it: a session still talking is not settled.
@@ -564,8 +572,11 @@ relay thread <id>
     messages between tabs. `discuss` opens a thread (topic LAST) where every
     participant sees every post; they are woken with a pointer and read it
     with `relay thread`. N (default 3) is a suggested post budget, not a
-    limit - relay reports the cost of going over and never refuses a post.
-    `agree` does not consume budget, and posting after agreeing retracts it.
+    limit - relay reports the cost of going over and never refuses a post
+    for being long. `agree` does not consume budget, and posting after
+    agreeing retracts it. The one refusal: say/agree/close are blocked while
+    posts are waiting for you, and the refusal prints them so the retry
+    costs a bash call, not a turn.
     Relay closes a thread on ONE condition, that everyone agreed, and pings
     you with the position - not the transcript. Every other ending is the
     agents': `relay close`. Relay never declares a discussion failed and
@@ -607,10 +618,15 @@ relay pr list [--project <p>] [--mine] [--days <n>]
     owner, task, and an UNCLAIMED or GONE marker.
 
 relay spawn --name <name> "<prompt>" [--project <p>] [--dir <path>]
-            [--role worker|coordinator] [--worktree]
+            [--role worker|coordinator] [--arm off|safe|wild|insane]
+            [--worktree] [--share]
     Open a new iTerm2 tab running claude, pre-registered under <name>.
     --worktree (with --dir <repo>): spawn in a fresh git worktree of that
     repo instead of the repo itself.
+    Refused if no arm level was given (an unarmed worker stalls at its first
+    permission prompt with nobody at that tab), or if a live worker already
+    occupies that --dir (two sessions in one working copy overwrite each
+    other). Say --arm off, --worktree or --share to mean it.
 
 relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
     Register a timer on YOUR OWN tab: <say> is typed in and submitted every
@@ -737,6 +753,16 @@ and a sibling git worktree `<repo>-<name>`, then spawn the worker there
 instead of in `<repo>` itself. Use it whenever two or more workers will
 touch the same repo, so their edits can't clobber each other; `relay wipe`
 cleans up the worktree later (see below).
+
+Spawn refuses two setups outright rather than teaching against them, because
+both are conditions relay already stores rather than judgement calls: a worker
+with **no arm level** (it stops at its first permission prompt with nobody at
+that tab to clear it - pass `--arm wild`, set `[swarm] spawn_arm`, or say
+`--arm off` explicitly if you will sit there), and a `--dir` a **live worker
+already occupies** (pass `--worktree`, or `--share` if the new session will
+only read there). A coordinator sitting in the repo it delegates from is not a
+collision; `relay who` marks peers that share your working copy, and `relay
+doctor` names any two workers that already do.
 
 ### Recovering abandoned work
 

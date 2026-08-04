@@ -109,6 +109,12 @@ Participants are woken with a pointer; each runs `relay thread <id>` to read
 what has been said, `relay say <id> "..."` to post, and `relay agree <id>
 "<the position>"` when settled.
 
+**Read before you post - relay enforces this one.** `say`, `agree` and `close`
+are refused while posts are waiting for you, because answering something you
+have not read is how three sessions end up settling three different questions.
+The refusal prints those posts and marks them read, so re-running your command
+goes straight through: it costs a bash call, not a turn.
+
 **The decision is yours, not relay's.** Relay marks it settled only when
 everyone has agreed; it never judges a discussion failed and never hands it to
 the human on your behalf. Any other ending you declare yourself with `relay
