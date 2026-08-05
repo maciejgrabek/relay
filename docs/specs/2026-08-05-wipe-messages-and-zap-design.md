@@ -1,7 +1,7 @@
 # Wipe Carries Messages + Zap Project - Design Spec
 
 **Date:** 2026-08-05
-**Status:** Approved
+**Status:** Implemented (see docs/plans/2026-08-05-wipe-messages-and-zap.md)
 
 ## Problem
 
