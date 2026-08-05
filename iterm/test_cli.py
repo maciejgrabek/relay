@@ -1640,6 +1640,38 @@ def run():
     c.close()
     ok &= check("auto-registration is not repeated", n_auto == 1)
 
+    # --- wipe/clean delete the wiped sessions' messages ---------------------
+    wmc = db.connect()
+    db.register(wmc, "wm-ghost", "WM-G", "worker", "WMP")
+    db.register(wmc, "wm-live", "WM-L", "worker", "WMP")
+    d1 = db.queue_message(wmc, "wm-ghost", "wm-live", "old chatter", "WMP")
+    db.mark_delivered(wmc, d1)
+    db.queue_message(wmc, "wm-ghost", "wm-live", "ghost mail queued", "WMP")
+    db.queue_message(wmc, "wm-live", "human", "live escalation", "WMP")
+    db.mark_closed(wmc, "wm-ghost", 1.0)
+    code, out, _ = run_cli("wipe", "--project", "WMP", "--dry-run",
+                           iterm_id="w0t0p0:WM-X")
+    ok &= check("wipe plan counts the ghost's messages",
+                code == 0 and "2 message(s), session wm-ghost" in out)
+    code, out, _ = run_cli("wipe", "--project", "WMP", "--yes",
+                           iterm_id="w0t0p0:WM-X")
+    left = [r["body"] for r in wmc.execute(
+        "SELECT body FROM messages WHERE project='WMP' ORDER BY id")]
+    ok &= check("wipe deletes ghost's delivered + queued mail, keeps live's",
+                code == 0 and left == ["live escalation"])
+
+    db.register(wmc, "cl-ghost", "CL-G", "worker", "CLP")
+    q = db.queue_message(wmc, "cl-ghost", "human", "stale", "CLP")
+    db.mark_delivered(wmc, q)
+    db.mark_closed(wmc, "cl-ghost", 1.0)
+    code, out, _ = run_cli("clean", "--project", "CLP", "--yes",
+                           iterm_id="w0t0p0:CL-X")
+    n_left = wmc.execute("SELECT COUNT(*) FROM messages "
+                         "WHERE project='CLP'").fetchone()[0]
+    ok &= check("clean deletes the cleaned session's messages",
+                code == 0 and n_left == 0)
+    wmc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

@@ -1734,12 +1734,15 @@ def cmd_clean(args) -> int:
     print(swarm.clean_plan_text(cands))
     if not cands or args.dry_run:
         return 0
-    if not args.yes and not _confirm(f"clean {len(cands)} session(s)?"):
+    total_msgs = sum(db.count_messages_for(conn, c["name"]) for c in cands)
+    if not args.yes and not _confirm(
+            f"clean {len(cands)} session(s) + DELETE their {total_msgs} "
+            f"message(s)?"):
         print("aborted.")
         return 0
     for c in cands:
         db.reset_owner_tasks(conn, c["name"])
-        db.delete_undelivered_to(conn, c["name"])
+        db.delete_messages_for(conn, c["name"])
         db.delete_session(conn, c["name"])
     print(f"cleaned {len(cands)} session(s).")
     return 0
@@ -1804,15 +1807,18 @@ def cmd_wipe(args) -> int:
             c["worktree_action"] = ("keep-dirty"
                                     if _worktree_dirty(c["workdir"])
                                     else "remove")
+    for c in cands:
+        c["msg_count"] = db.count_messages_for(conn, c["name"])
     print(swarm.wipe_plan_text(cands))
     for w in swarm.wipe_blocker_warnings(cands, tasks):
         print("  " + w)
     if not cands or args.dry_run:
         return 0
     total_tasks = sum(len(c["task_ids"]) for c in cands)
+    total_msgs = sum(c["msg_count"] for c in cands)
     if not args.yes and not _confirm(
             f"permanently DELETE {total_tasks} task(s) + {len(cands)} "
-            f"session(s)?"):
+            f"session(s) + {total_msgs} message(s)?"):
         print("aborted.")
         return 0
     still_closed = {r["name"] for r in db.closed_sessions(conn, args.project)}
@@ -1822,7 +1828,7 @@ def cmd_wipe(args) -> int:
             print(f"  skipped {c['name']} - revived since the plan")
             continue
         db.delete_tasks_by_ids(conn, c["task_ids"])
-        db.delete_undelivered_to(conn, c["name"])
+        db.delete_messages_for(conn, c["name"])
         db.delete_session(conn, c["name"])
         if c.get("worktree_action") == "remove":
             ok_rm, rm_err = _worktree_remove(c["worktree_repo"], c["workdir"],
