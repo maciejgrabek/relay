@@ -29,7 +29,7 @@ arm/disarm them with the arrow keys.
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
-  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · q quit
+  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · Z×2 zap · q quit
 ```
 
 The list is on top and the selected session's **live terminal feed** is stacked
@@ -229,6 +229,7 @@ can't silently auto-approve.)
 | `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
+| `Z` `Z` | **Press twice:** ZAP the whole project - all tasks, sessions and messages (`relay wipe --project <p> --all`). Refuses to guess when several projects exist |
 | `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
 
 `R` and `W` only act when a worker's tab has closed while it still owned tasks;
@@ -803,7 +804,8 @@ relay restore [names...] [--project <p>] [--dry-run] [--yes]
 relay clean [--project <p>] [--dry-run] [--yes]
     The OPPOSITE of restore: resets every non-done task owned by a closed
     session back to unowned todo, then deletes the closed session row
-    (and its undelivered messages). It destroys exactly the workdir
+    and every message it sent or received (queued or delivered - posts
+    in still-open discussions excepted). It destroys exactly the workdir
     context that restore needs, so if you're not sure which one you
     want, run `relay restore` first - `relay clean` is for orphans you've
     decided are not worth reviving.
@@ -811,8 +813,11 @@ relay clean [--project <p>] [--dry-run] [--yes]
 relay wipe [names...] [--project <p>] [--all] [--dry-run] [--yes]
     The delete-counterpart to clean: instead of resetting a closed
     session's non-done tasks to todo, it DELETES those tasks outright
-    (any state, including done), then deletes the session row and its
-    undelivered messages. Same candidate set as clean - no names =
+    (any state, including done), then deletes the session row and every
+    message it sent or received - queued or delivered, so no ghost mail
+    or stale transcript survives it (posts in still-open discussions are
+    the one exception, kept until the thread closes). Same candidate
+    set as clean - no names =
     every closed session (including ones that own no tasks), named =
     those specific closed sessions. Live sessions are never touched by
     the orphaned form. For a session spawned with `--worktree`, wiping it
@@ -826,8 +831,8 @@ relay wipe [names...] [--project <p>] [--all] [--dry-run] [--yes]
     button. `--all` without `--project` is refused outright, so you can't
     wipe every project on the machine by accident.
 
-    Like restore and clean, it always prints a WIPE PLAN first (task and
-    session counts, or the project totals for --all), then asks to
+    Like restore and clean, it always prints a WIPE PLAN first (task,
+    session and message counts, or the project totals for --all), then asks to
     confirm unless --yes; --dry-run prints the plan and stops there.
     Before deleting, it also checks whether any task being wiped is a
     blocker for a task that ISN'T being wiped, and prints a WARNING per
