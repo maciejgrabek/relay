@@ -305,6 +305,16 @@ def run():
     ok &= check("wipe plan keeps dirty worktree",
                 "uncommitted" in wipe_plan_text(wc))
 
+    # wipe_plan_text: msg_count renders when stamped, absent stays terse
+    mcands = [{"name": "g", "task_ids": [1, 2], "workdir": "",
+               "worktree_repo": "", "msg_count": 3}]
+    ok &= check("wipe plan shows message count when stamped",
+                "delete 2 task(s), 3 message(s), session g"
+                in wipe_plan_text(mcands))
+    mcands[0].pop("msg_count")
+    ok &= check("wipe plan omits messages when not stamped",
+                "delete 2 task(s), session g" in wipe_plan_text(mcands))
+
     # --- TUI visuals: ages, fleet line, interactions, bars, markup -----------
     ok &= check("fmt_age seconds/minutes/hours",
                 (swarm.fmt_age(8), swarm.fmt_age(250), swarm.fmt_age(7300))

@@ -603,7 +603,9 @@ def wipe_plan_text(cands, project_all=None) -> str:
                 f"  delete {nt} task(s), {ns} session(s), {nm} message(s)")
     lines = ["WIPE PLAN"]
     for c in cands:
-        lines.append(f"  delete {len(c['task_ids'])} task(s), "
+        mc = c.get("msg_count")
+        msg = f"{mc} message(s), " if mc is not None else ""
+        lines.append(f"  delete {len(c['task_ids'])} task(s), {msg}"
                      f"session {c['name']}")
         wa = c.get("worktree_action")
         if wa == "remove":
