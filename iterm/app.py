@@ -132,7 +132,7 @@ KEYBAR = (
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), (",", "settings"), ("R×2", "restore"),
-             ("W×2", "wipe"), ("?", "help"), ("q", "quit")]))
+             ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
 
 
 def relay_self_panel(width, *, units, armed, approvals, escalations, orphans,
@@ -624,6 +624,8 @@ def help_text() -> str:
         row(",", "settings editor - up/down move, left/right change, p plays a sound"),
         row("R R", "restore dead task-owners (double-press confirms)"),
         row("W W", "WIPE dead sessions' work (double-press confirms)"),
+        row("Z Z", "ZAP the whole project - ALL tasks+sessions+messages "
+                   "(double-press confirms)"),
         row("q", "quit (asks twice only when something is live)"),
         row("?", "close this help"),
         "",
@@ -870,6 +872,7 @@ class RelayApp(App):
         Binding("tab", "swarm_view", "Swarm", priority=True),
         Binding("R", "restore", "Restore", show=True),
         Binding("W", "wipe", "Wipe", show=True),
+        Binding("Z", "zap", "Zap project", show=True),
         Binding("question_mark", "help", "Help", show=False),
         Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
@@ -909,6 +912,7 @@ class RelayApp(App):
         self._swarm_db = None
         self._restore_armed = False
         self._wipe_armed = False
+        self._zap_armed = False
         self._quit_armed = False
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
@@ -1986,8 +1990,7 @@ class RelayApp(App):
         if not getattr(self.watcher, "orphan_count", 0):
             self.query_one(Log).write_line(
                 "wipe: nothing orphaned - W deletes work owned by CLOSED "
-                "sessions. To clear a whole project use: relay wipe "
-                "--project <p> --all")
+                "sessions. To clear a whole project press Z twice.")
             return
         if not self._wipe_armed:
             self._wipe_armed = True
@@ -2001,11 +2004,51 @@ class RelayApp(App):
         self._wipe_armed = False
         self._shell_verb("wipe", "deleting orphaned work")
 
-    def _shell_verb(self, verb: str, doing: str) -> None:
+    # --- zap (delete a WHOLE project - tasks + sessions + messages) ------
+    def action_zap(self) -> None:
+        if self._any_overlay_open():
+            return
+        log = self.query_one(Log)
+        try:
+            if self._swarm_db is None:
+                self._swarm_db = swarmdb.connect()
+            projects = swarmdb.list_projects(self._swarm_db)
+        except Exception as e:
+            log.write_line(f"zap: swarm db unavailable: {e}")
+            return
+        if not projects:
+            log.write_line("zap: no projects - nothing to delete")
+            return
+        if len(projects) > 1:
+            # Guessing a target for a permanent delete is worse than a
+            # shell round-trip; the CLI form names the project explicitly.
+            log.write_line(
+                f"zap: several projects ({', '.join(projects)}) - use: "
+                f"relay wipe --project <p> --all")
+            return
+        p = projects[0]
+        if not self._zap_armed:
+            self._zap_armed = True
+            self.set_timer(self._CONFIRM_WINDOW,
+                           lambda: setattr(self, "_zap_armed", False))
+            nt = len(swarmdb.list_tasks(self._swarm_db, project=p))
+            ns = len(swarmdb.list_sessions(self._swarm_db, project=p))
+            nm = len(swarmdb.message_history(self._swarm_db, project=p,
+                                             limit=10**9))
+            log.write_line(
+                f"zap ARMED: press Z again to DELETE ALL of project '{p}' "
+                f"({nt} tasks + {ns} sessions + {nm} messages, auto-cancels "
+                f"in {int(self._CONFIRM_WINDOW)}s)")
+            return
+        self._zap_armed = False
+        self._shell_verb("wipe", f"deleting ALL of project '{p}'",
+                         extra=["--project", p, "--all"])
+
+    def _shell_verb(self, verb: str, doing: str, extra=None) -> None:
         here = os.path.dirname(os.path.abspath(__file__))
         relay_bin = os.path.join(here, "..", "bin", "relay")
         try:
-            subprocess.Popen([relay_bin, verb, "--yes"],
+            subprocess.Popen([relay_bin, verb, *(extra or []), "--yes"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.query_one(Log).write_line(f"{verb}: {doing}...")
         except Exception as e:

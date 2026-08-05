@@ -4,6 +4,7 @@ Run: python3 iterm/test_app.py
 Uses Textual's headless run_test() with a stub watcher (no iTerm2 needed).
 """
 import asyncio
+import inspect
 import os
 import sys
 import tempfile
@@ -991,6 +992,19 @@ def lock_tests():
         third.close()
     except Exception:
         pass
+
+    # --- zap (Z Z): whole-project delete, advertised + bound -----------------
+    chk("KEYBAR advertises zap", "Z×2" in appmod.KEYBAR
+        and "zap" in appmod.KEYBAR.lower())
+    chk("help covers zap", "zap" in appmod.help_text().lower())
+    chk("RelayApp binds Z to zap",
+        any(getattr(b, "key", None) == "Z"
+            and getattr(b, "action", "") == "zap"
+            for b in appmod.RelayApp.BINDINGS))
+    chk("action_zap exists", hasattr(appmod.RelayApp, "action_zap"))
+    chk("W hint points at Z for a whole-project clear",
+        "Z" in inspect.getsource(appmod.RelayApp.action_wipe))
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
