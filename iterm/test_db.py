@@ -957,6 +957,41 @@ def run():
     ok &= check("RESERVED_NAMES covers relay and human",
                 set(db.RESERVED_NAMES) == {"relay", "human"})
 
+    # --- delete_messages_for / count_messages_for / list_projects -----------
+    mp = _tmpdb()
+    mc = db.connect(mp)
+    db.register(mc, "ghost", "S-G", "worker", "p1")
+    db.register(mc, "alive", "S-A", "worker", "p1")
+    m1 = db.queue_message(mc, "ghost", "alive", "sent, delivered", "p1")
+    db.mark_delivered(mc, m1)
+    db.queue_message(mc, "ghost", "alive", "sent, still queued", "p1")
+    m3 = db.queue_message(mc, "alive", "ghost", "received, delivered", "p1")
+    db.mark_delivered(mc, m3)
+    db.queue_message(mc, "alive", "human", "bystander mail", "p1")
+    tid_open = db.create_thread(mc, "open topic", "ghost", ["alive"], "p1")
+    db.queue_message(mc, "ghost", "alive", "open thread post", "p1",
+                     thread_id=tid_open)
+    tid_done = db.create_thread(mc, "done topic", "ghost", ["alive"], "p1")
+    db.queue_message(mc, "ghost", "alive", "closed thread post", "p1",
+                     thread_id=tid_done)
+    db.close_thread(mc, tid_done, "agreed", "settled")
+    ok &= check("count_messages_for counts sent+received, skips open thread",
+                db.count_messages_for(mc, "ghost") == 4)
+    n_del = db.delete_messages_for(mc, "ghost")
+    ok &= check("delete_messages_for deletes queued+delivered, both ways",
+                n_del == 4)
+    left = [r["body"] for r in mc.execute(
+        "SELECT body FROM messages ORDER BY id")]
+    ok &= check("open-thread post survives, bystander mail survives",
+                left == ["bystander mail", "open thread post"])
+    ok &= check("list_projects unions the three tables, skips ''",
+                db.list_projects(mc) == ["p1"])
+    db.queue_message(mc, "x", "y", "other project", "p2")
+    db.add_task(mc, "t", project="p3")
+    ok &= check("list_projects sees message- and task-only projects, sorted",
+                db.list_projects(mc) == ["p1", "p2", "p3"])
+    mc.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

@@ -833,6 +833,40 @@ def wipe_project(conn, project: str) -> tuple:
     return (nt, ns, nm)
 
 
+# Sent or received, queued or delivered - a wiped session's whole voice.
+# Open-thread posts are the one carve-out: open discussions are live state
+# (same rule as prune_threads), and deleting one dead participant's posts
+# would hole out a transcript the survivors can still read. They age out
+# via prune_messages once the thread closes.
+_MESSAGES_FOR_WHERE = (
+    "(from_name=? OR to_name=?) AND (thread_id IS NULL OR thread_id NOT IN "
+    "(SELECT id FROM threads WHERE state='open'))")
+
+
+def count_messages_for(conn, name: str) -> int:
+    return conn.execute(
+        f"SELECT COUNT(*) FROM messages WHERE {_MESSAGES_FOR_WHERE}",
+        (name, name)).fetchone()[0]
+
+
+def delete_messages_for(conn, name: str) -> int:
+    cur = conn.execute(
+        f"DELETE FROM messages WHERE {_MESSAGES_FOR_WHERE}", (name, name))
+    conn.commit()
+    return cur.rowcount
+
+
+def list_projects(conn) -> list:
+    """Every project with any state at all - a zap target must not miss a
+    project that exists only as tasks or only as transcript."""
+    rows = conn.execute(
+        "SELECT project FROM sessions WHERE project != '' "
+        "UNION SELECT project FROM tasks WHERE project != '' "
+        "UNION SELECT project FROM messages WHERE project != '' "
+        "ORDER BY 1").fetchall()
+    return [r[0] for r in rows]
+
+
 def delete_undelivered_to(conn, name: str) -> int:
     cur = conn.execute(
         "DELETE FROM messages WHERE to_name=? AND delivered_at IS NULL",
