@@ -577,6 +577,28 @@ def why_line(last_decision: str, last_command: str, width: int) -> str:
     return f" WHY: {text}"[:max(6, width) - 1] + "\n"
 
 
+def extreme_push_line(info, dwell: float, now: float, width: int) -> str:
+    """The ' ✷ PUSH: ...' live-feed line for an EXTREME session - when the
+    next idle push fires, or why it is not counting. '' for every other
+    mode. Pure, width-clamped (plain text - the pane renders literally).
+
+    The countdown only runs while the watcher's dwell anchor is set (idle at
+    a ready prompt); a due-but-unfired push means a gate is holding it (a
+    draft on the input line, or queued mail that will win the idle window)."""
+    if info.mode != "extreme":
+        return ""
+    n = info.extreme_fires_left
+    if info.state == "idle" and info._idle_since > 0:
+        left = dwell - (now - info._idle_since)
+        if left > 0:
+            text = f" ✷ PUSH: in {int(left) + 1}s ({n} left)"
+        else:
+            text = f" ✷ PUSH: due - held by a draft or queued mail ({n} left)"
+    else:
+        text = f" ✷ PUSH: waiting for idle ({n} left)"
+    return text[:max(10, width) - 1] + "\n"
+
+
 def getting_started_panel(width: int) -> str:
     """Shown in the preview pane when relay has nothing to control (only its own
     tab is open). Relay acts on OTHER sessions, so an empty roster is the moment
@@ -1372,10 +1394,13 @@ class RelayApp(App):
         # the full per-timer view). Only shown when the session has timers.
         tsum = timers_summary(trows, time.time())
         tsum_line = f"{tsum[:w]}\n" if tsum else ""
+        push = extreme_push_line(
+            info, getattr(self.watcher, "extreme_dwell", 45.0), time.time(), w)
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{push}"
                   f"{tsum_line}"
                   f"{why}"
                   f"{attn}"

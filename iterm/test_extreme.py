@@ -397,6 +397,30 @@ def test_tui_chrome():
         "_extreme_armed = None" in inspect.getsource(appmod.RelayApp.__init__))
 
 
+def test_push_line():
+    import app as appmod
+    import watcher as W
+    now = 1000.0
+    info = W.SessionInfo("p1", title="p", mode="extreme", state="idle")
+    info.extreme_fires_left = 4
+    info._idle_since = now - 10.0
+    line = appmod.extreme_push_line(info, 45.0, now, 60)
+    chk("countdown while dwell runs", "PUSH: in 36s (4 left)" in line)
+    info._idle_since = now - 60.0
+    chk("due but gated names the holders",
+        "PUSH: due" in appmod.extreme_push_line(info, 45.0, now, 60))
+    info.state = "working"
+    chk("non-idle waits for idle",
+        "waiting for idle" in appmod.extreme_push_line(info, 45.0, now, 60))
+    info.state = "idle"
+    info._idle_since = 0.0
+    chk("idle_since unset also waits",
+        "waiting for idle" in appmod.extreme_push_line(info, 45.0, now, 60))
+    info.mode = "insane"
+    chk("non-extreme renders nothing",
+        appmod.extreme_push_line(info, 45.0, now, 60) == "")
+
+
 def test_statusbar_label():
     import statusbar
     chk("extreme circle is purple",
@@ -418,6 +442,7 @@ if __name__ == "__main__":
     test_extreme_dry_run()
     test_extreme_arm_sid_binding()
     test_tui_chrome()
+    test_push_line()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
