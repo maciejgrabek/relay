@@ -186,7 +186,7 @@ def reactor_pressure(sessions) -> float:
     """
     p = 0.0
     for i in sessions:
-        if i.mode == "insane":
+        if i.mode in ("insane", "extreme"):
             p += 0.9
         elif i.mode == "wild":
             p += 0.6
@@ -924,7 +924,7 @@ class RelayApp(App):
         self._wipe_armed = False
         self._zap_armed = False
         self._quit_armed = False
-        self._extreme_armed = False
+        self._extreme_armed = None    # None | sid armed for the second E press
         self._extreme_form = None    # None | {"sid": str}
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
@@ -2074,18 +2074,26 @@ class RelayApp(App):
         if info is None:
             return
         if info.mode not in ("insane", "extreme"):
+            # Refusing here must not leave a stale arm behind - otherwise a
+            # later E on THIS same sid (once it reaches insane) would read as
+            # the confirming second press instead of a fresh arm.
+            self._extreme_armed = None
             log.write_line(
                 "extreme: requires INSANE first (SPACE cycles arm level)")
             return
-        if not self._extreme_armed:
-            self._extreme_armed = True
+        if self._extreme_armed != sid:
+            # Arm is bound to the selected session: moving the cursor to a
+            # different session between presses must not let its E land as
+            # the confirming second press for THIS one.
+            self._extreme_armed = sid
             self.set_timer(self._CONFIRM_WINDOW,
-                           lambda: setattr(self, "_extreme_armed", False))
+                           lambda: setattr(self, "_extreme_armed", None)
+                           if self._extreme_armed == sid else None)
             log.write_line(
                 f"extreme ARMED: press E again to configure the push "
                 f"prompt (auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
-        self._extreme_armed = False
+        self._extreme_armed = None
         self._extreme_form_open(sid, info)
 
     def _extreme_form_open(self, sid, info) -> None:
