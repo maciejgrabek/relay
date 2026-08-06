@@ -4,6 +4,7 @@ arming/firing/exhaustion, TUI + statusbar chrome.
 Run: python3 iterm/test_extreme.py
 """
 import asyncio
+import inspect
 import os
 import sys
 import time
@@ -28,6 +29,16 @@ READY = ["╭──────────────╮", "│ >            �
 DRAFT = ["╭──────────────╮", "│ > fix the login bug   │",
          "╰──────────────╯", "  ? for shortcuts"]
 SHELL = ["some output", "~/Work $"]
+# Claude's footer sometimes wraps to TWO lines (a "⏵⏵ accept edits" status
+# line above "? for shortcuts") - the input row then sits 4 lines from the
+# bottom of the non-blank tail, past prompt_line_empty's old 3-line window.
+READY_TWO_LINE_FOOTER = [
+    "╭──────────────╮",
+    "│ >            │",
+    "╰──────────────╯",
+    "  ⏵⏵ accept edits on",
+    "  ? for shortcuts",
+]
 
 
 def test_prompt_line_empty():
@@ -38,6 +49,11 @@ def test_prompt_line_empty():
     chk("empty screen -> False", not swarm.prompt_line_empty([]))
     chk("READY still passes claude_prompt_ready",
         swarm.claude_prompt_ready(READY))
+    chk("two-line footer still passes claude_prompt_ready",
+        swarm.claude_prompt_ready(READY_TWO_LINE_FOOTER))
+    chk("two-line footer: empty input box -> True (input row is 4 lines "
+        "from the bottom, past the old 3-line window)",
+        swarm.prompt_line_empty(READY_TWO_LINE_FOOTER))
 
 
 def test_config_knobs():
@@ -215,11 +231,15 @@ def test_extreme_gates():
     fs8 = FakeSession()
     i8 = _extreme_info(W, fs8)
     w.registry["x1"] = {"name": "wx"}
+    _orig_undelivered = W.swarmdb.undelivered
     W.swarmdb.undelivered = lambda conn, name: [{"id": 1}]
     w._swarm_conn = lambda: None
-    asyncio.run(w._fire_extreme(i8))
-    chk("queued inbox mail blocks the push", fs8.sent == [])
-    del w.registry["x1"]
+    try:
+        asyncio.run(w._fire_extreme(i8))
+        chk("queued inbox mail blocks the push", fs8.sent == [])
+    finally:
+        W.swarmdb.undelivered = _orig_undelivered
+        del w.registry["x1"]
 
 
 def test_extreme_audit_before_act():
@@ -260,6 +280,104 @@ def test_extreme_dry_run():
         info._idle_since == 0.0)
 
 
+class _ExtremeStubWatcher:
+    """Just enough of the real Watcher for RelayApp to mount headless and
+    for action_extreme() to run: sessions + the config/log/registry shape
+    _refresh() and the settings pane read."""
+
+    def __init__(self, sessions):
+        import config as cfgmod
+        self.sessions = sessions
+        self.log = []
+        self.log_total = 0
+        self.registry = {}
+        self.cfg = cfgmod.Config()
+        self.sounds_enabled = self.cfg.sounds_enabled
+        self.alert_sound = self.cfg.alert_sound
+        self.done_sound = self.cfg.done_sound
+        self.danger_sound = self.cfg.danger_sound
+        self.message_sound = self.cfg.message_sound
+        self.paused = False
+        self.pending_timer_sids = set()
+        self.extreme_fires = 5
+
+    def toggle(self, s):
+        pass
+
+    def toggle_hidden(self, s):
+        pass
+
+    async def refresh_screen(self, s):
+        pass
+
+
+def test_extreme_arm_sid_binding():
+    """E is a double-press confirm, like R/W/Z - but unlike those (which act
+    globally), it must be bound to the SELECTED session: arming on session A
+    then moving the cursor to session B must not let B's first E land as the
+    confirming second press meant for A."""
+    import app as appmod
+    from watcher import SessionInfo
+
+    class _TestApp(appmod.RelayApp):
+        def __init__(self, sessions, **k):
+            super().__init__(**k)
+            self._stub = sessions
+
+        async def _connect(self):
+            self.watcher = _ExtremeStubWatcher(self._stub)
+            self._running_cfg = self.watcher.cfg
+            self._working_cfg = self.watcher.cfg
+
+    sessions = {
+        "e1": SessionInfo("e1", title="one", window_idx=0, tab_idx=0,
+                          mode="insane"),
+        "e2": SessionInfo("e2", title="two", window_idx=0, tab_idx=1,
+                          mode="insane"),
+    }
+
+    async def run():
+        a = _TestApp(sessions, dry_run=True)
+        async with a.run_test() as pilot:
+            await pilot.pause()
+            a._refresh()
+            await pilot.pause()
+            t = a.query_one(appmod.DataTable)
+
+            t.move_cursor(row=a._row_sids.index("e1"))
+            await pilot.pause()
+            a.action_extreme()
+            chk("first E on e1 arms e1", a._extreme_armed == "e1")
+            chk("first E does not open the form yet",
+                a._extreme_form is None)
+
+            t.move_cursor(row=a._row_sids.index("e2"))
+            await pilot.pause()
+            a.action_extreme()
+            chk("E on a DIFFERENT session (e2) re-arms for e2, not a "
+                "confirming press for e1", a._extreme_armed == "e2")
+            chk("moving off e1 before the second E must not open its form",
+                a._extreme_form is None)
+
+            a.action_extreme()
+            chk("second E on the SAME session (e2) opens the form",
+                a._extreme_form is not None
+                and a._extreme_form["sid"] == "e2")
+            chk("arm clears once the form opens", a._extreme_armed is None)
+            a._extreme_form_close()
+
+            # Refusal path (non-insane/extreme mode) must not leave a stale
+            # arm behind for a session that later becomes armable.
+            sessions["e1"].mode = "safe"
+            t.move_cursor(row=a._row_sids.index("e1"))
+            await pilot.pause()
+            a.action_extreme()
+            chk("refusal on a non-insane session clears any stale arm",
+                a._extreme_armed is None)
+
+    asyncio.run(run())
+
+
 def test_tui_chrome():
     import app as appmod
     chk("MODE_STYLE has an extreme entry",
@@ -275,6 +393,8 @@ def test_tui_chrome():
         and hasattr(appmod.RelayApp, "_extreme_form_close"))
     chk("preview pane mode label knows extreme",
         appmod.PREVIEW_MODE_LABEL.get("extreme") == "EXTREME")
+    chk("_extreme_armed defaults to None (sid-bound, not a bare bool)",
+        "_extreme_armed = None" in inspect.getsource(appmod.RelayApp.__init__))
 
 
 def test_statusbar_label():
@@ -296,6 +416,7 @@ if __name__ == "__main__":
     test_extreme_audit_before_act()
     test_extreme_exhaustion()
     test_extreme_dry_run()
+    test_extreme_arm_sid_binding()
     test_tui_chrome()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
