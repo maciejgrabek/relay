@@ -29,7 +29,7 @@ arm/disarm them with the arrow keys.
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
-  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · Z×2 zap · q quit
+  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · Z×2 zap · E×2 extreme · q quit
 ```
 
 The list is on top and the selected session's **live terminal feed** is stacked
@@ -93,6 +93,10 @@ allowlisted commands). Because `relay` acts at the terminal layer, it
   detector prompts `safe` can't read get cleared.
 - **insane** (`✦ INSANE`) - approves **any** tool-permission prompt at all, even
   the fail-safe cases (cursor not on option 1, unparseable command).
+- **extreme** (`🟣 EXTREME`) - insane mode + idle pushes: arms on an insane session
+  (`E E` in the TUI); pushes the configured prompt into an idle tab after
+  `extreme_dwell` seconds; fires budget-capped by `extreme_fires` then reverts
+  to insane; disarmed by relay restart.
 
 **A real question (multi-choice, no proceed-marker) is ALWAYS handed off to
 you - NO mode auto-answers your decisions.**

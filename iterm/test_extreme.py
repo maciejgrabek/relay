@@ -277,6 +277,14 @@ def test_tui_chrome():
         appmod.PREVIEW_MODE_LABEL.get("extreme") == "EXTREME")
 
 
+def test_statusbar_label():
+    import statusbar
+    chk("extreme circle is purple",
+        statusbar.MODE_CIRCLE.get("extreme") == "\U0001f7e3")
+    chk("extreme text on the badge",
+        "RELAY:extreme" in statusbar.label("extreme"))
+
+
 if __name__ == "__main__":
     test_prompt_line_empty()
     test_config_knobs()
@@ -289,5 +297,6 @@ if __name__ == "__main__":
     test_extreme_exhaustion()
     test_extreme_dry_run()
     test_tui_chrome()
+    test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)

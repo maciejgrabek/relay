@@ -27,6 +27,7 @@ MODE_CIRCLE = {
     "wild":   "\U0001f7e1",   # yellow circle
     "insane": "\U0001f534",   # red circle
     "shadow": "\U0001f535",   # blue circle - observing, not acting
+    "extreme": "\U0001f7e3",  # purple circle - pushing
 }
 
 _ROLE_SHORT = {"coordinator": "coord", "worker": "work"}
@@ -37,7 +38,7 @@ _ROLE_SHORT = {"coordinator": "coord", "worker": "work"}
 # confused - a live-but-unarmed tab reading "RELAY:off" looked identical to
 # relay being down. "manual" matches the TUI's MANUAL arm label.
 MODE_TEXT = {"off": "manual", "safe": "safe", "wild": "wild",
-             "insane": "insane", "shadow": "shadow"}
+             "insane": "insane", "shadow": "shadow", "extreme": "extreme"}
 
 
 def label(mode, *, own_panel=False, name=None, role=None) -> str:

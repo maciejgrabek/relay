@@ -32,8 +32,8 @@ def run():
     ok &= check("unknown mode falls back to off circle",
                 label("bogus").startswith(MODE_CIRCLE["off"]))
 
-    # the five circles are distinct (so color-by-mode is real)
-    ok &= check("five distinct circles", len(set(MODE_CIRCLE.values())) == 5)
+    # the six circles are distinct (so color-by-mode is real)
+    ok &= check("six distinct circles", len(set(MODE_CIRCLE.values())) == 6)
 
     ok &= check("shadow badge uses its own circle",
                 statusbar.MODE_CIRCLE.get("shadow") == "\U0001f535"
