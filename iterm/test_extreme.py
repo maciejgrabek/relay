@@ -40,7 +40,29 @@ def test_prompt_line_empty():
         swarm.claude_prompt_ready(READY))
 
 
+def test_config_knobs():
+    import tempfile
+    import config as C
+    d = C.Config()
+    chk("default extreme_fires = 5", d.extreme_fires == 5)
+    chk("default extreme_dwell = 45.0", d.extreme_dwell == 45.0)
+    path = os.path.join(tempfile.mkdtemp(), "config")
+    with open(path, "w") as f:
+        f.write("[swarm]\nextreme_fires = 3\nextreme_dwell = 10\n")
+    cfg, warns = C.load(path)
+    chk("parses extreme_fires = 3", cfg.extreme_fires == 3)
+    chk("parses extreme_dwell = 10.0", cfg.extreme_dwell == 10.0)
+    with open(path, "w") as f:
+        f.write("[swarm]\nextreme_fires = 0\nextreme_dwell = -5\n")
+    cfg2, _ = C.load(path)
+    chk("extreme_fires clamps to >= 1", cfg2.extreme_fires == 1)
+    chk("extreme_dwell clamps to >= 0", cfg2.extreme_dwell == 0.0)
+    chk("dump() round-trips the knobs",
+        "extreme_fires" in C.dump(cfg) and "extreme_dwell" in C.dump(cfg))
+
+
 if __name__ == "__main__":
     test_prompt_line_empty()
+    test_config_knobs()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)

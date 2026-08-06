@@ -61,6 +61,8 @@ class Config:
     stale_minutes: float = 10.0
     notify_cooldown: float = 30.0
     spawn_arm: str = "off"
+    extreme_fires: int = 5       # pushes per E E arming (TUI extreme mode)
+    extreme_dwell: float = 45.0  # seconds idle before an extreme push
     statusbar_enabled: bool = False
     danger_preset: str = "default"
     theme: str = "phosphor"
@@ -127,6 +129,11 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     stale = _get_float(cp, "swarm", "stale_minutes", d.stale_minutes, warns)
     cooldown = _get_float(cp, "swarm", "notify_cooldown", d.notify_cooldown,
                           warns)
+
+    e_fires = max(1, int(_get_float(cp, "swarm", "extreme_fires",
+                                    float(d.extreme_fires), warns)))
+    e_dwell = max(0.0, _get_float(cp, "swarm", "extreme_dwell",
+                                  d.extreme_dwell, warns))
 
     try:
         sounds_on = cp.getboolean("sounds", "enabled",
@@ -223,6 +230,8 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         stale_minutes=stale,
         notify_cooldown=cooldown,
         spawn_arm=arm,
+        extreme_fires=e_fires,
+        extreme_dwell=e_dwell,
         statusbar_enabled=statusbar,
         danger_preset=preset,
         theme=theme,
@@ -251,7 +260,9 @@ def dump(cfg: Config) -> str:
         "[swarm]\n"
         f"stale_minutes   = {cfg.stale_minutes:g}\n"
         f"notify_cooldown = {cfg.notify_cooldown:g}\n"
-        f"spawn_arm       = {cfg.spawn_arm}\n\n"
+        f"spawn_arm       = {cfg.spawn_arm}\n"
+        f"extreme_fires   = {cfg.extreme_fires}\n"
+        f"extreme_dwell   = {cfg.extreme_dwell:g}\n\n"
         "[statusbar]\n"
         f"enabled = {'true' if cfg.statusbar_enabled else 'false'}\n\n"
         "[danger]\n"
