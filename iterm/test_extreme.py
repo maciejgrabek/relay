@@ -273,6 +273,8 @@ def test_tui_chrome():
         hasattr(appmod.RelayApp, "_extreme_form_open")
         and hasattr(appmod.RelayApp, "_extreme_form_save")
         and hasattr(appmod.RelayApp, "_extreme_form_close"))
+    chk("preview pane mode label knows extreme",
+        appmod.PREVIEW_MODE_LABEL.get("extreme") == "EXTREME")
 
 
 if __name__ == "__main__":
