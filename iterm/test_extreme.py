@@ -142,11 +142,134 @@ def test_persist_maps_extreme_to_insane():
     chk("other modes persist verbatim", stored.get("worker3") == "wild")
 
 
+def _extreme_info(W, fs, *, dwell_ok=True):
+    info = W.SessionInfo("x1", title="ex", _iterm_session=fs,
+                         mode="extreme", state="idle")
+    info.extreme_prompt = "keep going"
+    info.extreme_fires_left = 2
+    info.last_screen = list(READY)
+    info._idle_since = time.time() - (999 if dwell_ok else 0)
+    return info
+
+
+def test_extreme_fires():
+    W, w = _mk_watcher()
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("push sends prompt then Enter", fs.sent == ["keep going", "\r"])
+    chk("budget decremented", info.extreme_fires_left == 1)
+    chk("idle anchor reset after fire", info._idle_since == 0.0)
+
+
+def test_extreme_gates():
+    W, w = _mk_watcher()
+
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    info.last_screen = list(DRAFT)
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("draft on the input line blocks the push", fs.sent == [])
+
+    fs2 = FakeSession()
+    i2 = _extreme_info(W, fs2)
+    i2._idle_since = time.time()  # just went idle: dwell not elapsed
+    asyncio.run(w._fire_extreme(i2))
+    chk("dwell not elapsed blocks the push", fs2.sent == [])
+
+    fs3 = FakeSession()
+    i3 = _extreme_info(W, fs3)
+    i3.state = "working"
+    asyncio.run(w._fire_extreme(i3))
+    chk("non-idle state blocks and resets the anchor",
+        fs3.sent == [] and i3._idle_since == 0.0)
+
+    fs4 = FakeSession()
+    i4 = _extreme_info(W, fs4)
+    w.paused = True
+    asyncio.run(w._fire_extreme(i4))
+    chk("paused blocks the push", fs4.sent == [])
+    w.paused = False
+
+    fs5 = FakeSession()
+    i5 = _extreme_info(W, fs5)
+    i5.extreme_fires_left = 0
+    asyncio.run(w._fire_extreme(i5))
+    chk("zero budget never fires", fs5.sent == [])
+
+    fs6 = FakeSession()
+    i6 = _extreme_info(W, fs6)
+    i6.mode = "insane"
+    asyncio.run(w._fire_extreme(i6))
+    chk("non-extreme mode never fires", fs6.sent == [])
+
+    fs7 = FakeSession()
+    i7 = _extreme_info(W, fs7)
+    w.own_sid = "x1"
+    asyncio.run(w._fire_extreme(i7))
+    chk("own tab never fires", fs7.sent == [])
+    w.own_sid = None
+
+    fs8 = FakeSession()
+    i8 = _extreme_info(W, fs8)
+    w.registry["x1"] = {"name": "wx"}
+    W.swarmdb.undelivered = lambda conn, name: [{"id": 1}]
+    w._swarm_conn = lambda: None
+    asyncio.run(w._fire_extreme(i8))
+    chk("queued inbox mail blocks the push", fs8.sent == [])
+    del w.registry["x1"]
+
+
+def test_extreme_audit_before_act():
+    W, w = _mk_watcher()
+    W.audit.record = lambda *a, **k: False   # durable write fails
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("audit failure means NO push", fs.sent == [])
+    chk("audit failure keeps the budget", info.extreme_fires_left == 2)
+    W.audit.record = lambda *a, **k: True
+
+
+def test_extreme_exhaustion():
+    W, w = _mk_watcher()
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    info.extreme_fires_left = 1
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("last push still sends", fs.sent == ["keep going", "\r"])
+    chk("exhaustion reverts to insane", info.mode == "insane")
+    chk("exhaustion noted in the log",
+        any("exhausted" in l for l in w.log))
+
+
+def test_extreme_dry_run():
+    W, w = _mk_watcher()
+    w.dry_run = True
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("dry-run never sends", fs.sent == [])
+    chk("dry-run keeps the budget", info.extreme_fires_left == 2)
+    chk("dry-run resets the anchor (no per-tick spam)",
+        info._idle_since == 0.0)
+
+
 if __name__ == "__main__":
     test_prompt_line_empty()
     test_config_knobs()
     test_arming_plumbing()
     test_extreme_approves_like_insane()
     test_persist_maps_extreme_to_insane()
+    test_extreme_fires()
+    test_extreme_gates()
+    test_extreme_audit_before_act()
+    test_extreme_exhaustion()
+    test_extreme_dry_run()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
