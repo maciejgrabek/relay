@@ -362,10 +362,11 @@ class Watcher:
                         # read - a hung session is exactly the stale case.
                         self._check_stale(info)
                         await self._apply_title(info)
-                        await self._fire_timers(info)
+                        fired = bool(await self._fire_timers(info))
                         # Extreme push last, and never on a tick that already
-                        # injected a delivery - one injection per tick.
-                        if res and not delivered:
+                        # injected a delivery or fired a timer - one
+                        # injection per tick.
+                        if res and not delivered and not fired:
                             await self._fire_extreme(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
@@ -770,7 +771,7 @@ class Watcher:
         except Exception:
             pass
 
-    async def _deliver(self, info: SessionInfo) -> None:
+    async def _deliver(self, info: SessionInfo) -> Optional[bool]:
         """Deliver AT MOST ONE queued message into a registered session, only
         when it is idle at Claude's input box. Audit before act, like
         approvals. One per tick keeps the injected turns observable. Returns
@@ -850,28 +851,30 @@ class Watcher:
         self._note(f"DELIVER -> {reg['name']}: {len(ids)} msg(s)")
         return True
 
-    async def _fire_timers(self, info: SessionInfo) -> None:
+    async def _fire_timers(self, info: SessionInfo) -> bool:
         """Fire at most one due, firable timer for this session per tick. now
         mode injects immediately; idle waits for a ready Claude prompt. Pause
         freezes; require_armed gates on arm level; dry-run would-fire. A binding
         older than reconfirm_days is deactivated (back to pending) instead of
         firing - the stale-session-id guard. Audit BEFORE the send. Best-effort:
-        DB/iTerm2 errors are logged, never break the loop."""
+        DB/iTerm2 errors are logged, never break the loop. Returns True when a
+        timer actually fired (or would-fire, in dry-run) this call - the poll
+        loop uses that to gate the extreme push (one injection per tick)."""
         if info.session_id == self.own_sid:
-            return
+            return False
         s = info._iterm_session
         if s is None:
-            return
+            return False
         try:
             conn = self._swarm_conn()
             rows = swarmdb.list_timers(conn, info.session_id)
         except Exception as e:
             self._note(f"timers db error: {e}")
-            return
+            return False
         now = time.time()
         due = timers_mod.due_timers(rows, now)
         if not due:
-            return
+            return False
         ready = (info.state == "idle"
                  and swarm.claude_prompt_ready(info.last_screen))
         armed = info.mode in ("safe", "wild", "insane", "extreme")
@@ -894,20 +897,21 @@ class Watcher:
                 # Advance the clock (so we don't re-would-fire every tick) but do
                 # NOT consume the cap - dry-run is a simulation.
                 swarmdb.update_timer(conn, t["id"], last_fired_at=now)
-                return
+                return True
             if not audit.record("timer-fired", info.title, t["payload"][:500],
                                 f"timer {t['id']}"):
                 now2 = time.time()
                 if now2 - info._last_notify_ts >= self.notify_cooldown:
                     info._last_notify_ts = now2
                     self._note(f"AUDIT-FAIL: not firing timer {t['id']}")
-                return
+                return False
             await s.async_send_text(t["payload"])
             await asyncio.sleep(0.3)
             await s.async_send_text("\r")
             swarmdb.mark_timer_fired(conn, t["id"], now=now)
             self._note(f"TIMER -> {info.title}: {t['payload'][:60]}")
-            return    # one per tick
+            return True    # one per tick
+        return False
 
     async def _fire_extreme(self, info: SessionInfo) -> None:
         """EXTREME push: keep an idle extreme-mode session moving by typing
