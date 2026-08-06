@@ -260,6 +260,21 @@ def test_extreme_dry_run():
         info._idle_since == 0.0)
 
 
+def test_tui_chrome():
+    import app as appmod
+    chk("MODE_STYLE has an extreme entry",
+        appmod.MODE_STYLE.get("extreme") == ("✷", "EXTREME", appmod.DANGER))
+    chk("E is bound",
+        any(getattr(b, "key", "") == "E" for b in appmod.RelayApp.BINDINGS))
+    chk("keybar advertises E×2", "E×2" in appmod.KEYBAR)
+    chk("help covers extreme", "EXTREME" in appmod.help_text())
+    chk("action_extreme exists", hasattr(appmod.RelayApp, "action_extreme"))
+    chk("form open/save/close helpers exist",
+        hasattr(appmod.RelayApp, "_extreme_form_open")
+        and hasattr(appmod.RelayApp, "_extreme_form_save")
+        and hasattr(appmod.RelayApp, "_extreme_form_close"))
+
+
 if __name__ == "__main__":
     test_prompt_line_empty()
     test_config_knobs()
@@ -271,5 +286,6 @@ if __name__ == "__main__":
     test_extreme_audit_before_act()
     test_extreme_exhaustion()
     test_extreme_dry_run()
+    test_tui_chrome()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
