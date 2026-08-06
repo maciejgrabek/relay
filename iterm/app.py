@@ -111,6 +111,7 @@ MODE_STYLE = {
     "wild":   ("▲", "WILD",    WARN),
     "insane": ("✦", "INSANE",  DANGER),
     "shadow": ("◌", "SHADOW",  CYAN),
+    "extreme": ("✷", "EXTREME", DANGER),
 }
 
 
@@ -128,7 +129,7 @@ def _keys(pairs) -> str:
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"),
-           ("v", "audit"), ("f", "feed"), ("t", "timers")])
+           ("v", "audit"), ("f", "feed"), ("t", "timers"), ("E×2", "extreme")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), (",", "settings"), ("R×2", "restore"),
@@ -626,6 +627,7 @@ def help_text() -> str:
         row("W W", "WIPE dead sessions' work (double-press confirms)"),
         row("Z Z", "ZAP the whole project - ALL tasks+sessions+messages "
                    "(double-press confirms)"),
+        row("E E", "EXTREME an INSANE session: auto-push a prompt while idle (double-press)"),
         row("q", "quit (asks twice only when something is live)"),
         row("?", "close this help"),
         "",
@@ -635,6 +637,7 @@ def help_text() -> str:
         row("◉ SAFE", "auto-approves commands classified safe; escalates rest"),
         row("▲ WILD", "approves any 'Do you want to proceed?' unclassified"),
         row("✦ INSANE", "approves ANY tool prompt, even fail-safe cases"),
+        row("✷ EXTREME", "insane + pushes your prompt into an idle tab; budget-capped, gone on restart"),
         row("◌ SHADOW", "dry-run - records would-approve/would-escalate, never acts"),
         "",
         f"[{D}]A real question (multi-choice) is ALWAYS yours - no mode"
@@ -873,6 +876,7 @@ class RelayApp(App):
         Binding("R", "restore", "Restore", show=True),
         Binding("W", "wipe", "Wipe", show=True),
         Binding("Z", "zap", "Zap project", show=True),
+        Binding("E", "extreme", "Extreme", show=True),
         Binding("question_mark", "help", "Help", show=False),
         Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
@@ -914,6 +918,8 @@ class RelayApp(App):
         self._wipe_armed = False
         self._zap_armed = False
         self._quit_armed = False
+        self._extreme_armed = False
+        self._extreme_form = None    # None | {"sid": str}
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
@@ -1057,6 +1063,8 @@ class RelayApp(App):
             if getattr(info, "stale", False):
                 label, color = "▲ STALE", WARN
             glyph, mlabel, mcolor = MODE_STYLE.get(info.mode, (" ", "MANUAL", DIM))
+            if info.mode == "extreme":
+                mlabel = f"{mlabel} {info.extreme_fires_left}"
             arm = f"{glyph} {mlabel}" if glyph.strip() else f"  {mlabel}"
             # Heartbeat: age since the screen last changed (LOC's find-the-tab
             # job is what `n` does better; freshness earns the column more).
@@ -1713,6 +1721,8 @@ class RelayApp(App):
     def on_input_submitted(self, event) -> None:
         if self._timer_form is not None:
             self._timer_form_save()
+        elif self._extreme_form is not None:
+            self._extreme_form_save()
 
     def on_key(self, event) -> None:
         if not self._timers_visible:
@@ -1807,6 +1817,9 @@ class RelayApp(App):
 
     # --- ESC: universal "take me back" for every overlay ----------------------
     def action_dismiss_view(self) -> None:
+        if self._extreme_form is not None:
+            self._extreme_form_close()
+            return
         if self._settings_visible:
             self.action_settings()
         elif self._help_visible:
@@ -2043,6 +2056,76 @@ class RelayApp(App):
         self._zap_armed = False
         self._shell_verb("wipe", f"deleting ALL of project '{p}'",
                          extra=["--project", p, "--all"])
+
+    # --- extreme (E E): push-prompt an INSANE session while idle ---------
+    def action_extreme(self) -> None:
+        if self._any_overlay_open() or self._extreme_form is not None:
+            return
+        log = self.query_one(Log)
+        sid = self._selected_sid()
+        if not sid or not self.watcher or sid == self._own_sid:
+            return
+        info = self.watcher.sessions.get(sid)
+        if info is None:
+            return
+        if info.mode not in ("insane", "extreme"):
+            log.write_line(
+                "extreme: requires INSANE first (SPACE cycles arm level)")
+            return
+        if not self._extreme_armed:
+            self._extreme_armed = True
+            self.set_timer(self._CONFIRM_WINDOW,
+                           lambda: setattr(self, "_extreme_armed", False))
+            log.write_line(
+                f"extreme ARMED: press E again to configure the push "
+                f"prompt (auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
+            return
+        self._extreme_armed = False
+        self._extreme_form_open(sid, info)
+
+    def _extreme_form_open(self, sid, info) -> None:
+        self._extreme_form = {"sid": sid}
+        inp = Input(value=info.extreme_prompt,
+                    placeholder="do the highest-value thing you can do "
+                                "without me; don't wait for my review",
+                    id="extreme_prompt")
+        self.mount(inp)
+        inp.focus()
+        self.query_one(Log).write_line(
+            f"EXTREME {info.title}: enter arms "
+            f"{self.watcher.extreme_fires} push(es) - empty disarms - "
+            f"esc cancels")
+
+    def _extreme_form_close(self) -> None:
+        self._extreme_form = None
+        try:
+            self.query_one("#extreme_prompt").remove()
+        except Exception:
+            pass
+
+    def _extreme_form_save(self) -> None:
+        if self._extreme_form is None:
+            return
+        try:
+            text = self.query_one("#extreme_prompt").value.strip()
+        except Exception:
+            text = ""
+        sid = self._extreme_form["sid"]
+        log = self.query_one(Log)
+        if not text:
+            if self.watcher and self.watcher.clear_extreme(sid):
+                log.write_line("extreme: disarmed - back to INSANE")
+            self._extreme_form_close()
+            return
+        if self.watcher and self.watcher.set_extreme(sid, text):
+            info = self.watcher.sessions.get(sid)
+            log.write_line(
+                f"EXTREME armed on {info.title if info else sid}: "
+                f"{self.watcher.extreme_fires} push(es), then back to INSANE")
+        else:
+            log.write_line("extreme: could not arm (session gone or "
+                           "not INSANE)")
+        self._extreme_form_close()
 
     def _shell_verb(self, verb: str, doing: str, extra=None) -> None:
         here = os.path.dirname(os.path.abspath(__file__))
