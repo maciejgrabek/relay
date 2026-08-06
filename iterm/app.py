@@ -114,6 +114,12 @@ MODE_STYLE = {
     "extreme": ("✷", "EXTREME", DANGER),
 }
 
+# Mode label for the session-detail preview pane header (plain text, no
+# glyph/color - those live in MODE_STYLE for the table). Kept as its own
+# constant so it's independently testable.
+PREVIEW_MODE_LABEL = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
+                      "shadow": "SHADOW", "extreme": "EXTREME"}
+
 
 # Two-line key bar. The Textual Footer crams every binding onto one row and
 # hides the overflow; with a dozen keys that truncates on a narrow window, so we
@@ -1326,8 +1332,7 @@ class RelayApp(App):
                 db_path=swarmdb.default_path(),
                 dry_run=self.dry_run))
             return
-        mode = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
-                "shadow": "SHADOW"}.get(info.mode, "MANUAL")
+        mode = PREVIEW_MODE_LABEL.get(info.mode, "MANUAL")
         loc = "QUARANTINED" if info.hidden else "ACTIVE"
         # Size the frame to the pane width so the header bars span the full pane.
         w = max(40, preview.size.width - 2)
