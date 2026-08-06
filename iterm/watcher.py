@@ -351,17 +351,22 @@ class Watcher:
                         continue  # hidden & disarmed: skip, per the refresh rule
                     try:
                         res = await self._snapshot(info)
+                        delivered = False
                         if res:
                             await self._handle(info, *res)
                             # Only deliver on fresh screen evidence this tick -
                             # a failed snapshot leaves state/last_screen stale,
                             # which must not be used to decide a delivery.
-                            await self._deliver(info)
+                            delivered = bool(await self._deliver(info))
                         # Staleness must be evaluated even on a failed screen
                         # read - a hung session is exactly the stale case.
                         self._check_stale(info)
                         await self._apply_title(info)
                         await self._fire_timers(info)
+                        # Extreme push last, and never on a tick that already
+                        # injected a delivery - one injection per tick.
+                        if res and not delivered:
+                            await self._fire_extreme(info)
                     except Exception as e:
                         self._note(f"session error {info.title}: {e}")
                 self.on_change()
@@ -768,7 +773,8 @@ class Watcher:
     async def _deliver(self, info: SessionInfo) -> None:
         """Deliver AT MOST ONE queued message into a registered session, only
         when it is idle at Claude's input box. Audit before act, like
-        approvals. One per tick keeps the injected turns observable."""
+        approvals. One per tick keeps the injected turns observable. Returns
+        True only when a batch was injected."""
         if info.session_id == self.own_sid:
             return  # never type a swarm message into relay's own panel tab
         if self.paused:
@@ -842,6 +848,7 @@ class Watcher:
         for mid in ids:
             swarmdb.mark_delivered(self._swarm_conn(), mid, now=stamp)
         self._note(f"DELIVER -> {reg['name']}: {len(ids)} msg(s)")
+        return True
 
     async def _fire_timers(self, info: SessionInfo) -> None:
         """Fire at most one due, firable timer for this session per tick. now
@@ -901,6 +908,70 @@ class Watcher:
             swarmdb.mark_timer_fired(conn, t["id"], now=now)
             self._note(f"TIMER -> {info.title}: {t['payload'][:60]}")
             return    # one per tick
+
+    async def _fire_extreme(self, info: SessionInfo) -> None:
+        """EXTREME push: keep an idle extreme-mode session moving by typing
+        its configured prompt. Fires ONLY on `idle` - a blocked session (a
+        genuine question) or a permission prompt is never touched here; the
+        _handle gates own those. Additional gates: ready AND EMPTY input
+        box (never append to an operator draft), empty inbox (queued mail
+        wins the idle window), dwell elapsed, budget left, not paused, not
+        relay's own tab. Audit BEFORE the send, like every injection."""
+        if info.mode != "extreme" or info.session_id == self.own_sid:
+            return
+        if info.state != "idle" or \
+                not swarm.claude_prompt_ready(info.last_screen):
+            info._idle_since = 0.0
+            return
+        now = time.time()
+        if info._idle_since == 0.0:
+            info._idle_since = now
+        if self.paused or info._iterm_session is None:
+            return
+        if info.extreme_fires_left <= 0:
+            return
+        if not swarm.prompt_line_empty(info.last_screen):
+            return   # operator draft on the input line - hands off
+        if now - info._idle_since < self.extreme_dwell:
+            return
+        reg = self.registry.get(info.session_id)
+        if reg:
+            try:
+                if swarmdb.undelivered(self._swarm_conn(), reg["name"]):
+                    return   # _deliver will spend this idle window instead
+            except Exception as e:
+                self._note(f"swarm db error: {e}")
+                return
+        if self.dry_run:
+            audit.record("would-push", info.title,
+                         info.extreme_prompt[:500], "extreme (dry-run)")
+            self._note(f"DRY-RUN would push {info.title}")
+            info._idle_since = 0.0
+            return
+        # LOG BEFORE ACT (same contract as approvals and timers).
+        if not audit.record("extreme-pushed", info.title,
+                            info.extreme_prompt[:500],
+                            f"extreme ({info.extreme_fires_left - 1} left)"):
+            if now - info._last_notify_ts >= self.notify_cooldown:
+                info._last_notify_ts = now
+                self._note(f"AUDIT-FAIL: not pushing {info.title}")
+            return
+        await info._iterm_session.async_send_text(info.extreme_prompt)
+        await asyncio.sleep(0.3)
+        await info._iterm_session.async_send_text("\r")
+        info.extreme_fires_left -= 1
+        info._idle_since = 0.0
+        self._note(f"EXTREME push -> {info.title} "
+                   f"({info.extreme_fires_left} left)")
+        if info.extreme_fires_left == 0:
+            info.mode = "insane"
+            info._last_prompt_id = None
+            self._persist_mode(info.session_id, "insane")
+            self._last_event = ("done", time.time())
+            self._note(f"EXTREME exhausted on {info.title} - back to INSANE")
+            notify_mac(f"Relay - {info.title}",
+                       "extreme budget exhausted - back to insane",
+                       self.done_sound, session_id=info.session_id)
 
     def _load_timers_on_start(self) -> None:
         """Restore gate: unless [timers] autostart, every saved timer starts
