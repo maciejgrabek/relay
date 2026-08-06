@@ -93,8 +93,11 @@ allowlisted commands). Because `relay` acts at the terminal layer, it
   detector prompts `safe` can't read get cleared.
 - **insane** (`✦ INSANE`) - approves **any** tool-permission prompt at all, even
   the fail-safe cases (cursor not on option 1, unparseable command).
-- **extreme** (`🟣 EXTREME`) - insane mode + idle pushes: arms on an insane session
-  (`E E` in the TUI); pushes the configured prompt into an idle tab after
+
+A fifth level sits above insane and is armed only via `E E` in the TUI:
+
+- **extreme** (`✷ EXTREME`) - insane mode + idle pushes: arms on an insane session
+  only via double-press `E E`; pushes the configured prompt into an idle tab after
   `extreme_dwell` seconds; fires budget-capped by `extreme_fires` then reverts
   to insane; disarmed by relay restart.
 
@@ -234,6 +237,7 @@ can't silently auto-approve.)
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
 | `Z` `Z` | **Press twice:** ZAP the whole project - all tasks, sessions and messages (`relay wipe --project <p> --all`). Refuses to guess when several projects exist |
+| `E` `E` | **Press twice:** arm EXTREME on an INSANE session - configure the push prompt (double-press to confirm). Requires session already in INSANE mode |
 | `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
 
 `R` and `W` only act when a worker's tab has closed while it still owned tasks;
