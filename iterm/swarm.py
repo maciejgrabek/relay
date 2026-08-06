@@ -400,9 +400,13 @@ def prompt_line_empty(lines: List[str]) -> bool:
 
     An extreme push types text and presses Enter; landing on a half-typed
     message would append to it and SUBMIT it. So the input row ("│ > ...")
-    must exist in the ready tail and carry nothing after the '>'. No input
-    row found => not a known-empty box => False (fail safe: no push)."""
-    tail = [l for l in lines if l.strip()][-3:]
+    must exist in the ready tail and carry nothing after the '>'. Scanned
+    tail is wider than claude_prompt_ready's (6 lines, not 3): a two-line
+    footer (both "? for shortcuts" and a "⏵⏵ accept edits" line, per
+    _READY_MARKERS) pushes the input row further from the bottom, and a
+    narrower scan would never find it - silently vetoing every push. No
+    input row found => not a known-empty box => False (fail safe: no push)."""
+    tail = [l for l in lines if l.strip()][-6:]
     for l in reversed(tail):
         if _INPUT_BOX_RE.match(l):
             rest = _INPUT_BOX_RE.sub("", l, count=1)
