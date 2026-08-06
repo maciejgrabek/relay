@@ -27,8 +27,8 @@ Two boundaries are deliberate:
 ## Design
 
 Approach: `extreme` is a real fifth mode value (the control surface), with
-two extra per-session columns carrying what the enum cannot (the prompt and
-the remaining fire budget), firing through the same payload + `\r`
+two in-memory per-session fields carrying what the enum cannot (the prompt
+and the remaining fire budget), firing through the same payload + `\r`
 injection path timers use.
 
 ### 1. The mode
@@ -45,10 +45,16 @@ injection path timers use.
 - `ARM_REQUEST_MODES` stays `("safe", "wild", "insane")` - spawn
   pre-arming cannot request extreme. `set_all` never sets extreme.
   The status-bar arm RPC refuses `extreme` if asked.
-- Persistence rides the existing rail: `sessions.mode` stores
-  `"extreme"`, restored at first sight like every other mode. New
-  columns `extreme_prompt TEXT` and `extreme_fires_left INTEGER` persist
-  alongside, so a relay restart does not forget an armed session.
+- **Extreme does not survive a relay restart.** Unlike the other armed
+  modes (which `_persist_mode` writes and the first-sight restore
+  replays), extreme is in-memory only: `extreme_prompt` and
+  `extreme_fires_left` live on `SessionInfo`, never in the DB. When
+  `_persist_mode` runs for an extreme session it writes `"insane"` (the
+  floor it falls back to), and the restore whitelist
+  (`safe/wild/insane/shadow`) never gains `"extreme"` - a natural second
+  guard. Restarting relay is therefore a panic button for extreme:
+  every pushed session comes back as plain insane and must be re-armed
+  with `E E`.
 
 ### 2. Arming: `E E` + a one-line form
 
@@ -88,6 +94,9 @@ plus a dwell:
 - `state == "idle"` and `claude_prompt_ready(last_screen)`
 - not paused, not relay's own tab, no foreground shell job
 - **inbox empty** - queued messages always win; `_deliver` runs first
+- **prompt line empty** - if the Claude input line already contains
+  typed text (an operator composing a message in the tab), skip the
+  fire entirely; injecting would append to their draft and submit it
 - idle continuously for `extreme_dwell` seconds. The watcher records
   `idle_since` per session (set on transition into `idle`, cleared on
   any other state); fire when `now - idle_since >= dwell`. The dwell
@@ -118,8 +127,10 @@ completions do. Re-arm with `E E`.
   mail; decrement and persist per fire; exhaustion reverts to insane
   and logs; `insane` behavior branches also accept `extreme`;
   `idle_since` resets on state change and on fire.
-- `db`: new columns migrate; mode `"extreme"` round-trips; arm-request
-  with `extreme` is rejected.
+- `watcher` (persistence boundary): `_persist_mode` on an extreme
+  session writes `"insane"`; first-sight restore never yields
+  `"extreme"`; a fire is skipped when the prompt line holds typed text.
+- `db`: arm-request with `extreme` is rejected; no schema change.
 - `app`: `E` binding present; first press on a non-insane session logs
   and does not arm; second press opens the form; empty submit disarms;
   submit stores prompt + budget and flips mode; overlay guard holds.
