@@ -395,6 +395,21 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     return _is_chrome_line(tail[-1])
 
 
+def prompt_line_empty(lines: List[str]) -> bool:
+    """True when Claude's input box row is visibly EMPTY - no operator draft.
+
+    An extreme push types text and presses Enter; landing on a half-typed
+    message would append to it and SUBMIT it. So the input row ("│ > ...")
+    must exist in the ready tail and carry nothing after the '>'. No input
+    row found => not a known-empty box => False (fail safe: no push)."""
+    tail = [l for l in lines if l.strip()][-3:]
+    for l in reversed(tail):
+        if _INPUT_BOX_RE.match(l):
+            rest = _INPUT_BOX_RE.sub("", l, count=1)
+            return rest.strip("".join(_BOX_GLYPHS) + " \t") == ""
+    return False
+
+
 # --- staleness ---------------------------------------------------------------
 
 def stale_reason(now: float, threshold_s: float,
