@@ -23,13 +23,18 @@ MODE_WORD = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
 STATE_GLYPH = {"blocked": "⊘", "prompting": "‼", "stale": "⧗"}
 STATE_WORD = {"blocked": "BLOCKED", "prompting": "AWAITING", "stale": "STALE"}
 
-# Strip exactly one leading relay prefix: an optional mode glyph, an optional
-# state glyph, then up to two known bracket words, then the separating space.
+# Strip one leading relay prefix: an optional mode glyph, an optional state
+# glyph, then up to two known bracket words, then the separating space.
 # Unknown bracket words ([WIP]) don't match, so user titles survive.
+# DERIVED from the maps above - a mode added there is automatically
+# strippable (the 2026-08-06 ✷ desync stacked one prefix per tick because
+# this regex was a hand-written second copy of the vocabulary).
 _PREFIX_RE = re.compile(
-    r"^[◉▲✦◌]?[‼⊘⧗]?"
-    r"(?:\[(?:SAFE|WILD|INSANE|SHADOW|AWAITING|BLOCKED|STALE)\]){0,2}"
-    r" ")
+    "^[" + "".join(MODE_GLYPH.values()) + "]?"
+    "[" + "".join(STATE_GLYPH.values()) + "]?"
+    "(?:\\[(?:" + "|".join((*MODE_WORD.values(), *STATE_WORD.values()))
+    + ")\\]){0,2}"
+    " ")
 
 
 def _attention(state: str, stale: bool) -> str | None:
@@ -65,10 +70,14 @@ def render(style: str, mode: str, state: str, stale: bool, bare: str) -> str:
 
 
 def strip_prefix(title: str) -> str:
-    """Remove at most one leading relay prefix; anything else passes through."""
-    if not title:
-        return title
-    m = _PREFIX_RE.match(title)
-    if m and m.group(0).strip():          # require a non-empty actual prefix
-        return title[m.end():]
+    """Remove ALL leading relay prefixes; anything else passes through.
+
+    Looping matters: a strip/render vocabulary desync (or repeated crashed
+    runs) can leave several stacked prefixes on a real tab; stripping them
+    all is what lets a fixed relay self-heal those titles."""
+    while title:
+        m = _PREFIX_RE.match(title)
+        if not (m and m.group(0).strip()):  # require a non-empty actual prefix
+            return title
+        title = title[m.end():]
     return title

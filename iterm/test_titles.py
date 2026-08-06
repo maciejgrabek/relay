@@ -74,10 +74,27 @@ def run():
     ok &= check("shadow prefix is strippable (crash-safety)",
                 titles.strip_prefix("◌ api") == "api")
 
+    # --- extreme mode -----------------------------------------------------
+    ok &= check("extreme renders its glyph prefix",
+                render("hybrid", "extreme", "blocked", False, N) == f"✷[BLOCKED] {N}")
+    ok &= check("extreme prefix is strippable (crash-safety)",
+                strip_prefix(f"✷[BLOCKED] {N}") == N)
+    ok &= check("extreme word prefix is strippable",
+                strip_prefix(f"[EXTREME][BLOCKED] {N}") == N)
+
+    # --- stacked prefixes self-heal (regression: the 2026-08-06 ✷ desync
+    # stacked one prefix per tick; strip must remove them ALL) -------------
+    ok &= check("stacked prefixes all stripped",
+                strip_prefix(f"✷[BLOCKED] ✷[BLOCKED] ✷[BLOCKED] {N}") == N)
+    ok &= check("stacked mixed prefixes all stripped",
+                strip_prefix(f"✦[BLOCKED] ◉[AWAITING] {N}") == N)
+    ok &= check("user [WIP] title survives repeated strip",
+                strip_prefix("[WIP] foo") == "[WIP] foo")
+
     # --- round-trip property over the full input space ------------------------
     rt = True
     for style in ("glyphs", "words", "hybrid"):
-        for mode in ("off", "safe", "wild", "insane"):
+        for mode in ("off", "safe", "wild", "insane", "shadow", "extreme"):
             for state in ("idle", "working", "prompting", "blocked", "cleared"):
                 for stale in (False, True):
                     t = render(style, mode, state, stale, N)
