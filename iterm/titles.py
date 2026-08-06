@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import re
 
-MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦", "shadow": "◌"}
+MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦", "shadow": "◌",
+              "extreme": "✷"}
 MODE_WORD = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
-             "shadow": "SHADOW"}
+             "shadow": "SHADOW", "extreme": "EXTREME"}
 # Attention priority: blocked > prompting > stale. One state indicator max.
 # stale uses "⧗" - a glyph nobody types in a real tab title, so strip_prefix
 # can never eat a user's name.

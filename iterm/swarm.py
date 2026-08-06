@@ -651,7 +651,7 @@ def resume_prompt(name: str, project: str, role: str, spawn_prompt: str) -> str:
 _STATE_COLS = ("todo", "doing", "blocked", "done")
 _KIND_COLOR = {"done": "green", "blocked": "yellow",
                "escalation": "red", "wake": "dim"}
-_MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦"}
+_MODE_GLYPH = {"safe": "◉", "wild": "▲", "insane": "✦", "extreme": "✷"}
 
 
 def _clip(s: str, w: int) -> str:
@@ -706,7 +706,7 @@ def fleet_line(sessions, tasks, stale=frozenset(), queued: int = 0,
     if armed:
         bits.append("armed " + " ".join(
             f"{_MODE_GLYPH[m]}{armed[m]}"
-            for m in ("safe", "wild", "insane") if m in armed))
+            for m in ("safe", "wild", "insane", "extreme") if m in armed))
     n_stale = sum(1 for n in names if n in stale)
     if n_stale:
         bits.append(f"{n_stale} STALE")

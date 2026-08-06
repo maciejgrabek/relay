@@ -86,6 +86,9 @@ class SessionInfo:
     #              on Yes (heredocs / unparseable just work).
     #   "insane" - approve ANY tool-permission prompt, even fail-safe cases
     #              (cursor not on option 1, unparseable). Permission prompts only.
+    #   "extreme" - insane PLUS: when idle at an empty ready prompt past a
+    #              dwell, relay pushes `extreme_prompt` (budget-capped,
+    #              in-memory only - a relay restart disarms back to insane).
     mode: str = "off"
     hidden: bool = False             # user hid it from the list (UI-only filter)
     job: str = ""                    # iTerm2 foreground job name (shell => no live Claude)
@@ -97,6 +100,9 @@ class SessionInfo:
     n_approved: int = 0              # auto-approvals in this tab (running tally)
     n_escalated: int = 0             # dangerous/question escalations in this tab
     stale: bool = False              # swarm: flagged unresponsive (see Task 8)
+    extreme_prompt: str = ""         # extreme: text pushed into an idle tab
+    extreme_fires_left: int = 0      # extreme: remaining push budget
+    _idle_since: float = field(default=0.0, repr=False)  # idle dwell anchor
     _screen_changed_ts: float = field(default=0.0, repr=False)
     _stale_notified: bool = field(default=False, repr=False)
     _iterm_session: object = field(default=None, repr=False)
@@ -107,7 +113,7 @@ class SessionInfo:
     @property
     def active(self) -> bool:
         """True when armed in any acting mode - i.e. Relay may auto-approve."""
-        return self.mode in ("safe", "wild", "insane")
+        return self.mode in ("safe", "wild", "insane", "extreme")
 
 
 def _extract_lines(contents) -> tuple[List[str], List[str]]:
@@ -248,6 +254,8 @@ class Watcher:
         # defeats the prompt_id debounce). At most one alert / one auto-inject
         # per session per cooldown window, regardless of churn.
         self.notify_cooldown = cfg.notify_cooldown
+        self.extreme_fires = max(1, int(getattr(cfg, "extreme_fires", 5)))
+        self.extreme_dwell = float(getattr(cfg, "extreme_dwell", 45.0))
         # --- swarm: registry + delivery state ---
         self.registry: Dict[str, dict] = {}   # bare iterm UUID -> sessions row
         self._db = None                        # lazy sqlite conn (same loop)
@@ -548,11 +556,14 @@ class Watcher:
         info._last_prompt_id = decision.prompt_id
 
         # Decide whether to APPROVE, by mode (decreasing caution):
-        #   safe   - only INJECT (command classified non-catastrophic)
-        #   wild   - any proceed-prompt (cursor on Yes), command ignored
-        #   insane - any permission prompt at all, even fail-safe cases
+        #   safe    - only INJECT (command classified non-catastrophic)
+        #   wild    - any proceed-prompt (cursor on Yes), command ignored
+        #   insane  - any permission prompt at all, even fail-safe cases
+        #   extreme - insane superset (permission-prompt handling is
+        #             identical; the push behavior lives in _fire_timers-
+        #             adjacent idle-dwell logic, not here)
         # Real questions have is_permission=False, so NONE of these touch them.
-        if info.mode == "insane":
+        if info.mode in ("insane", "extreme"):
             approve = decision.is_permission
         elif info.mode == "wild":
             approve = decision.is_proceed
@@ -667,7 +678,7 @@ class Watcher:
                 if req and sid in self.sessions:
                     within = time.time() - self._arm_seen.get(sid, 0) <= self.arm_grace
                     swarmdb.clear_arm_request(conn, d["name"])
-                    if within:
+                    if within and req in swarmdb.ARM_REQUEST_MODES:
                         self.sessions[sid].mode = req
                         self.sessions[sid]._last_prompt_id = None
                         # persist directly (self.registry isn't updated with this
@@ -856,7 +867,7 @@ class Watcher:
             return
         ready = (info.state == "idle"
                  and swarm.claude_prompt_ready(info.last_screen))
-        armed = info.mode in ("safe", "wild", "insane")
+        armed = info.mode in ("safe", "wild", "insane", "extreme")
         require_armed = getattr(self.cfg, "timers_require_armed", False)
         reconfirm = getattr(self.cfg, "timers_reconfirm_days", 7.0)
         for t in due:
@@ -1361,16 +1372,54 @@ class Watcher:
             info.mode = "safe" if active else "off"
             self._persist_mode(sid, info.mode)
 
+    def set_extreme(self, sid: str, prompt: str) -> bool:
+        """Arm EXTREME (TUI-only surface - no CLI/status-bar/spawn path).
+        Requires an already-insane session: extreme is an escalation the
+        operator performs by hand, never a jump from cold. Refills the push
+        budget from config. In-memory only - see _persist_mode."""
+        if not self._armable(sid):
+            return False
+        info = self.sessions[sid]
+        if info.mode not in ("insane", "extreme") or not prompt.strip():
+            return False
+        info.extreme_prompt = prompt.strip()
+        info.extreme_fires_left = self.extreme_fires
+        info.mode = "extreme"
+        info._idle_since = 0.0
+        info._last_prompt_id = None
+        self._persist_mode(sid, "extreme")
+        self._note(f"EXTREME armed on {info.title}: "
+                   f"{self.extreme_fires} push(es)")
+        return True
+
+    def clear_extreme(self, sid: str) -> bool:
+        """Extreme -> insane. Keeps the stored prompt so a re-arm can
+        prefill it."""
+        info = self.sessions.get(sid)
+        if info is None or info.mode != "extreme":
+            return False
+        info.mode = "insane"
+        info.extreme_fires_left = 0
+        info._last_prompt_id = None
+        self._persist_mode(sid, "insane")
+        self._note(f"EXTREME disarmed on {info.title} - back to INSANE")
+        return True
+
     def _persist_mode(self, sid: str, mode: str) -> None:
         """Mirror a registered session's arm level to the DB so a relay restart
         can restore it. Best-effort; unregistered (ad-hoc) tabs aren't persisted
         - they're ephemeral. Mark it restored so the next tick doesn't overwrite
-        this human action with a stale stored value."""
+        this human action with a stale stored value.
+
+        extreme never persists: it is in-memory only, so the DB gets its floor
+        ("insane") instead - a relay restart always restores to insane, never
+        extreme."""
         reg = self.registry.get(sid)
         if not reg:
             return
         try:
-            swarmdb.set_session_mode(self._swarm_conn(), reg["name"], mode)
+            swarmdb.set_session_mode(self._swarm_conn(), reg["name"],
+                                     "insane" if mode == "extreme" else mode)
             self._mode_restored.add(sid)
         except Exception as e:
             self._note(f"swarm db error: {e}")
