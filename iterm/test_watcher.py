@@ -1230,9 +1230,11 @@ async def timer_tests():
         info = SessionInfo("s1", title="api", _iterm_session=fs, mode="safe",
                            state="working")
         w.sessions["s1"] = info
-        await w._fire_timers(info)
+        fired1 = await w._fire_timers(info)
         chk("now-mode fires immediately (busy ok)",
             any("run lint" in s for s in fs.sent))
+        chk("now-mode fire returns True (poll loop's one-per-tick gate)",
+            fired1 is True)
 
         D.add_timer(conn, iterm_session_id="s2", label="w", interval_min=1,
                     payload="check PRs", mode="idle", now=fresh)
@@ -1241,13 +1243,17 @@ async def timer_tests():
         info2 = SessionInfo("s2", title="w", _iterm_session=fs2, mode="safe",
                             state="working")
         w2.sessions["s2"] = info2
-        await w2._fire_timers(info2)
+        fired2a = await w2._fire_timers(info2)
         chk("idle-mode waits while busy", fs2.sent == [])
+        chk("idle-mode-waits returns False (not this tick's injection)",
+            fired2a is False)
         info2.state = "idle"
         info2.last_screen = ["│ > ", "? for shortcuts"]
-        await w2._fire_timers(info2)
+        fired2b = await w2._fire_timers(info2)
         chk("idle-mode fires at a ready prompt",
             any("check PRs" in s for s in fs2.sent))
+        chk("idle-mode fire returns True",
+            fired2b is True)
 
         D.add_timer(conn, iterm_session_id="s3", label="w", interval_min=1,
                     payload="x", mode="now", now=fresh)
@@ -1256,8 +1262,9 @@ async def timer_tests():
         fs3 = FakeSession()
         info3 = SessionInfo("s3", title="w", _iterm_session=fs3, mode="safe")
         w3.sessions["s3"] = info3
-        await w3._fire_timers(info3)
+        fired3 = await w3._fire_timers(info3)
         chk("pause freezes timers", fs3.sent == [])
+        chk("pause-frozen returns False", fired3 is False)
 
         D.add_timer(conn, iterm_session_id="s4", label="w", interval_min=1,
                     payload="y", mode="now", now=fresh)
@@ -1294,8 +1301,10 @@ async def timer_tests():
         fs6 = FakeSession()
         info6 = SessionInfo("s6", title="w", _iterm_session=fs6, mode="safe")
         w6.sessions["s6"] = info6
-        await w6._fire_timers(info6)
+        fired6 = await w6._fire_timers(info6)
         chk("dry-run: never injects", fs6.sent == [])
+        chk("dry-run would-fire still returns True (counts as this tick's "
+            "injection for the extreme-push gate)", fired6 is True)
         chk("dry-run: audits would-fire",
             any(a[0] == "would-fire" for a in audited))
         chk("dry-run: still marked fired (no immediate re-fire)",
