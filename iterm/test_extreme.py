@@ -421,6 +421,32 @@ def test_push_line():
         appmod.extreme_push_line(info, 45.0, now, 60) == "")
 
 
+def test_dos_modal_text():
+    import app as appmod
+    t = appmod.dos_modal_text("EXTREME - NOT AVAILABLE",
+                              ["This session is not INSANE.",
+                               "SPACE cycles the arm level."], 80)
+    rows = t.splitlines()
+    chk("top border is double-line", rows[0].startswith("╔")
+        and rows[0].rstrip().endswith("╗") and "═" in rows[0])
+    chk("title row present", "EXTREME - NOT AVAILABLE" in rows[1])
+    chk("separator row present", rows[2].startswith("╠")
+        and rows[2].rstrip("▓").endswith("╣"))
+    chk("body line present", any("not INSANE" in r for r in rows))
+    chk("footer prompt present", any("press any key" in r for r in rows))
+    chk("bottom border + shadow", any(r.startswith("╚") for r in rows)
+        and rows[-1].strip().strip("▓") == "")
+    box = [r for r in rows if r and r[0] in "╔║╠╚"]
+    chk("all box rows same width",
+        len({len(r.rstrip("▓")) for r in box}) == 1)
+    t2 = appmod.dos_modal_text("T", ["x" * 200], 40)
+    chk("long body line truncated to width",
+        all(len(r) <= 40 for r in t2.splitlines()))
+    t3 = appmod.dos_modal_text("T", ["hi"], 10)
+    chk("narrow width clamps sanely (min inner width holds)",
+        "press any key" in t3 or "hi" in t3)
+
+
 def test_statusbar_label():
     import statusbar
     chk("extreme circle is purple",
@@ -443,6 +469,7 @@ if __name__ == "__main__":
     test_extreme_arm_sid_binding()
     test_tui_chrome()
     test_push_line()
+    test_dos_modal_text()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
