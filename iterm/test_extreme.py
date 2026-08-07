@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 # Hermetic: never read the developer's real ~/.relay/config in tests.
 os.environ["RELAY_CONFIG"] = "/nonexistent/relay-test-config"
 
+import app as appmod  # noqa: E402
+
 ok = True
 
 
@@ -311,23 +313,26 @@ class _ExtremeStubWatcher:
         pass
 
 
+class _TestApp(appmod.RelayApp):
+    """Headless RelayApp wired to a stub watcher - shared scaffold for the
+    extreme-arm and modal pilot tests below."""
+
+    def __init__(self, sessions, **k):
+        super().__init__(**k)
+        self._stub = sessions
+
+    async def _connect(self):
+        self.watcher = _ExtremeStubWatcher(self._stub)
+        self._running_cfg = self.watcher.cfg
+        self._working_cfg = self.watcher.cfg
+
+
 def test_extreme_arm_sid_binding():
     """E is a double-press confirm, like R/W/Z - but unlike those (which act
     globally), it must be bound to the SELECTED session: arming on session A
     then moving the cursor to session B must not let B's first E land as the
     confirming second press meant for A."""
-    import app as appmod
     from watcher import SessionInfo
-
-    class _TestApp(appmod.RelayApp):
-        def __init__(self, sessions, **k):
-            super().__init__(**k)
-            self._stub = sessions
-
-        async def _connect(self):
-            self.watcher = _ExtremeStubWatcher(self._stub)
-            self._running_cfg = self.watcher.cfg
-            self._working_cfg = self.watcher.cfg
 
     sessions = {
         "e1": SessionInfo("e1", title="one", window_idx=0, tab_idx=0,
@@ -374,6 +379,56 @@ def test_extreme_arm_sid_binding():
             a.action_extreme()
             chk("refusal on a non-insane session clears any stale arm",
                 a._extreme_armed is None)
+
+    asyncio.run(run())
+
+
+def test_modal():
+    """The E E refusal floats a DOS modal; any key closes it and is
+    swallowed (no binding fires); the overlay guard holds while open."""
+    from watcher import SessionInfo
+
+    sessions = {
+        "m1": SessionInfo("m1", title="one", window_idx=0, tab_idx=0,
+                          mode="safe"),
+        "m2": SessionInfo("m2", title="two", window_idx=0, tab_idx=1,
+                          mode="insane"),
+    }
+
+    async def run():
+        a = _TestApp(sessions, dry_run=True)
+        async with a.run_test() as pilot:
+            await pilot.pause()
+            a._refresh()
+            await pilot.pause()
+            t = a.query_one(appmod.DataTable)
+
+            t.move_cursor(row=a._row_sids.index("m1"))
+            await pilot.pause()
+            a.action_extreme()
+            chk("E on a safe session opens the modal", a._modal_open)
+            m = a.query_one("#modal")
+            chk("#modal is displayed and filled",
+                str(m.styles.display) != "none"
+                and "NOT AVAILABLE" in str(m.render()))
+            chk("overlay guard holds while modal open",
+                a._any_overlay_open())
+
+            a.action_extreme()
+            chk("actions are inert behind the modal (no arm)",
+                a._extreme_armed is None)
+
+            await pilot.press("q")
+            chk("any key closes the modal", not a._modal_open)
+            chk("the key is swallowed - q did not arm quit",
+                not a._quit_armed)
+            chk("app still running after swallowed q", a.is_running)
+
+            t.move_cursor(row=a._row_sids.index("m2"))
+            await pilot.pause()
+            a.action_extreme()
+            chk("INSANE session arms without a modal",
+                a._extreme_armed == "m2" and not a._modal_open)
 
     asyncio.run(run())
 
@@ -467,6 +522,7 @@ if __name__ == "__main__":
     test_extreme_exhaustion()
     test_extreme_dry_run()
     test_extreme_arm_sid_binding()
+    test_modal()
     test_tui_chrome()
     test_push_line()
     test_dos_modal_text()
