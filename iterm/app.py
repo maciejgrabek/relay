@@ -599,6 +599,34 @@ def extreme_push_line(info, dwell: float, now: float, width: int) -> str:
     return text[:max(10, width) - 1] + "\n"
 
 
+def dos_modal_text(title: str, lines: list, width: int) -> str:
+    """A DOS-style dialog as plain text: double-line box, title row,
+    separator, body, centered '[ press any key ]' footer, and a ▓ drop
+    shadow (right edge offset one row, bottom row offset two columns).
+    Pure and width-clamped; single-width glyphs only (the pane renders
+    literally)."""
+    inner = max(len(title), max((len(l) for l in lines), default=0),
+                len("[ press any key ]"), 24)
+    inner = min(inner, max(24, width - 6))
+    def clip(s):
+        return s[:inner]
+    body = [clip(l) for l in lines]
+    foot = "[ press any key ]".center(inner)
+    top = "╔" + "═" * (inner + 2) + "╗"
+    sep = "╠" + "═" * (inner + 2) + "╣"
+    bot = "╚" + "═" * (inner + 2) + "╝"
+    def row(s):
+        return f"║ {s:<{inner}} ║"
+    out = [top, row(clip(title)), sep]
+    out += [row(l) for l in body]
+    out += [row(""), row(foot), bot]
+    # Drop shadow: ▓ down the right edge from the second row, and a
+    # bottom row indented two columns - the classic DOS offset.
+    shaded = [out[0]] + [r + "▓" for r in out[1:]]
+    shaded.append("  " + "▓" * (inner + 3))
+    return "\n".join(shaded)
+
+
 def getting_started_panel(width: int) -> str:
     """Shown in the preview pane when relay has nothing to control (only its own
     tab is open). Relay acts on OTHER sessions, so an empty roster is the moment
