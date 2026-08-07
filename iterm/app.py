@@ -1635,6 +1635,13 @@ class RelayApp(App):
 
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
+        if self._modal_open:
+            # Bound with priority=True (so Tab works while an Input holds
+            # focus), which means Textual dispatches this action BEFORE
+            # on_key ever sees the event - the modal-swallow guard there
+            # never runs for this key, so it needs its own guard here.
+            self._modal_close()
+            return
         if self._timers_visible:
             self.action_timers()          # close timers first; TAB then flips
         if self._help_visible:
@@ -1791,6 +1798,10 @@ class RelayApp(App):
             self._extreme_form_save()
 
     def on_key(self, event) -> None:
+        # Swallows the modal for ordinary bindings. Any binding declared
+        # priority=True (e.g. action_swarm_view's Tab) is dispatched BEFORE
+        # on_key runs and bypasses this guard entirely - audit each new
+        # priority binding for its own `if self._modal_open: ...` guard.
         if self._modal_open:
             self._modal_close()
             event.stop()

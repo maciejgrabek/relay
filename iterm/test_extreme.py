@@ -424,6 +424,18 @@ def test_modal():
                 not a._quit_armed)
             chk("app still running after swallowed q", a.is_running)
 
+            # Tab is bound with priority=True (so it works while an Input
+            # holds focus), which means it reaches action_swarm_view BEFORE
+            # on_key's modal-swallow guard ever sees it - action_swarm_view
+            # needs its own guard, or Tab would flip the swarm view open
+            # underneath the still-floating modal.
+            a.action_extreme()
+            chk("re-opening the modal for the tab case", a._modal_open)
+            await pilot.press("tab")
+            chk("tab closes the modal too", not a._modal_open)
+            chk("tab does not also open the swarm view",
+                not a._swarm_visible)
+
             t.move_cursor(row=a._row_sids.index("m2"))
             await pilot.pause()
             a.action_extreme()
