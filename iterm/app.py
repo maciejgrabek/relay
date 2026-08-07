@@ -872,7 +872,12 @@ def quit_stakes_text(n_armed: int, n_queued: int, n_doing: int) -> str:
 class RelayApp(App):
     CSS = _theme_css("""
     /* phosphor-green CRT terminal */
-    Screen { background: $bg; color: $bright; }
+    Screen { background: $bg; color: $bright; layers: base modal; align: center middle; }
+    #modal {
+        layer: modal; display: none;
+        width: auto; height: auto;
+        background: $bg_deep; color: $warn; text-style: bold;
+    }
     #banner { color: $bright; text-style: bold; height: auto; padding: 1 2 0 2; }
     #subtitle { color: $dim; height: 1; padding: 0 2; }
     #reactor { height: 1; padding: 0 2; }
@@ -976,6 +981,7 @@ class RelayApp(App):
         self._quit_armed = False
         self._extreme_armed = None    # None | sid armed for the second E press
         self._extreme_form = None    # None | {"sid": str}
+        self._modal_open = False   # DOS-style dialog floating over the UI
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
         # is "wXtYpZ:UUID"; the watcher keys sessions by the bare UUID.
@@ -986,7 +992,8 @@ class RelayApp(App):
         session list - session-mutating keys must be inert then, or a stray
         keypress acts on a tab you cannot see."""
         return (self._settings_visible or self._swarm_visible
-                or self._help_visible or self._timers_visible)
+                or self._help_visible or self._timers_visible
+                or self._modal_open)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -1018,6 +1025,7 @@ class RelayApp(App):
             yield Static("", id="timersview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
+        yield Static("", id="modal", markup=False)
 
     def on_mount(self) -> None:
         # Prune audit entries older than the retention window, once, at launch.
@@ -1783,6 +1791,11 @@ class RelayApp(App):
             self._extreme_form_save()
 
     def on_key(self, event) -> None:
+        if self._modal_open:
+            self._modal_close()
+            event.stop()
+            event.prevent_default()
+            return
         if not self._timers_visible:
             return
         if self._timer_form is not None:
@@ -1875,6 +1888,9 @@ class RelayApp(App):
 
     # --- ESC: universal "take me back" for every overlay ----------------------
     def action_dismiss_view(self) -> None:
+        if self._modal_open:
+            self._modal_close()
+            return
         if self._extreme_form is not None:
             self._extreme_form_close()
             return
@@ -2133,6 +2149,11 @@ class RelayApp(App):
             self._extreme_armed = None
             log.write_line(
                 "extreme: requires INSANE first (SPACE cycles arm level)")
+            self._modal_show(
+                "EXTREME - NOT AVAILABLE",
+                ["This session is not INSANE.",
+                 "SPACE cycles the arm level to",
+                 "✦ INSANE, then press E E again."])
             return
         if self._extreme_armed != sid:
             # Arm is bound to the selected session: moving the cursor to a
@@ -2161,6 +2182,23 @@ class RelayApp(App):
             f"EXTREME {info.title}: enter arms "
             f"{self.watcher.extreme_fires} push(es) - empty disarms - "
             f"esc cancels")
+
+    def _modal_show(self, title: str, lines: list) -> None:
+        """Float a DOS-style dialog over the UI until any key closes it.
+        Display-only: callers keep their log lines - the modal is
+        visibility, the log is history."""
+        m = self.query_one("#modal", Static)
+        w = max(40, self.size.width - 4)
+        m.update(dos_modal_text(title, lines, w))
+        m.styles.display = "block"
+        self._modal_open = True
+
+    def _modal_close(self) -> None:
+        self._modal_open = False
+        try:
+            self.query_one("#modal", Static).styles.display = "none"
+        except Exception:
+            pass
 
     def _extreme_form_close(self) -> None:
         self._extreme_form = None
