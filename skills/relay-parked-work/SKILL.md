@@ -6,8 +6,7 @@ description: Use when asked to pick up parked work from relay ("pick the next on
 # Relay Parked Work
 
 Parked work is what the operator captured with `i` in the relay panel while
-you were busy, instead of typing it at you mid-turn. It is addressed by
-DIRECTORY, so anything parked in your workdir is yours to take.
+you were busy, instead of typing it at you mid-turn.
 
 Run `relay help parked` before claiming anything - that is the canonical
 rules text, kept there rather than here because the CLI is always present
