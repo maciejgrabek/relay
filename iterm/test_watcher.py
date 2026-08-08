@@ -561,6 +561,98 @@ async def session_path_tests():
     return ok
 
 
+class FakeIT2Session(FakeSession):
+    """A fake iterm2.Session with the bits _sync_sessions reads: session_id
+    plus async_get_variable for path/jobName/titleOverride/autoName."""
+    def __init__(self, session_id, path="", job=""):
+        super().__init__()
+        self.session_id = session_id
+        self._path = path
+        self._job = job
+
+    async def async_get_variable(self, name):
+        if name == "path":
+            return self._path
+        if name == "jobName":
+            return self._job
+        return None   # titleOverride/autoName: unset, falls through to sid
+
+
+class FakeIT2Tab:
+    """A fake iterm2.Tab: sessions plus the titleOverride lookup
+    _session_label falls back to."""
+    def __init__(self, sessions):
+        self.sessions = sessions
+
+    async def async_get_variable(self, name):
+        return None
+
+
+class FakeIT2Window:
+    def __init__(self, tabs):
+        self.tabs = tabs
+
+
+class FakeIT2App:
+    def __init__(self, windows):
+        self.windows = windows
+
+
+async def sync_sessions_workdir_persist_tests():
+    """Regression test for 5530f90: the per-tick workdir write was gated on
+    the in-memory SessionInfo.workdir (the previous tick's cache), which is
+    populated for EVERY tab regardless of registration. In the normal
+    ordering the watcher tracks a tab first and `relay register` runs some
+    ticks later, so that cache was already non-empty by the time the session
+    registered - the gate was false forever and set_watcher_workdir was
+    never called for a real registration. The fix gates on the DB-persisted
+    state (reg["workdir"], from self.registry) instead."""
+    from watcher import Watcher
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    calls = []
+    W.swarmdb.set_watcher_workdir = lambda conn, name, path: calls.append((name, path))
+
+    w = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    w._db = object()   # _swarm_conn must not try a real connect()
+
+    sid = "SID1"
+    sess = FakeIT2Session(sid, path="/work/proj1", job="node")
+    app = FakeIT2App([FakeIT2Window([FakeIT2Tab([sess])])])
+
+    # tick 1: tab tracked, NOT registered -> no write, but the in-memory
+    # cache still picks up the cwd (that's the whole point of Task 4).
+    w.registry = {}
+    await w._sync_sessions(app)
+    chk("tick1 unregistered: no write", calls == [])
+    chk("tick1 unregistered: cwd cached in memory anyway",
+        w.sessions[sid].workdir == "/work/proj1")
+
+    # tick 2: now registered, DB row's workdir still empty (relay register
+    # just ran; nothing has persisted it yet) -> exactly one write, even
+    # though info.workdir was already set on the previous tick.
+    w.registry = {sid: {"name": "w1", "workdir": ""}}
+    await w._sync_sessions(app)
+    chk("tick2 just registered: write fires exactly once",
+        calls == [("w1", "/work/proj1")])
+
+    # tick 3: DB row now reflects the persisted workdir -> no further write
+    # (the optimization this commit exists for).
+    w.registry = {sid: {"name": "w1", "workdir": "/work/proj1"}}
+    await w._sync_sessions(app)
+    chk("tick3 workdir persisted: no further write", calls == [("w1", "/work/proj1")])
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 def arm_request_tests():
     """_swarm_refresh_registry applies + clears spawn arm requests."""
     from watcher import Watcher, SessionInfo
@@ -1587,6 +1679,7 @@ if __name__ == "__main__":
     r2 = asyncio.run(deliver_tests())
     r3 = asyncio.run(title_tests())
     r3b = asyncio.run(session_path_tests())
+    r3c = asyncio.run(sync_sessions_workdir_persist_tests())
     r4 = arm_request_tests()
     r5 = closed_tests()
     r6 = asyncio.run(own_tab_name_tests())
@@ -1600,6 +1693,6 @@ if __name__ == "__main__":
     r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
     r_thr = close_threads_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r3b and r4 and r5 and r6 and r7 and r8
-                   and r8b and r9 and r10 and r11 and r12 and r13 and r_timer
-                   and r_thr) else 1)
+    sys.exit(0 if (r1 and r2 and r3 and r3b and r3c and r4 and r5 and r6 and r7
+                   and r8 and r8b and r9 and r10 and r11 and r12 and r13
+                   and r_timer and r_thr) else 1)

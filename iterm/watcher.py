@@ -492,17 +492,22 @@ class Watcher:
                     # this is the only directory source an unregistered solo
                     # tab has. Registered sessions ALSO get it persisted to
                     # the DB below, since that's what CLI consumers read - but
-                    # only while the in-memory SessionInfo does not already
-                    # have a workdir cached. set_watcher_workdir itself is a
-                    # no-op once sessions.workdir is non-empty (it only writes
-                    # into an empty column), so calling it every tick for
-                    # every registered session was a write transaction spent
-                    # on a guaranteed no-op against a DB the TUI, watcher and
-                    # CLI all contend for. `info` still holds the PREVIOUS
-                    # tick's workdir here (it is updated below), so this is
-                    # exactly "already known".
+                    # only while the DB row does not already have a workdir
+                    # persisted. set_watcher_workdir itself is a no-op once
+                    # sessions.workdir is non-empty (it only writes into an
+                    # empty column), so calling it every tick for every
+                    # registered session was a write transaction spent on a
+                    # guaranteed no-op against a DB the TUI, watcher and CLI
+                    # all contend for. Gate on `reg["workdir"]` - the
+                    # persisted state - and NOT on info.workdir: `info` is the
+                    # PREVIOUS tick's SessionInfo, and that in-memory cache is
+                    # populated for every tab regardless of registration (see
+                    # above), so it goes non-empty long before a session ever
+                    # registers. Gating on it there made the write never fire
+                    # for the normal ordering (watcher tracks the tab first,
+                    # `relay register` runs some ticks later).
                     reg = self.registry.get(sid)
-                    if reg and path and not (info and info.workdir):
+                    if reg and path and not reg["workdir"]:
                         conn = self._swarm_conn()
                         swarmdb.set_watcher_workdir(conn, reg["name"], path)
                     if info is None:
