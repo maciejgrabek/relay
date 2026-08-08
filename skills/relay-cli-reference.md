@@ -109,6 +109,31 @@ inside your session. Errors print to stderr with a non-zero exit.
     relay task list [--project <p>] [--mine]
         Epics with nested subtasks, states, owners, blockers.
 
+    relay next
+        Claim the oldest parked item for THIS directory and print it with the
+        context stamp taken at capture time. Claiming sets state=doing and
+        un-parks it, so from there it is an ordinary task. Needs no
+        `relay register` - parked work binds to a directory, not a swarm name,
+        so it works in a plain unregistered session. Mine-before-unowned, then
+        oldest first; an item parked for a DIFFERENT session is never handed
+        to you. Distinguishes "nothing parked here at all" from "there is
+        parked work here but none of it is yours" - the second case names the
+        count and points you at `relay parked` instead of pretending the
+        directory is empty. Full rules: relay help parked
+
+    relay parked [--all] [--drop <id>]
+        List parked work without claiming any of it. Default is this
+        directory; --all is every directory. Each item prints an owner line
+        only when it has one - unowned is the normal case for a freshly
+        parked item, and the owner line is what tells you an item is
+        earmarked for someone else rather than up for grabs. --drop removes
+        one (parked items only - it can never delete real work).
+
+    relay task add "<title>" --park
+        Shelve a follow-up YOU noticed instead of doing it now. Lands unowned
+        in this directory for whoever runs `relay next` here. Park what you
+        would otherwise silently drop, not everything you noticed.
+
     relay pr set <owner/name>#<n> --state created|review|changes|approved|merged|closed
                   [--title <t>] [--branch <b>] [--project <p>]
         Push a PR's CURRENT state into relay. Relay never calls gh and never

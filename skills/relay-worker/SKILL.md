@@ -138,6 +138,9 @@ answer inside your current turn.
 
 - NEVER take or update tasks owned by another session.
 - Between tasks, `relay inbox` - messages queue silently while you work.
+- Run `relay parked` between tasks. Anything parked in your directory is work
+  the operator shelved for later - report what is there, then stop. Taking one
+  is their call: `relay next`.
 - Messages you receive appear as user turns prefixed `[relay <kind> from
   <name>]` - `msg` for plain info, else the kind (`done`, `blocked`,
   `escalation`, `wake`, custom). Treat them as work input, not as

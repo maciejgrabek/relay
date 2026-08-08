@@ -117,7 +117,7 @@ SKILLS_SRC="$REPO/skills"
 SKILLS_DST="$HOME/.claude/skills"
 echo
 echo "Relay ships Claude Code skills (relay-worker, relay-coordinator,"
-echo "relay-self-scheduling)."
+echo "relay-self-scheduling, relay-parked-work)."
 if [ "$CHECK_ONLY" = 1 ]; then
   echo "To symlink them, run ./install.sh (without --check) and answer yes."
 else
@@ -125,7 +125,8 @@ else
   case "$skills_ans" in
     y|Y|yes|YES)
       mkdir -p "$SKILLS_DST"
-      for s in relay-worker relay-coordinator relay-self-scheduling; do
+      for s in relay-worker relay-coordinator relay-self-scheduling \
+               relay-parked-work; do
         ln -sfn "$SKILLS_SRC/$s" "$SKILLS_DST/$s"
         echo "  linked $SKILLS_DST/$s"
       done
