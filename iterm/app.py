@@ -1352,6 +1352,11 @@ class RelayApp(App):
                 swarmdb.undelivered(self._swarm_db), self._live_names())
         except Exception:
             pass
+        parked_n = 0
+        try:
+            parked_n = len(swarmdb.list_parked(self._swarm_db))
+        except Exception:
+            pass
         attn = ""
         if awaiting:
             attn += f" [{DIM}]·[/] [{WARN}]{awaiting} awaiting[/]"
@@ -1359,6 +1364,8 @@ class RelayApp(App):
             attn += f" [{DIM}]·[/] [{DANGER}]{n_stale} stale[/]"
         if queued_n:
             attn += f" [{DIM}]·[/] [{CYAN}]{queued_n} msgs queued[/]"
+        if parked_n:
+            attn += f" [{DIM}]·[/] [{CYAN}]{parked_n} parked[/]"
         pause_tag = (f"[bold {WARN}]⏸ PAUSED - NOT acting[/] [{DIM}]·[/] "
                      if getattr(self.watcher, "paused", False) else "")
         self.query_one("#subtitle", Static).update(

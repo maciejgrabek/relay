@@ -41,13 +41,17 @@ MODE_TEXT = {"off": "manual", "safe": "safe", "wild": "wild",
              "insane": "insane", "shadow": "shadow", "extreme": "extreme"}
 
 
-def label(mode, *, own_panel=False, name=None, role=None) -> str:
+def label(mode, *, own_panel=False, name=None, role=None, parked: int = 0) -> str:
     """The status-bar string for one tab.
 
     own_panel  -> this is relay's own panel tab; show a neutral, non-actionable
                   badge (relay never controls itself).
     name/role  -> set when the tab is a registered swarm session; appended as
                   "name (role)" so the bar doubles as a swarm identity badge.
+    parked     -> items parked for this tab's directory. The badge is on every
+                  tab, so this is where the operator actually sees the backlog;
+                  relay never pushes parked work into a session, so a visible
+                  count is the whole nudge.
     """
     if own_panel:
         return "⬛ RELAY: panel"       # black square - inert, this is relay
@@ -56,6 +60,8 @@ def label(mode, *, own_panel=False, name=None, role=None) -> str:
     if name:
         r = _ROLE_SHORT.get(role, role) if role else None
         text += f" · {name}" + (f" ({r})" if r else "")
+    if parked:
+        text += f" · {parked} PARKED"
     return text
 
 

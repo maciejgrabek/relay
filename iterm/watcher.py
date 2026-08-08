@@ -1376,17 +1376,25 @@ class Watcher:
         except Exception as e:
             self._note(f"statusbar register failed: {e}")
 
-    def _statusbar_label(self, session_id: str) -> str:
+    def _statusbar_label(self, session_id: str,
+                         parked_by_workdir: Optional[Dict[str, int]] = None
+                         ) -> str:
         """The badge text for one tab; never raises (a render error would blank
-        the bar)."""
+        the bar). parked_by_workdir is the per-tick bucket built once by
+        _statusbar_publish - own_panel never looks it up (relay never
+        controls itself, so its own tab has no parked work to report)."""
         try:
             if session_id == self.own_sid:
                 return statusbar_mod.label("off", own_panel=True)
             info = self.sessions.get(session_id)
             mode = info.mode if info else "off"
             reg = self.registry.get(session_id) or {}
+            parked = 0
+            if parked_by_workdir and info is not None and info.workdir:
+                parked = parked_by_workdir.get(
+                    swarm.real_workdir(info.workdir), 0)
             return statusbar_mod.label(mode, name=reg.get("name"),
-                                       role=reg.get("role"))
+                                       role=reg.get("role"), parked=parked)
         except Exception:
             return statusbar_mod.label("off")
 
@@ -1437,9 +1445,19 @@ class Watcher:
         try:
             for sid in statusbar_mod.consume_clicks():
                 self._statusbar_click(sid)
-            labels = {sid: self._statusbar_label(sid) for sid in self.sessions}
+            # Fetch every parked row ONCE and bucket by workdir, rather than
+            # querying per session in the loop below (docs/IDEAS.md already
+            # tracks this method's per-tick-query pattern as debt - do not
+            # add another one).
+            parked_by_workdir: Dict[str, int] = {}
+            for row in swarmdb.list_parked(self._swarm_conn()):
+                wd = row["workdir"]
+                parked_by_workdir[wd] = parked_by_workdir.get(wd, 0) + 1
+            labels = {sid: self._statusbar_label(sid, parked_by_workdir)
+                     for sid in self.sessions}
             if self.own_sid:
-                labels[self.own_sid] = self._statusbar_label(self.own_sid)
+                labels[self.own_sid] = self._statusbar_label(
+                    self.own_sid, parked_by_workdir)
             statusbar_mod.write_state(labels)
         except Exception as e:
             self._note(f"statusbar publish error: {e}")

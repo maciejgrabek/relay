@@ -58,6 +58,18 @@ def run():
     ok &= check("no name -> bare mode",
                 label("off") == f"{MODE_CIRCLE['off']} RELAY:manual")
 
+    # parked count: appended when nonzero, absent when falsy/default, and the
+    # own-panel badge is untouched (relay never controls itself, so its tab
+    # has no parked work to report).
+    ok &= check("parked count shows on the badge",
+                "3 PARKED" in label("safe", parked=3))
+    ok &= check("zero parked adds nothing",
+                "PARKED" not in label("safe", parked=0))
+    ok &= check("default is zero", "PARKED" not in label("safe"))
+    ok &= check("own panel badge is untouched by parked",
+                label("safe", own_panel=True, parked=3)
+                == label("safe", own_panel=True))
+
     # offline (relay down) is the ONLY badge that says "off", and it differs
     # from an unarmed live tab in both word and circle - the whole point.
     ok &= check("offline label says relay is off",
