@@ -28,6 +28,14 @@ def test_parked_item_text():
     ok &= check("context doing rendered", "#14 Wire the PR router" in t)
     ok &= check("context status rendered", "grep" in t)
     ok &= check("workdir shown", "/Work/relay" in t)
+    ok &= check("unowned item stays quiet - no owner line at all",
+                "owner" not in t)
+
+    owned = swarm.parked_item_text(
+        {"id": 7, "title": "y", "workdir": "/w", "context": "",
+         "owner": "bff-worker"})
+    ok &= check("owned item names its owner", "bff-worker" in owned)
+    ok &= check("owned item labels the field", "owner" in owned)
 
     bare = swarm.parked_item_text(
         {"id": 3, "title": "x", "workdir": "/w", "context": ""})

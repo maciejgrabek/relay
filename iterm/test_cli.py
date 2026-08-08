@@ -1672,6 +1672,41 @@ def run():
                 code == 0 and n_left == 0)
     wmc.close()
 
+    # --- relay next / relay parked: an item owned by someone else -----------
+    # claim_next_parked returning None is ambiguous on its own: it means
+    # either "nothing parked here" or "parked here, but none of it is mine".
+    # cmd_next must tell those apart instead of printing the same "nothing
+    # parked" text for both - the second case is a lie the moment `relay
+    # parked` lists the very row `relay next` just refused. And that listing
+    # must show WHO owns it, or a reader has no way to learn why it was
+    # refused.
+    here = os.getcwd()
+    pk = db.connect()
+    db.register(pk, "park-caller", "PARK-CALLER-1", "worker", "parkproj")
+    owned_id = db.park_task(pk, "someone else's idea", here, owner="other-owner",
+                            context='{"status":"claimed by nobody yet"}')
+
+    code, out, _ = run_cli("next", iterm_id="w0t1p0:PARK-CALLER-1")
+    ok &= check("next: exit 0 even when refusing", code == 0)
+    ok &= check("next: does NOT falsely claim the directory is empty",
+                "nothing parked" not in out)
+    ok &= check("next: states the true count", "1 parked" in out)
+    ok &= check("next: says it belongs to someone else",
+                "other sessions" in out or "other session" in out)
+    ok &= check("next: points at relay parked",
+                "relay parked" in out)
+    still_parked = db.get_task(pk, owned_id)
+    ok &= check("next: did NOT actually claim the other session's item",
+                still_parked["parked"] == 1 and still_parked["owner"] == "other-owner")
+
+    code, out, _ = run_cli("parked", iterm_id="w0t1p0:PARK-CALLER-1")
+    ok &= check("parked: exit 0", code == 0)
+    ok &= check("parked: shows the item", "someone else's idea" in out)
+    ok &= check("parked: shows WHOSE it is, so the refusal above is explained",
+                "other-owner" in out)
+
+    pk.close()
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

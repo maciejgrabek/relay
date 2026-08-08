@@ -1031,11 +1031,24 @@ def cmd_next(args) -> int:
                                                    db.registered_names(conn))
     row = db.claim_next_parked(conn, _my_workdir(), name)
     if row is None:
-        print(f"nothing parked in {_my_workdir()}\n\n"
-              "Parked work is what the operator captured with `i` in the relay\n"
-              "panel while you were busy - a thought they did not want to\n"
-              "spend your context on at the time. `relay parked` lists it\n"
-              "without claiming; `relay next` takes the oldest one.")
+        # claim_next_parked returning None means either "nothing parked here
+        # at all" or "there is parked work here, but every item belongs to
+        # another session" (mine-before-unowned already ruled out anything
+        # this session could take). Those are different facts and need
+        # different sentences - conflating them told a session to go run
+        # `relay parked`, which would then show it a row this command just
+        # refused, with no way to tell why.
+        others = db.list_parked(conn, _my_workdir())
+        if not others:
+            print(f"nothing parked in {_my_workdir()}\n\n"
+                  "Parked work is what the operator captured with `i` in the relay\n"
+                  "panel while you were busy - a thought they did not want to\n"
+                  "spend your context on at the time. `relay parked` lists it\n"
+                  "without claiming; `relay next` takes the oldest one.")
+        else:
+            print(f"{len(others)} parked in {_my_workdir()}, but none of it is "
+                  "yours to claim - it is earmarked for other sessions.\n"
+                  "`relay parked` will show it.")
         return 0
     print("claimed - it is now an ordinary relay task (state: doing)\n")
     print(swarm.parked_item_text(row))

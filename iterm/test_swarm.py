@@ -822,6 +822,11 @@ def run():
     ok &= check("an unknown workdir matches nothing",
                 not swarm.same_checkout("", d)
                 and not swarm.same_checkout("", ""))
+    # real_workdir must agree with db._norm_workdir on the root path: stripping
+    # "/" down to "" would silently reclassify a literal root workdir as
+    # "unknown", which same_checkout treats as "never matches".
+    ok &= check("real_workdir preserves a literal root path",
+                swarm.real_workdir("/") == "/")
 
     def _sess_row(name, workdir, role="worker", closed_at=0):
         return {"name": name, "workdir": workdir, "role": role,

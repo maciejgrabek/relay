@@ -57,14 +57,24 @@ def derive_name(cwd: str, taken) -> str:
 def real_workdir(p) -> str:
     """A workdir normalized for comparison: symlinks resolved, trailing slash
     dropped. /tmp vs /private/tmp is the same checkout on macOS, and reading it
-    as two would silently disarm every check built on this."""
-    s = str(p or "").rstrip("/")
+    as two would silently disarm every check built on this.
+
+    This duplicates db._norm_workdir's normalization rather than calling it:
+    swarm.py is deliberately dependency-free (no db import, unit-tested
+    standalone), and same_checkout/checkout_occupants need this before a
+    session ever opens sqlite. Keep the two in agreement or callers that
+    assume they are interchangeable get burned - in particular, the empty
+    check MUST run before any trailing-slash strip: stripping "/" down to ""
+    would silently turn a literal root path into "unknown workdir", which
+    same_checkout treats as "never matches"."""
+    s = str(p or "")
     if not s:
         return ""
     try:
-        return os.path.realpath(s) or s
+        real = os.path.realpath(s) or s
     except Exception:
-        return s
+        real = s
+    return real if real == "/" else real.rstrip("/")
 
 
 def same_checkout(a, b) -> bool:
@@ -1092,11 +1102,21 @@ def parked_item_text(row) -> str:
     later, so it is printed, not summarised. A malformed stamp degrades to no
     context rather than an error: it is decoration on top of the title, and
     losing it must never cost the operator the item.
+
+    Owner is only shown when the row has one. Unowned is the normal case for
+    a freshly parked item and stays visually quiet; an owned item must say
+    whose it is, because `relay parked` lists it right alongside items
+    anyone can take, and without this a reader cannot tell "unclaimed" from
+    "earmarked for someone else" - which is exactly why `relay next` just
+    refused it.
     """
     import json
     tid = _get(row, "id", "?")
     out = [f"#{tid}  {_get(row, 'title', '')}",
            f"     dir  {_get(row, 'workdir', '')}"]
+    owner = _get(row, "owner")
+    if owner:
+        out.append(f"   owner  {owner}")
     raw = _get(row, "context", "") or ""
     try:
         ctx = json.loads(raw) if raw else {}
