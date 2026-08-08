@@ -1027,6 +1027,35 @@ async def go():
         chk("registered park defaults to SESSION scope (owner is the "
             "swarm name)", rows[0]["owner"] == "park-worker")
 
+    # --- park (i) CRITICAL fix: a registered session with project='' -------
+    # (`relay register --role worker` with no --project, cli.py:151) must
+    # not park an unreachable row. Same fallback as the unregistered branch:
+    # workdir basename, then refuse if that's empty too.
+    noproj_dir = _tempfile.mkdtemp(prefix="relay-park-noproj-")
+    expected_noproj = os.path.basename(noproj_dir)
+    _db2.register(_rconn, "noproj-worker", "np1", "worker", "")
+
+    pn = _TestApp(_one_at("np1", noproj_dir), dry_run=True)
+    async with pn.run_test() as pilot:
+        await pilot.pause()
+        pn._refresh()
+        await pilot.pause()
+        pn.action_park()
+        chk("a registered session with project='' still opens the park "
+            "modal (refusal is a last resort, not the first move)",
+            pn._park is not None)
+        pn._park["buf"] = "empty project idea"
+        pn._park_save()
+        rows = [dict(r) for r in _db2.list_parked(
+            pn._swarm_db_conn(), noproj_dir)]
+        chk("registered-but-projectless park saved", len(rows) == 1
+            and rows[0]["title"] == "empty project idea")
+        chk("registered-but-projectless park falls back to the workdir "
+            "basename, not '' - a '' project is invisible to "
+            "list_projects/wipe_project/Z zap, exactly the unreachable-row "
+            "bug this fix closes",
+            rows[0]["project"] == expected_noproj and expected_noproj)
+
     pd = _TestApp(_one_at("pd1", "/"), dry_run=True)
     async with pd.run_test() as pilot:
         await pilot.pause()
@@ -1036,6 +1065,38 @@ async def go():
         chk("a workdir with no usable basename ('/') refuses the park "
             "instead of stranding it with an unreachable '' project",
             pd._park is None and pd._modal_open)
+
+    # --- park (i) context stamp: "last" comes off SessionInfo.last_command, -
+    # cached by the watcher for EVERY tab regardless of registration - the
+    # spec's own `"last": "grep -rn ..."` example, and the field
+    # swarm.parked_item_text already renders with no producer before this
+    # fix. Checked on an UNREGISTERED tab since that is the spec's main
+    # persona and the case that previously got an empty "{}" stamp.
+    import json as _json2
+
+    def _one_at_cmd(sid, workdir, cmd):
+        return {sid: SessionInfo(sid, title=sid, window_idx=0, tab_idx=0,
+                                 last_screen=["x"], workdir=workdir,
+                                 last_command=cmd)}
+
+    ctx_dir = _tempfile.mkdtemp(prefix="relay-park-ctx-")
+    pc = _TestApp(_one_at_cmd("pc1", ctx_dir, 'grep -rn "TODO" src/'),
+                 dry_run=True)
+    async with pc.run_test() as pilot:
+        await pilot.pause()
+        pc._refresh()
+        await pilot.pause()
+        pc.action_park()
+        pc._park["buf"] = "context idea"
+        pc._park_save()
+        rows = [dict(r) for r in _db2.list_parked(
+            pc._swarm_db_conn(), ctx_dir)]
+        chk("context-stamp park saved", len(rows) == 1)
+        ctx = _json2.loads(rows[0]["context"] or "{}")
+        chk("unregistered tab's context stamp carries 'last' from "
+            "SessionInfo.last_command - real context for the spec's main "
+            "persona, where it used to be an empty '{}'",
+            ctx.get("last") == 'grep -rn "TODO" src/')
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok

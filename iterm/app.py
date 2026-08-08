@@ -2388,7 +2388,21 @@ class RelayApp(App):
         reg = swarmdb.get_by_iterm_id(self._swarm_db_conn(), sid)
         name = reg["name"] if reg else ""
         if reg:
-            project = reg["project"]
+            # A registered session can itself have project='' - `relay
+            # register --role worker` with no --project writes exactly that
+            # (cli.py:151) - and the row would then be invisible to
+            # list_projects / wipe_project / Z zap the same way an
+            # unregistered tab's park would be. Same fallback as the
+            # unregistered branch below: workdir basename, then refuse.
+            project = reg["project"] or \
+                os.path.basename(os.path.normpath(workdir))
+            if not project:
+                self._modal_show(
+                    "CANNOT PARK",
+                    ["Could not derive a project name",
+                     "from this tab's directory - refusing",
+                     "rather than stranding the idea unreachably."])
+                return
         else:
             # An unregistered tab has no project on file, and tasks.project
             # would default to '' - but list_projects filters WHERE project
@@ -2449,7 +2463,7 @@ class RelayApp(App):
         swarmdb.park_task(conn, p["buf"].strip(), p["workdir"],
                           owner=None if p["dir"] else (p["name"] or None),
                           project=p.get("project", ""),
-                          context=self._park_context(p["name"]),
+                          context=self._park_context(p["name"], p["sid"]),
                           created_by="operator")
         self._park_close()
 
@@ -2463,17 +2477,30 @@ class RelayApp(App):
         """
         return (getattr(info, "workdir", "") or "").strip()
 
-    def _park_context(self, name: str) -> str:
+    def _park_context(self, name: str, sid: str) -> str:
         """An inert JSON stamp of what this session was doing at capture time.
         Free to collect - relay already has all of it - and it is what stops a
-        seven-word idea from being undecodable three days later."""
+        seven-word idea from being undecodable three days later.
+
+        "doing"/"status" need a registered swarm name (they come off the
+        sessions/tasks tables) so an unregistered tab - the spec's main
+        persona for parked work - never got either. "last" does not: it is
+        SessionInfo.last_command, cached by the watcher for every tab it
+        sees regardless of registration, and it is exactly the spec's
+        `"last": "grep -rn ..."` example. Stamping it gives an unregistered
+        tab real context for free, and it is what swarm.parked_item_text
+        already knows how to render - that "last" row had no producer
+        before this."""
         import json
         conn = self._swarm_db_conn()
         row = swarmdb.get_session(conn, name) if name else None
         cur = swarmdb.current_task_for(conn, name) if name else None
+        info = self.watcher.sessions.get(sid) if self.watcher else None
         out = {}
         if cur:
             out["doing"] = f"#{cur['id']} {cur['title']}"
+        if info and info.last_command:
+            out["last"] = info.last_command
         if row and row["status_text"]:
             out["status"] = row["status_text"]
         return json.dumps(out)
