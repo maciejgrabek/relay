@@ -134,16 +134,19 @@ def run():
             return self.conn.commit()
 
     RACE_WORKDIR = "/Work/race-test"
-    # Test 1: RETRY SUCCEEDS. Two items parked, first is stolen mid-call, should
-    # return the second item (owned by the caller).
-    h = db.park_task(conn, "idea h", RACE_WORKDIR)
-    i = db.park_task(conn, "idea i", RACE_WORKDIR, owner="caller1")
+    # Test 1: RETRY SUCCEEDS. Two unowned items in order (older, newer).
+    # Steal the older one (which SELECT picks first by id), verify claim_next_parked
+    # retries and returns the second item.
+    h = db.park_task(conn, "idea h unowned", RACE_WORKDIR)  # older, picked by SELECT
+    i = db.park_task(conn, "idea i unowned", RACE_WORKDIR)  # newer, fallback after steal
     wrapped_conn = _StealAfterSelect(conn, h, "thief")
     result = db.claim_next_parked(wrapped_conn, RACE_WORKDIR, "caller1")
-    ok &= check("atomicity retry: stolen first item, returns second unclaimed",
-                result is not None and result["id"] == i and result["owner"] == "caller1")
-    # Verify the stolen item was actually claimed by the thief
-    ok &= check("stolen item is owned by thief, not caller",
+    ok &= check("atomicity retry: stolen item detected, returns second item",
+                result is not None and result["id"] == i)
+    ok &= check("returned item is claimed by caller, not thief",
+                result["owner"] == "caller1" and result["state"] == "doing")
+    # Verify the stolen item is actually owned by the thief (steal succeeded)
+    ok &= check("stolen older item belongs to thief",
                 db.get_task(conn, h)["owner"] == "thief")
 
     # Test 2: EXHAUSTS TO NONE. One item parked, stolen mid-call, should return None.
