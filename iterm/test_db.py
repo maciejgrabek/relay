@@ -108,6 +108,34 @@ def run():
     ok &= check("orphan never touches live tasks",
                 db.get_task(conn, live)["owner"] == "bff")
 
+    # Atomicity: the UPDATE must guard with AND parked=1 to detect if another
+    # session claimed the row between SELECT and UPDATE. Use a fresh workdir to
+    # isolate this test from prior state.
+    RACE_WORKDIR = "/Work/race-test"
+    g = db.park_task(conn, "idea g", RACE_WORKDIR)
+    # Manually claim g as 'other' (simulating another session's claim between
+    # the SELECT and UPDATE in a claim_next_parked call)
+    conn.execute("UPDATE tasks SET parked=0, owner='other' WHERE id=?", (g,))
+    conn.commit()
+    # Now attempt to claim g as 'api'. With the AND parked=1 guard, the UPDATE
+    # will see rowcount=0 because g is no longer parked. It will retry, find no
+    # parked items in this workdir, and return None.
+    result = db.claim_next_parked(conn, RACE_WORKDIR, "api")
+    ok &= check("atomicity guard: UPDATE's AND parked=1 detects claimed items",
+                result is None)
+
+    # Ordering: ORDER BY (owner IS NULL), id must put owner's own items BEFORE
+    # older unowned items. Park unowned first (older), then owned by owner4
+    # (newer). When owner4 claims, it must take its own item, not the older
+    # unowned one. This proves the ordering clause is actually used.
+    unowned_older = db.park_task(conn, "idea unowned older", W)
+    owned_newer = db.park_task(conn, "idea owned newer", W, owner="owner4")
+    claimed_own = db.claim_next_parked(conn, W, "owner4")
+    ok &= check("ORDER BY (owner IS NULL), id: own item claimed before older unowned",
+                claimed_own["id"] == owned_newer)
+    ok &= check("older unowned item still in backlog",
+                unowned_older in {r["id"] for r in db.list_parked(conn, W)})
+
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.

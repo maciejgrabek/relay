@@ -707,19 +707,29 @@ def claim_next_parked(conn, workdir: str, owner: str,
     and a session with no context on it produces a plausible answer that
     misses the point. A dead owner cannot strand an item because closure
     orphans it (see orphan_parked).
+
+    This claim is atomic despite relay running many CLI processes against one
+    SQLite file with no external lock: the UPDATE re-checks parked=1 and only
+    succeeds if the row was not claimed by another session between the SELECT
+    and UPDATE. If the UPDATE lands zero rows, the row was claimed by someone
+    else - we retry up to 5 times and return None if no claim succeeds.
     """
-    row = conn.execute(
-        """SELECT * FROM tasks
-            WHERE parked=1 AND workdir=? AND (owner=? OR owner IS NULL)
-            ORDER BY (owner IS NULL), id
-            LIMIT 1""", (workdir, owner)).fetchone()
-    if row is None:
-        return None
-    conn.execute(
-        "UPDATE tasks SET parked=0, owner=?, state='doing', updated_at=? "
-        "WHERE id=?", (owner, _now(now), row["id"]))
-    conn.commit()
-    return get_task(conn, row["id"])
+    for _ in range(5):
+        row = conn.execute(
+            """SELECT * FROM tasks
+                WHERE parked=1 AND workdir=? AND (owner=? OR owner IS NULL)
+                ORDER BY (owner IS NULL), id
+                LIMIT 1""", (workdir, owner)).fetchone()
+        if row is None:
+            return None
+        cur = conn.execute(
+            "UPDATE tasks SET parked=0, owner=?, state='doing', updated_at=? "
+            "WHERE id=? AND parked=1", (owner, _now(now), row["id"]))
+        conn.commit()
+        if cur.rowcount > 0:
+            return get_task(conn, row["id"])
+        # Row was claimed by another session; retry
+    return None
 
 
 def drop_parked(conn, task_id: int) -> bool:
