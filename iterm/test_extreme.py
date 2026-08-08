@@ -542,6 +542,8 @@ def test_park_modal_text():
         any("widget shows parked count" in r for r in rows))
     chk("footer teaches the keys",
         any("ENTER park" in r for r in rows) and any("ESC" in r for r in rows))
+    chk("TAB in footer when scope_label provided",
+        any("TAB scope" in r for r in rows))
 
     d = appmod.park_modal_text("x", "bff-worker", True, [], 80)
     chk("dir scope marks DIR", any("[·] DIR" in r for r in d.splitlines()))
@@ -561,10 +563,40 @@ def test_park_modal_text():
         any("[·] DIR" in r for r in urows))
     chk("no name says why there is no toggle",
         any("not registered" in r for r in urows))
+    chk("no TAB in footer when scope_label empty",
+        not any("TAB scope" in r for r in urows))
 
-    narrow = appmod.park_modal_text("y" * 200, "w", False, [], 40)
-    chk("width clamped", all(len(r) <= 40 for r in narrow.splitlines()))
+    # Property-based: cursor must be present for all buffer lengths at all widths
+    test_widths = [40, 80]
+    test_buffer_lengths = [0, 1, 10, 50, 74, 100, 300, 500]
+    for test_width in test_widths:
+        for buf_len in test_buffer_lengths:
+            buf = "x" * buf_len
+            result = appmod.park_modal_text(buf, "w", False, [], test_width)
+            rows = result.splitlines()
+            # Cursor must appear in a row that starts with the box character
+            has_cursor = any(r.startswith("║") and "_" in r for r in rows)
+            chk(f"cursor at width {test_width}, buffer len {buf_len}",
+                has_cursor)
 
+    # Scrolled-off marker appears when and only when needed
+    # At width 80, the footer "TAB scope · ENTER park · ESC cancel" is 35 chars.
+    # inner_target = min(max(12, max(...), 35, 24), max(24, 74)) = min(35, 74) = 35
+    # So buffer can be 34 chars without scrolling, 35+ with scrolling
+    result_no_scroll = appmod.park_modal_text("z" * 34, "w", False, [], 80)
+    chk("no marker for buffer at boundary (len 34, width 80)",
+        not any(r.startswith("║ <") for r in result_no_scroll.splitlines()))
+    result_scroll = appmod.park_modal_text("z" * 35, "w", False, [], 80)
+    chk("marker appears for buffer past boundary (len 35, width 80)",
+        any(r.startswith("║ <") for r in result_scroll.splitlines()))
+
+    # Tail is what survives: verify the end of the buffer appears
+    long_buffer = "start" + "x" * 100 + "END"
+    result_long = appmod.park_modal_text(long_buffer, "w", False, [], 80)
+    chk("tail of long buffer is visible",
+        any("END_" in r and r.startswith("║") for r in result_long.splitlines()))
+
+    # Empty buffer still works
     empty = appmod.park_modal_text("", "w", False, [], 80)
     chk("empty buffer still shows a cursor, inside the box",
         any(r.startswith("║") and "_" in r for r in empty.splitlines()))

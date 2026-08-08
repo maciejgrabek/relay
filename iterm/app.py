@@ -639,29 +639,58 @@ def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
     against the backlog becoming a graveyard, and against parking a duplicate
     of something you forgot. The list is scoped to the WORKDIR and does not
     move when TAB flips the scope - a list that shifts mid-capture hides the
-    duplicate you are about to create.
+    duplicate you are about to create. The scope toggle itself is inert when
+    scope_label is empty (an unregistered tab has no swarm name, so tasks.owner
+    has nowhere to put SESSION scope), and in that case the footer and scope row
+    collapse to DIR-only to avoid promising a key that does nothing.
 
     Cursor is a static glyph, not a blink: the pane repaints on a timer and a
-    2s blink reads as broken rather than alive.
+    2s blink reads as broken rather than alive. The buffer windows to show the
+    tail (where you are typing), with a left-margin '<' marker when text scrolls
+    off the head.
     """
     if scope_label:
         sess_mark = "[ ]" if dir_scope else "[·]"
         dir_mark = "[·]" if dir_scope else "[ ]"
         scope_row = f"SCOPE: {sess_mark} {scope_label}  {dir_mark} DIR"
+        footer = "TAB scope · ENTER park · ESC cancel"
     else:
         # An unregistered tab has no swarm name, so tasks.owner has nothing
-        # to hold and SESSION scope does not exist for it. Say that rather
-        # than rendering a toggle the modal cannot honour.
+        # to hold and SESSION scope does not exist for it.
         scope_row = "SCOPE: [·] DIR  (tab not registered)"
-    lines = [f"{buffer}_", "", scope_row]
+        footer = "ENTER park · ESC cancel"
+
+    # Build non-buffer lines
+    lines_for_inner = ["", scope_row]
     if existing:
-        lines += ["", f"already parked here ({len(existing)}):"]
-        lines += [f"  {t}" for t in existing[:PARK_EXISTING_SHOWN]]
+        lines_for_inner += ["", f"already parked here ({len(existing)}):"]
+        lines_for_inner += [f"  {t}" for t in existing[:PARK_EXISTING_SHOWN]]
         extra = len(existing) - PARK_EXISTING_SHOWN
         if extra > 0:
-            lines.append(f"  +{extra} more")
-    return dos_modal_text("PARK AN IDEA", lines, width,
-                          footer="TAB scope · ENTER park · ESC cancel")
+            lines_for_inner.append(f"  +{extra} more")
+
+    # Compute inner width the same way dos_modal_text does, to know how to window
+    # the buffer. This ensures the buffer line won't be truncated by dos_modal_text's clip.
+    title = "PARK AN IDEA"
+    inner_target = max(len(title), max((len(l) for l in lines_for_inner), default=0),
+                       len(footer), 24)
+    inner_target = min(inner_target, max(24, width - 6))
+
+    # Window the buffer to fit within inner_target. Leave room for the cursor.
+    # If scrolled, show a marker on the left.
+    scrolled = len(buffer) > inner_target - 1
+    if scrolled:
+        marker = "<"
+        # Room for marker, tail of buffer, and cursor: marker (1) + tail + cursor (1)
+        buffer_tail_len = inner_target - len(marker) - 1
+        buffer_tail = buffer[-buffer_tail_len:] if buffer_tail_len > 0 else ""
+        buffer_line = f"{marker}{buffer_tail}_"
+    else:
+        buffer_line = f"{buffer}_"
+
+    # Assemble final lines list
+    lines = [buffer_line, ""] + lines_for_inner
+    return dos_modal_text(title, lines, width, footer=footer)
 
 
 def getting_started_panel(width: int) -> str:
