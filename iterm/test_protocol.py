@@ -9,11 +9,33 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 import protocol  # noqa: E402
+import swarm     # noqa: E402
 
 
 def check(msg, cond):
     print(("  OK   " if cond else " FAIL  ") + msg)
     return bool(cond)
+
+
+def test_parked_item_text():
+    ok = True
+    row = {"id": 18, "title": "retry backoff on inject",
+           "workdir": "/Work/relay",
+           "context": '{"doing":"#14 Wire the PR router","status":"grep"}'}
+    t = swarm.parked_item_text(row)
+    ok &= check("id shown", "#18" in t)
+    ok &= check("title shown", "retry backoff on inject" in t)
+    ok &= check("context doing rendered", "#14 Wire the PR router" in t)
+    ok &= check("context status rendered", "grep" in t)
+    ok &= check("workdir shown", "/Work/relay" in t)
+
+    bare = swarm.parked_item_text(
+        {"id": 3, "title": "x", "workdir": "/w", "context": ""})
+    ok &= check("empty context does not crash", "#3" in bare)
+    broken = swarm.parked_item_text(
+        {"id": 4, "title": "x", "workdir": "/w", "context": "{not json"})
+    ok &= check("unparseable context degrades quietly", "#4" in broken)
+    return ok
 
 
 def run():
@@ -99,4 +121,6 @@ def run():
 
 
 if __name__ == "__main__":
-    sys.exit(0 if run() else 1)
+    ok = run()
+    ok &= test_parked_item_text()
+    sys.exit(0 if ok else 1)

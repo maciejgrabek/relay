@@ -1083,3 +1083,28 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     if not messages:
         out.append("  (none)")
     return "\n".join(out)
+
+
+def parked_item_text(row) -> str:
+    """One parked item, rendered for a session that is about to work on it.
+
+    The context stamp is what makes a seven-word idea decodable three days
+    later, so it is printed, not summarised. A malformed stamp degrades to no
+    context rather than an error: it is decoration on top of the title, and
+    losing it must never cost the operator the item.
+    """
+    import json
+    tid = _get(row, "id", "?")
+    out = [f"#{tid}  {_get(row, 'title', '')}",
+           f"     dir  {_get(row, 'workdir', '')}"]
+    raw = _get(row, "context", "") or ""
+    try:
+        ctx = json.loads(raw) if raw else {}
+    except Exception:
+        ctx = {}
+    if isinstance(ctx, dict):
+        for key, label in (("doing", "doing"), ("last", "last"),
+                           ("status", "status")):
+            if ctx.get(key):
+                out.append(f"  {label:>7}  {ctx[key]}")
+    return "\n".join(out)

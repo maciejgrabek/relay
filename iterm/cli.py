@@ -1012,6 +1012,65 @@ def cmd_task_list(args) -> int:
     return 0
 
 
+def _my_workdir() -> str:
+    """This session's directory. os.getcwd() is authoritative here - the CLI
+    runs INSIDE the session, so it never needs the watcher's iTerm2 guess."""
+    return os.getcwd()
+
+
+def cmd_next(args) -> int:
+    """Claim the next parked item for this directory.
+
+    Deliberately does NOT use _require_me: a plain unregistered Claude tab is
+    the main case for parked work, so this derives a name the way `relay join`
+    with no argument does rather than demanding registration first.
+    """
+    conn = db.connect()
+    me = db.get_by_iterm_id(conn, my_iterm_id())
+    name = me["name"] if me else swarm.derive_name(os.getcwd(),
+                                                   db.registered_names(conn))
+    row = db.claim_next_parked(conn, _my_workdir(), name)
+    if row is None:
+        print(f"nothing parked in {_my_workdir()}\n\n"
+              "Parked work is what the operator captured with `i` in the relay\n"
+              "panel while you were busy - a thought they did not want to\n"
+              "spend your context on at the time. `relay parked` lists it\n"
+              "without claiming; `relay next` takes the oldest one.")
+        return 0
+    print("claimed - it is now an ordinary relay task (state: doing)\n")
+    print(swarm.parked_item_text(row))
+    print("\nIt was captured in seconds while the operator was mid-something\n"
+          "else. Treat it as a seed, not a spec: read the context above, and\n"
+          "ask rather than inferring scope from one line. Mark it finished\n"
+          f"with `relay task update {row['id']} --state done`.")
+    return 0
+
+
+def cmd_parked(args) -> int:
+    """List parked work without claiming any of it."""
+    conn = db.connect()
+    if args.drop is not None:
+        if not db.drop_parked(conn, args.drop):
+            return _err(f"no parked item #{args.drop} (real tasks are not "
+                        f"droppable this way - use `relay task update`)")
+        print(f"dropped parked item #{args.drop}")
+        return 0
+    where = None if args.all else _my_workdir()
+    rows = db.list_parked(conn, where)
+    if not rows:
+        scope = "anywhere" if args.all else _my_workdir()
+        print(f"nothing parked in {scope}\n\n"
+              "Parking is how the operator captures a thought without\n"
+              "spending your context on it. They press `i` in the relay\n"
+              "panel; you pick it up later with `relay next`.")
+        return 0
+    for r in rows:
+        print(swarm.parked_item_text(r))
+        print()
+    print(f"{len(rows)} parked · `relay next` claims the oldest one you can take")
+    return 0
+
+
 def cmd_timer_add(args) -> int:
     """Register (or update) a timer bound to THIS tab.
 
@@ -2006,6 +2065,17 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--project", default=None)
     tl.add_argument("--mine", action="store_true")
     tl.set_defaults(fn=cmd_task_list)
+
+    nx = sub.add_parser("next", help="claim the next parked item for this "
+                                     "directory")
+    nx.set_defaults(fn=cmd_next)
+
+    pk = sub.add_parser("parked", help="list parked work without claiming it")
+    pk.add_argument("--all", action="store_true",
+                    help="every workdir, not just this one")
+    pk.add_argument("--drop", type=int, metavar="ID",
+                    help="remove a parked item")
+    pk.set_defaults(fn=cmd_parked)
 
     pr = sub.add_parser("pr", help="pull requests: who owns which PR")
     prsub = pr.add_subparsers(dest="pr_verb", required=True)
