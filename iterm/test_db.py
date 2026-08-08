@@ -109,20 +109,49 @@ def run():
                 db.get_task(conn, live)["owner"] == "bff")
 
     # Atomicity: the UPDATE must guard with AND parked=1 to detect if another
-    # session claimed the row between SELECT and UPDATE. Use a fresh workdir to
-    # isolate this test from prior state.
+    # session claimed the row between SELECT and UPDATE in claim_next_parked. Use
+    # a connection wrapper to steal the row after the function's SELECT but
+    # before its UPDATE - the exact interleaving two relay processes hit.
+    class _StealAfterSelect:
+        """Claims a row out from under claim_next_parked's SELECT-then-UPDATE,
+        simulating what happens when two relay CLI processes race on one DB."""
+        def __init__(self, real_conn, steal_id, thief):
+            self.conn = real_conn
+            self.steal_id = steal_id
+            self.thief = thief
+            self.fired = False
+        def execute(self, sql, params=()):
+            cur = self.conn.execute(sql, params)
+            # After the first SELECT (in claim_next_parked), perform the steal
+            if not self.fired and sql.lstrip().upper().startswith("SELECT"):
+                self.fired = True
+                self.conn.execute(
+                    "UPDATE tasks SET parked=0, owner=?, state='doing' "
+                    "WHERE id=?", (self.thief, self.steal_id))
+                self.conn.commit()
+            return cur
+        def commit(self):
+            return self.conn.commit()
+
     RACE_WORKDIR = "/Work/race-test"
-    g = db.park_task(conn, "idea g", RACE_WORKDIR)
-    # Manually claim g as 'other' (simulating another session's claim between
-    # the SELECT and UPDATE in a claim_next_parked call)
-    conn.execute("UPDATE tasks SET parked=0, owner='other' WHERE id=?", (g,))
-    conn.commit()
-    # Now attempt to claim g as 'api'. With the AND parked=1 guard, the UPDATE
-    # will see rowcount=0 because g is no longer parked. It will retry, find no
-    # parked items in this workdir, and return None.
-    result = db.claim_next_parked(conn, RACE_WORKDIR, "api")
-    ok &= check("atomicity guard: UPDATE's AND parked=1 detects claimed items",
-                result is None)
+    # Test 1: RETRY SUCCEEDS. Two items parked, first is stolen mid-call, should
+    # return the second item (owned by the caller).
+    h = db.park_task(conn, "idea h", RACE_WORKDIR)
+    i = db.park_task(conn, "idea i", RACE_WORKDIR, owner="caller1")
+    wrapped_conn = _StealAfterSelect(conn, h, "thief")
+    result = db.claim_next_parked(wrapped_conn, RACE_WORKDIR, "caller1")
+    ok &= check("atomicity retry: stolen first item, returns second unclaimed",
+                result is not None and result["id"] == i and result["owner"] == "caller1")
+    # Verify the stolen item was actually claimed by the thief
+    ok &= check("stolen item is owned by thief, not caller",
+                db.get_task(conn, h)["owner"] == "thief")
+
+    # Test 2: EXHAUSTS TO NONE. One item parked, stolen mid-call, should return None.
+    j = db.park_task(conn, "idea j", RACE_WORKDIR)
+    wrapped_conn2 = _StealAfterSelect(conn, j, "thief2")
+    result2 = db.claim_next_parked(wrapped_conn2, RACE_WORKDIR, "caller2")
+    ok &= check("atomicity exhausts: single item stolen, returns None",
+                result2 is None)
 
     # Ordering: ORDER BY (owner IS NULL), id must put owner's own items BEFORE
     # older unowned items. Park unowned first (older), then owned by owner4
