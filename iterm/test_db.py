@@ -182,6 +182,42 @@ def run():
     ok &= check("get_task still reads a parked row directly",
                 db.get_task(conn, g)["title"] == "invisible idea")
 
+    # --- workdir normalization: symlinked paths address the same directory --
+    # iTerm2 reports the shell's PWD (symlinks intact); os.getcwd() resolves
+    # them. macOS symlinks /tmp -> /private/tmp, so this is not a hypothetical:
+    # a row parked under one spelling must be found (and claimable) under the
+    # other, or the whole feature fails silently for anyone in a symlinked dir.
+    ok &= check("_norm_workdir('') stays '' (never becomes cwd)",
+                db._norm_workdir("") == "")
+
+    real_base = tempfile.mkdtemp()
+    real_dir = os.path.join(real_base, "realdir")
+    os.mkdir(real_dir)
+    link_dir = os.path.join(real_base, "linkdir")
+    os.symlink(real_dir, link_dir)
+    real_resolved = os.path.realpath(real_dir)
+
+    sym_id = db.park_task(conn, "idea via symlink", link_dir)
+    ok &= check("park_task normalizes a symlinked workdir on write",
+                db.get_task(conn, sym_id)["workdir"] == real_resolved)
+    ok &= check("list_parked(resolved) finds a row parked via the symlink",
+                sym_id in {r["id"] for r in db.list_parked(conn, real_resolved)})
+    ok &= check("list_parked(symlink) finds the same row too",
+                sym_id in {r["id"] for r in db.list_parked(conn, link_dir)})
+
+    real_id = db.park_task(conn, "idea via real path", real_dir)
+    ok &= check("list_parked(symlink) also finds a row parked via the real path",
+                real_id in {r["id"] for r in db.list_parked(conn, link_dir)})
+
+    trail_id = db.park_task(conn, "idea trailing slash", real_dir + "/")
+    ok &= check("a trailing slash normalizes to the same directory",
+                db.get_task(conn, trail_id)["workdir"] == real_resolved)
+
+    claimed = db.claim_next_parked(conn, link_dir, "sym-claimer")
+    ok &= check("claim_next_parked claims via the symlinked spelling "
+                "(FIFO: the earliest of the three rows above)",
+                claimed is not None and claimed["id"] == sym_id)
+
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.

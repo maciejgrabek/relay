@@ -699,6 +699,23 @@ def list_tasks(conn, project: Optional[str] = None,
 # half-formed idea can never be handed to a worker as if it were scoped work.
 
 
+def _norm_workdir(p: str) -> str:
+    """One spelling per directory. iTerm2 reports the shell's PWD (symlinks
+    intact) while os.getcwd() resolves them, so /tmp/x and /private/tmp/x
+    are the same place written two ways. Every parked-work path goes
+    through here or the addressing silently misses.
+
+    '' passes through unchanged - an empty workdir is already refused
+    upstream, and os.path.realpath('') resolves to the CURRENT directory,
+    which would silently turn "no workdir" into "wherever this process
+    happens to be running" if it were not special-cased.
+    """
+    if not p:
+        return p
+    real = os.path.realpath(p)
+    return real if real == "/" else real.rstrip("/")
+
+
 def park_task(conn, title: str, workdir: str, owner: Optional[str] = None,
               project: str = "", context: str = "",
               created_by: Optional[str] = None,
@@ -708,7 +725,8 @@ def park_task(conn, title: str, workdir: str, owner: Optional[str] = None,
                              spec_path, blocked_by, created_by, updated_at,
                              parked, workdir, context)
            VALUES(?,NULL,?,'todo',?,NULL,'',?,?,1,?,?)""",
-        (project, title, owner, created_by, _now(now), workdir, context))
+        (project, title, owner, created_by, _now(now), _norm_workdir(workdir),
+         context))
     conn.commit()
     return cur.lastrowid
 
@@ -721,7 +739,7 @@ def list_parked(conn, workdir: Optional[str] = None) -> List[sqlite3.Row]:
             "SELECT * FROM tasks WHERE parked=1 ORDER BY id").fetchall()
     return conn.execute(
         "SELECT * FROM tasks WHERE parked=1 AND workdir=? ORDER BY id",
-        (workdir,)).fetchall()
+        (_norm_workdir(workdir),)).fetchall()
 
 
 def claim_next_parked(conn, workdir: str, owner: str,
@@ -740,6 +758,7 @@ def claim_next_parked(conn, workdir: str, owner: str,
     and UPDATE. If the UPDATE lands zero rows, the row was claimed by someone
     else - we retry up to 5 times and return None if no claim succeeds.
     """
+    workdir = _norm_workdir(workdir)
     for _ in range(5):
         row = conn.execute(
             """SELECT * FROM tasks
