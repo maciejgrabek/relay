@@ -655,14 +655,18 @@ def set_task_state(conn, task_id: int, state: str,
 
 def list_tasks(conn, project: Optional[str] = None,
                owner: Optional[str] = None) -> List[sqlite3.Row]:
-    where, args = [], []
+    """Real work only. Parked rows (parked=1) are deliberately invisible here:
+    every coordinator-facing surface reads through this function, so filtering
+    once is what guarantees a half-formed thought is never assignable. Read a
+    parked row with get_task/list_parked instead."""
+    where, args = ["parked=0"], []
     if project is not None:
         where.append("project=?")
         args.append(project)
     if owner is not None:
         where.append("owner=?")
         args.append(owner)
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+    w = "WHERE " + " AND ".join(where)
     return conn.execute(f"SELECT * FROM tasks {w} ORDER BY id", args).fetchall()
 
 
@@ -757,7 +761,7 @@ def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
     """The task to show in the TUI's TASK NOW column: an in-flight task if any
     (doing beats blocked beats todo), most recently updated first."""
     return conn.execute(
-        """SELECT * FROM tasks WHERE owner=? AND state!='done'
+        """SELECT * FROM tasks WHERE owner=? AND state!='done' AND parked=0
            ORDER BY CASE state WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1
                     ELSE 2 END, updated_at DESC LIMIT 1""",
         (owner,)).fetchone()

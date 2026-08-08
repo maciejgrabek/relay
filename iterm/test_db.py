@@ -168,6 +168,20 @@ def run():
     ok &= check("older unowned item still in backlog",
                 unowned_older in {r["id"] for r in db.list_parked(conn, W)})
 
+    # --- parked rows are invisible to every coordinator-facing read ---------
+    g = db.park_task(conn, "invisible idea", W, owner="bff", project="p")
+    all_ids = {t["id"] for t in db.list_tasks(conn)}
+    ok &= check("list_tasks hides parked rows", g not in all_ids)
+    mine = {t["id"] for t in db.list_tasks(conn, owner="bff")}
+    ok &= check("list_tasks(owner=) hides parked rows", g not in mine)
+    proj = {t["id"] for t in db.list_tasks(conn, project="p")}
+    ok &= check("list_tasks(project=) hides parked rows", g not in proj)
+    cur_t = db.current_task_for(conn, "bff")
+    ok &= check("current_task_for never returns a parked row",
+                cur_t is None or cur_t["id"] != g)
+    ok &= check("get_task still reads a parked row directly",
+                db.get_task(conn, g)["title"] == "invisible idea")
+
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.
