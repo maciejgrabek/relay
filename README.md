@@ -1155,12 +1155,18 @@ and appends the swarm identity when the tab is a registered coordinator/worker:
 🟡 RELAY:wild                    armed wild
 🔴 RELAY:insane                  armed insane
 🟢 RELAY:safe · bff-worker (work)   a swarm worker
+🟢 RELAY:safe · 2 PARKED         2 items parked in this tab's directory
 ⬛ RELAY: panel                  relay's own tab (inert - relay never arms itself)
 ⚫ RELAY: off                    relay itself is not running
 ```
 
 (The color comes from the emoji circle: iTerm2's status-bar API returns plain
 text, so a colored glyph is how you get color-per-mode.)
+
+The `N PARKED` suffix (see [Parked work](#parked-work-i)) appears on every tab
+whose directory has parked items, armed or not - the badge is on every tab,
+which is where the operator actually looks, and it is the whole nudge: relay
+never pushes a parked item into a session.
 
 **Click a badge to cycle its arm level** - `off -> safe -> wild -> insane -> off`,
 exactly what `Space` does in the panel, and the panel row updates in lockstep
