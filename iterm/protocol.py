@@ -185,7 +185,9 @@ PARKED WORK - PICKING UP WHAT THE OPERATOR SHELVED
 While you were busy, the operator had a thought. Rather than typing it at you
 - which would have pulled this session toward work that was not the point of
 the turn - they pressed `i` in the relay panel and parked it. Parked items are
-addressed by DIRECTORY, so anything parked in your workdir is yours to take.
+addressed by DIRECTORY, but not everything parked in your workdir is yours to
+take: an item parked for a DIFFERENT session is never handed to you, only
+unowned items and ones parked for you specifically.
 
     relay parked          what is parked here (claims nothing)
     relay next            claim the oldest one you can take
