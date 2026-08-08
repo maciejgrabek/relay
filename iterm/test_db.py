@@ -48,6 +48,66 @@ def run():
     ok &= check("workdir defaults to ''", row["workdir"] == "")
     ok &= check("context defaults to ''", row["context"] == "")
 
+    # --- parked work --------------------------------------------------------
+    W = "/Work/relay"
+    V = "/Work/other"
+    a = db.park_task(conn, "idea a", W, owner="bff", context='{"doing":"#14"}')
+    b = db.park_task(conn, "idea b", W)
+    c = db.park_task(conn, "idea c", V)
+
+    ok &= check("park_task sets parked=1", db.get_task(conn, a)["parked"] == 1)
+    ok &= check("park_task stores workdir", db.get_task(conn, a)["workdir"] == W)
+    ok &= check("park_task stores context",
+                db.get_task(conn, a)["context"] == '{"doing":"#14"}')
+    ok &= check("DIR scope parks unowned", db.get_task(conn, b)["owner"] is None)
+
+    ok &= check("list_parked scopes to workdir",
+                [r["id"] for r in db.list_parked(conn, W)] == [a, b])
+    ok &= check("list_parked(None) is every workdir",
+                {r["id"] for r in db.list_parked(conn)} == {a, b, c})
+    ok &= check("list_parked excludes unparked rows",
+                tid not in {r["id"] for r in db.list_parked(conn)})
+
+    # Own-before-unowned, then FIFO. b (unowned) was parked after a (bff's),
+    # but a different session must not take a's item.
+    got = db.claim_next_parked(conn, W, "api")
+    ok &= check("stranger skips owned, takes unowned", got["id"] == b)
+    ok &= check("claim unparks", got["parked"] == 0)
+    ok &= check("claim sets owner", got["owner"] == "api")
+    ok &= check("claim sets doing", got["state"] == "doing")
+    ok &= check("claimed row leaves the parked list",
+                b not in {r["id"] for r in db.list_parked(conn, W)})
+
+    ok &= check("owner takes their own first",
+                db.claim_next_parked(conn, W, "bff")["id"] == a)
+    ok &= check("empty workdir claims nothing",
+                db.claim_next_parked(conn, W, "bff") is None)
+    ok &= check("other workdir is untouched",
+                [r["id"] for r in db.list_parked(conn, V)] == [c])
+
+    # drop
+    d = db.park_task(conn, "idea d", W)
+    ok &= check("drop_parked removes a parked row", db.drop_parked(conn, d))
+    ok &= check("drop_parked is false on a gone row", not db.drop_parked(conn, d))
+    ok &= check("drop_parked refuses real work", not db.drop_parked(conn, tid))
+    ok &= check("refused drop left the task alive",
+                db.get_task(conn, tid) is not None)
+
+    # orphan
+    e = db.park_task(conn, "idea e", W, owner="bff")
+    f = db.park_task(conn, "idea f", W, owner="api")
+    live = db.add_task(conn, "real work", project="p", owner="bff")
+    ok &= check("orphan_parked reports how many it freed",
+                db.orphan_parked(conn, "bff") == 1)
+    ok &= check("orphaned item loses its owner",
+                db.get_task(conn, e)["owner"] is None)
+    ok &= check("orphaned item keeps its workdir",
+                db.get_task(conn, e)["workdir"] == W)
+    ok &= check("orphan leaves other owners alone",
+                db.get_task(conn, f)["owner"] == "api")
+    ok &= check("orphan never touches live tasks",
+                db.get_task(conn, live)["owner"] == "bff")
+
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.

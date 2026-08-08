@@ -666,6 +666,83 @@ def list_tasks(conn, project: Optional[str] = None,
     return conn.execute(f"SELECT * FROM tasks {w} ORDER BY id", args).fetchall()
 
 
+# --- parked work ------------------------------------------------------------
+#
+# A parked row is a thought, not an assignment. It is addressed by workdir, and
+# every coordinator-facing read filters it out (see list_tasks callers), so a
+# half-formed idea can never be handed to a worker as if it were scoped work.
+
+
+def park_task(conn, title: str, workdir: str, owner: Optional[str] = None,
+              project: str = "", context: str = "",
+              created_by: Optional[str] = None,
+              now: Optional[float] = None) -> int:
+    cur = conn.execute(
+        """INSERT INTO tasks(project, parent_id, title, state, owner,
+                             spec_path, blocked_by, created_by, updated_at,
+                             parked, workdir, context)
+           VALUES(?,NULL,?,'todo',?,NULL,'',?,?,1,?,?)""",
+        (project, title, owner, created_by, _now(now), workdir, context))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_parked(conn, workdir: Optional[str] = None) -> List[sqlite3.Row]:
+    """Oldest first - FIFO is the only honest order for a backlog with no
+    priority field, and the spec's scope line says there will not be one."""
+    if workdir is None:
+        return conn.execute(
+            "SELECT * FROM tasks WHERE parked=1 ORDER BY id").fetchall()
+    return conn.execute(
+        "SELECT * FROM tasks WHERE parked=1 AND workdir=? ORDER BY id",
+        (workdir,)).fetchall()
+
+
+def claim_next_parked(conn, workdir: str, owner: str,
+                      now: Optional[float] = None) -> Optional[sqlite3.Row]:
+    """Take one parked item and promote it to real work.
+
+    Mine before unowned, FIFO within each group. An item owned by ANOTHER
+    session is never returned: it was parked for that session specifically,
+    and a session with no context on it produces a plausible answer that
+    misses the point. A dead owner cannot strand an item because closure
+    orphans it (see orphan_parked).
+    """
+    row = conn.execute(
+        """SELECT * FROM tasks
+            WHERE parked=1 AND workdir=? AND (owner=? OR owner IS NULL)
+            ORDER BY (owner IS NULL), id
+            LIMIT 1""", (workdir, owner)).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE tasks SET parked=0, owner=?, state='doing', updated_at=? "
+        "WHERE id=?", (owner, _now(now), row["id"]))
+    conn.commit()
+    return get_task(conn, row["id"])
+
+
+def drop_parked(conn, task_id: int) -> bool:
+    """Remove a parked item. Scoped to parked=1 so this can never delete real
+    work - `relay task` verbs own that, and they ask for confirmation."""
+    cur = conn.execute("DELETE FROM tasks WHERE id=? AND parked=1", (task_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def orphan_parked(conn, owner: str) -> int:
+    """A session closed: its parked items become the directory's.
+
+    Parked only. Live tasks keep today's behaviour - they wait for `restore`
+    or `clean`, which are operator dispositions, and quietly reassigning real
+    in-flight work would be a much bigger promise than this feature makes.
+    """
+    cur = conn.execute(
+        "UPDATE tasks SET owner=NULL WHERE parked=1 AND owner=?", (owner,))
+    conn.commit()
+    return cur.rowcount
+
+
 def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
     """The task to show in the TUI's TASK NOW column: an in-flight task if any
     (doing beats blocked beats todo), most recently updated first."""
