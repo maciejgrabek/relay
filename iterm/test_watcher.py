@@ -516,6 +516,51 @@ async def title_tests():
     return ok
 
 
+async def session_path_tests():
+    """Watcher._session_path and SessionInfo.workdir: the in-memory cwd cache
+    that gives an UNREGISTERED tab a workdir at all (see set_watcher_workdir
+    in db.py for the registered-only DB counterpart)."""
+    from watcher import Watcher, SessionInfo
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    chk("SessionInfo defaults workdir to ''", SessionInfo("s").workdir == "")
+
+    # async_get_variable absent/raising -> '' (same defensive shape as
+    # _session_job/jobName; FakeSession has no async_get_variable at all, so
+    # calling it exercises the except branch directly).
+    fs = FakeSession()
+    got = await Watcher._session_path(fs)
+    chk("_session_path: unreadable variable -> ''", got == "")
+
+    class BoomVarSession(FakeSession):
+        async def async_get_variable(self, name):
+            raise RuntimeError("boom")
+    got2 = await Watcher._session_path(BoomVarSession())
+    chk("_session_path: async_get_variable raising -> ''", got2 == "")
+
+    class PathSession(FakeSession):
+        async def async_get_variable(self, name):
+            assert name == "path"
+            return "  /work/relay  "
+    got3 = await Watcher._session_path(PathSession())
+    chk("_session_path: strips the variable's value", got3 == "/work/relay")
+
+    class BlankPathSession(FakeSession):
+        async def async_get_variable(self, name):
+            return "   "
+    got4 = await Watcher._session_path(BlankPathSession())
+    chk("_session_path: whitespace-only value -> ''", got4 == "")
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 def arm_request_tests():
     """_swarm_refresh_registry applies + clears spawn arm requests."""
     from watcher import Watcher, SessionInfo
@@ -1436,6 +1481,7 @@ if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = asyncio.run(deliver_tests())
     r3 = asyncio.run(title_tests())
+    r3b = asyncio.run(session_path_tests())
     r4 = arm_request_tests()
     r5 = closed_tests()
     r6 = asyncio.run(own_tab_name_tests())
@@ -1448,6 +1494,6 @@ if __name__ == "__main__":
     r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
     r_thr = close_threads_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r4 and r5 and r6 and r7 and r8
+    sys.exit(0 if (r1 and r2 and r3 and r3b and r4 and r5 and r6 and r7 and r8
                    and r9 and r10 and r11 and r12 and r13 and r_timer
                    and r_thr) else 1)

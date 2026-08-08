@@ -416,10 +416,18 @@ def set_session_context(conn, name: str, workdir: str,
 
 
 def set_watcher_workdir(conn, name: str, workdir: str) -> bool:
-    """The watcher's best guess at a tab's directory, from iTerm2's `path`
-    variable. Written ONLY into an empty workdir: a value set by a CLI verb
-    came from os.getcwd() inside the session itself and is authoritative,
-    while `path` can be stale after a cd. Returns whether it wrote."""
+    """Persist the watcher's best guess at a REGISTERED session's directory,
+    from iTerm2's `path` variable, so sessions.workdir is truthful for CLI
+    consumers that read it by name. Written ONLY into an empty workdir: a
+    value set by a CLI verb came from os.getcwd() inside the session itself
+    and is authoritative, while `path` can be stale after a cd. Returns
+    whether it wrote.
+
+    This covers registered sessions only - there is no `sessions` row to
+    write into for a tab that never registered. That case (the main persona
+    for parked work) is covered instead by SessionInfo.workdir, which the
+    watcher caches in-memory for every tab it sees regardless of
+    registration (see Watcher._session_path / _sync_sessions)."""
     if not (workdir or "").strip():
         return False
     cur = conn.execute(

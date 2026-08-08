@@ -92,6 +92,11 @@ class SessionInfo:
     mode: str = "off"
     hidden: bool = False             # user hid it from the list (UI-only filter)
     job: str = ""                    # iTerm2 foreground job name (shell => no live Claude)
+    workdir: str = ""                # iTerm2 cwd (path var); '' when unreadable.
+                                      # The ONLY directory source an unregistered
+                                      # tab has - a registered one also gets this
+                                      # persisted to sessions.workdir (see
+                                      # set_watcher_workdir).
     state: str = "idle"              # idle | working | prompting | blocked | cleared
     last_command: str = ""
     last_seen: float = 0.0
@@ -441,11 +446,14 @@ class Watcher:
     async def _session_path(s) -> str:
         """iTerm2's current directory for the session, or '' when unavailable.
 
-        This is how an UNREGISTERED tab gets a workdir at all: sessions.workdir
-        is otherwise written only by CLI verbs running inside a registered
-        session, and a solo tab is exactly the case parked work is built for.
-        Defensive in the same way as _session_job: any version quirk or timeout
-        falls back to '' so an unreadable path never breaks a tick.
+        This is how an UNREGISTERED tab gets a workdir at all: cached onto
+        SessionInfo.workdir for every tab _sync_sessions sees, since
+        sessions.workdir (the DB column) is only ever written for a
+        REGISTERED session - either by a CLI verb running inside it, or by
+        the watcher via set_watcher_workdir - and a solo tab that never
+        registered is exactly the case parked work is built for. Defensive in
+        the same way as _session_job: any version quirk or timeout falls back
+        to '' so an unreadable path never breaks a tick.
         """
         try:
             v = await s.async_get_variable("path")
@@ -467,17 +475,23 @@ class Watcher:
                     raw_title = title
                     title = titles.strip_prefix(raw_title)
                     job = await self._session_job(s)
+                    path = await self._session_path(s)
+                    # Cache iTerm2's cwd on the SessionInfo for EVERY tab, the
+                    # same way `job` is cached, regardless of registration -
+                    # this is the only directory source an unregistered solo
+                    # tab has. Registered sessions ALSO get it persisted to
+                    # the DB below, since that's what CLI consumers read.
                     reg = self.registry.get(sid)
                     if reg:
                         conn = self._swarm_conn()
                         name = reg["name"]
-                        path = await self._session_path(s)
                         if path:
                             swarmdb.set_watcher_workdir(conn, name, path)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
-                                           _iterm_session=s, job=job)
+                                           _iterm_session=s, job=job,
+                                           workdir=path)
                         info._raw_title = raw_title
                         # Grab the current screen once so the list/preview has
                         # content immediately, without holding a streamer open.
@@ -489,6 +503,7 @@ class Watcher:
                         info.window_idx, info.tab_idx = wi, ti
                         info._iterm_session = s
                         info.job = job
+                        info.workdir = path
         # Drop sessions whose tabs closed.
         for sid in list(self.sessions):
             if sid not in seen:
