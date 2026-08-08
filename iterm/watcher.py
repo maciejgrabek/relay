@@ -437,6 +437,22 @@ class Watcher:
             v = None
         return v.strip() if isinstance(v, str) and v.strip() else ""
 
+    @staticmethod
+    async def _session_path(s) -> str:
+        """iTerm2's current directory for the session, or '' when unavailable.
+
+        This is how an UNREGISTERED tab gets a workdir at all: sessions.workdir
+        is otherwise written only by CLI verbs running inside a registered
+        session, and a solo tab is exactly the case parked work is built for.
+        Defensive in the same way as _session_job: any version quirk or timeout
+        falls back to '' so an unreadable path never breaks a tick.
+        """
+        try:
+            v = await s.async_get_variable("path")
+        except Exception:
+            v = None
+        return v.strip() if isinstance(v, str) and v.strip() else ""
+
     async def _sync_sessions(self, app) -> None:
         seen = set()
         for wi, w in enumerate(app.windows):
@@ -451,6 +467,13 @@ class Watcher:
                     raw_title = title
                     title = titles.strip_prefix(raw_title)
                     job = await self._session_job(s)
+                    reg = self.registry.get(sid)
+                    if reg:
+                        conn = self._swarm_conn()
+                        name = reg["name"]
+                        path = await self._session_path(s)
+                        if path:
+                            swarmdb.set_watcher_workdir(conn, name, path)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,

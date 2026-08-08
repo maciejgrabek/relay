@@ -1172,6 +1172,22 @@ def run():
                 db.list_projects(mc) == ["p1", "p2", "p3"])
     mc.close()
 
+    # --- watcher-supplied workdir never overwrites a CLI-supplied one -------
+    db.register(conn, "wd1", "sid-wd1", "worker", project="p")
+    ok &= check("fresh session has no workdir",
+                db.get_session(conn, "wd1")["workdir"] == "")
+    ok &= check("watcher fills an empty workdir",
+                db.set_watcher_workdir(conn, "wd1", "/guess"))
+    ok &= check("workdir now set",
+                db.get_session(conn, "wd1")["workdir"] == "/guess")
+    db.set_session_context(conn, "wd1", "/truth", "")
+    ok &= check("watcher does not overwrite a set workdir",
+                not db.set_watcher_workdir(conn, "wd1", "/guess-again"))
+    ok &= check("CLI workdir survived",
+                db.get_session(conn, "wd1")["workdir"] == "/truth")
+    ok &= check("empty guess is never written",
+                not db.set_watcher_workdir(conn, "wd1", ""))
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

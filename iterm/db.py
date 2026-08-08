@@ -415,6 +415,20 @@ def set_session_context(conn, name: str, workdir: str,
     return cur.rowcount > 0
 
 
+def set_watcher_workdir(conn, name: str, workdir: str) -> bool:
+    """The watcher's best guess at a tab's directory, from iTerm2's `path`
+    variable. Written ONLY into an empty workdir: a value set by a CLI verb
+    came from os.getcwd() inside the session itself and is authoritative,
+    while `path` can be stale after a cd. Returns whether it wrote."""
+    if not (workdir or "").strip():
+        return False
+    cur = conn.execute(
+        "UPDATE sessions SET workdir=? WHERE name=? AND workdir=''",
+        (workdir.strip(), name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def set_worktree_repo(conn, name: str, repo: str) -> bool:
     """Record that this session's workdir is a relay-created git worktree of
     `repo`, so wipe can offer to remove it (only when clean)."""
