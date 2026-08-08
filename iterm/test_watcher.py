@@ -917,6 +917,105 @@ async def statusbar_registration_tests():
     return ok
 
 
+async def parked_badge_cache_tests():
+    """The parked count on the badge must agree whether it is served by the
+    AutoLaunch provider (_statusbar_publish writes the state file it reads)
+    or rendered in-process (the StatusBarRPC render callback, used only when
+    no AutoLaunch provider is installed). Both must show the same count from
+    the SAME per-tick bucket - a session that has not run ./install.sh must
+    not silently see 0 parked while relay task add --park tells them to look
+    at this exact badge."""
+    from watcher import Watcher, SessionInfo
+    import config as C
+    import statusbar as SB
+    import tempfile as _tempfile
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    # A freshly constructed watcher always carries the cache attribute, even
+    # before any tick has published - so an RPC render that fires before the
+    # first publish (or while the status bar is disabled/dry-run, in which
+    # case _statusbar_publish returns early and never populates it) reads {}
+    # instead of raising.
+    w0 = Watcher(connection=None, dry_run=False)
+    chk("fresh watcher has _parked_by_workdir", w0._parked_by_workdir == {})
+
+    real_list_parked = W.swarmdb.list_parked
+    real_component = W.iterm2.StatusBarComponent
+    real_rpc = W.iterm2.StatusBarRPC
+    # realpath'd up front: macOS puts tempdirs under a symlink (/var ->
+    # /private/var), and the real list_parked/_statusbar_label pair both
+    # resolve symlinks before comparing workdirs (db._norm_workdir /
+    # swarm.real_workdir) - resolving here keeps the fake rows' workdir
+    # column exactly what the real DB would have stored, instead of testing
+    # a mismatch that is an artifact of this harness, not the code.
+    tmp = os.path.realpath(_tempfile.mkdtemp())
+    saved = {k: os.environ.get(k) for k in
+             ("RELAY_STATUSBAR_AUTOLAUNCH", "RELAY_STATUSBAR_ALIVE",
+              "RELAY_STATUSBAR_STATE")}
+    os.environ["RELAY_STATUSBAR_AUTOLAUNCH"] = os.path.join(tmp, "nope.py")
+    os.environ["RELAY_STATUSBAR_ALIVE"] = os.path.join(tmp, "nope.alive")
+    state_path = os.path.join(tmp, "statusbar.json")
+    os.environ["RELAY_STATUSBAR_STATE"] = state_path
+    try:
+        workdir = os.path.join(tmp, "proj")
+        os.makedirs(workdir, exist_ok=True)
+        W.swarmdb.list_parked = lambda conn: [
+            {"workdir": workdir}, {"workdir": workdir}, {"workdir": workdir}]
+
+        cfg = C.Config(statusbar_enabled=True)
+        w = Watcher(connection=None, dry_run=False, cfg=cfg)
+        w._swarm_conn = lambda: None
+        sid = "s1"
+        w.sessions[sid] = SessionInfo(sid, title="t",
+                                      _iterm_session=FakeSession(),
+                                      mode="safe", workdir=workdir)
+
+        # --- publish path: builds the bucket once and caches it -------------
+        w._statusbar_publish()
+        chk("publish caches the bucket on the watcher",
+            w._parked_by_workdir.get(W.swarm.real_workdir(workdir)) == 3)
+        published = SB.read_state_label(sid, path=state_path)
+        chk("publish path badge shows the parked count",
+            "3 PARKED" in published)
+
+        # --- RPC render path: drive the real render() closure through
+        # _register_statusbar on the SAME watcher, so it reads the SAME
+        # cache _statusbar_publish just built (no second query). ------------
+        captured = {}
+
+        class FakeComponent:
+            def __init__(self, **kw):
+                pass
+
+            async def async_register(self, conn, render, onclick=None):
+                captured["render"] = render
+
+        W.iterm2.StatusBarComponent = FakeComponent
+        W.iterm2.StatusBarRPC = lambda fn: fn      # identity: no live connection
+        await w._register_statusbar()
+        rendered = await captured["render"](None, session_id=sid)
+        chk("RPC render path agrees with the publish path",
+            rendered == published and "3 PARKED" in rendered)
+    finally:
+        W.swarmdb.list_parked = real_list_parked
+        W.iterm2.StatusBarComponent = real_component
+        W.iterm2.StatusBarRPC = real_rpc
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 def legible_spine_tests():
     """Watcher emits differentiated sounds + a _last_event pulse, and detects
     task completions edge-triggered (silent on the first tick)."""
@@ -1493,6 +1592,7 @@ if __name__ == "__main__":
     r6 = asyncio.run(own_tab_name_tests())
     r7 = escalation_ratelimit_tests()
     r8 = asyncio.run(statusbar_registration_tests())
+    r8b = asyncio.run(parked_badge_cache_tests())
     r9 = legible_spine_tests()
     r10 = asyncio.run(pause_tests())
     r11 = asyncio.run(shadow_tests())
@@ -1501,5 +1601,5 @@ if __name__ == "__main__":
     r_timer = asyncio.run(timer_tests())
     r_thr = close_threads_tests()
     sys.exit(0 if (r1 and r2 and r3 and r3b and r4 and r5 and r6 and r7 and r8
-                   and r9 and r10 and r11 and r12 and r13 and r_timer
+                   and r8b and r9 and r10 and r11 and r12 and r13 and r_timer
                    and r_thr) else 1)

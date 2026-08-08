@@ -291,6 +291,17 @@ class Watcher:
         # --- swarm: session timers ---
         self.pending_timer_sids: set = set()   # sids awaiting a restore/re-confirm decision
         self._timers_loaded = False            # restore gate runs once per run
+        # --- swarm: parked-work badge count ---
+        # Built once per tick by _statusbar_publish (one list_parked query,
+        # bucketed by workdir - see there) and read from here by the
+        # in-process StatusBarRPC render callback, so that fallback path gets
+        # the same count without a second per-render query. Starts empty so
+        # it is always defined even before the first publish, and stays empty
+        # (rendering 0 parked) when the status bar is disabled or dry-run
+        # skips _statusbar_publish entirely - that is correct, not a gap: in
+        # dry-run relay mutates nothing and the badge already reads
+        # "RELAY: off".
+        self._parked_by_workdir: Dict[str, int] = {}
 
     def _note(self, msg: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -1361,7 +1372,13 @@ class Watcher:
 
             @iterm2.StatusBarRPC
             async def render(knobs, session_id=iterm2.Reference("id")):
-                return self._statusbar_label(session_id)
+                # Reads the cache _statusbar_publish built this tick (see
+                # self._parked_by_workdir) instead of querying here - this
+                # RPC fires once per second per tab, so a query here would be
+                # exactly the per-tick-query pattern docs/IDEAS.md flags as
+                # debt. Same tick, same freshness as the mode/name/role this
+                # already renders.
+                return self._statusbar_label(session_id, self._parked_by_workdir)
 
             async def on_click(session_id):
                 self._statusbar_click(session_id)
@@ -1448,11 +1465,14 @@ class Watcher:
             # Fetch every parked row ONCE and bucket by workdir, rather than
             # querying per session in the loop below (docs/IDEAS.md already
             # tracks this method's per-tick-query pattern as debt - do not
-            # add another one).
+            # add another one). Cached on the watcher (not just a local) so
+            # the in-process StatusBarRPC render callback can read this same
+            # tick's bucket instead of querying again itself.
             parked_by_workdir: Dict[str, int] = {}
             for row in swarmdb.list_parked(self._swarm_conn()):
                 wd = row["workdir"]
                 parked_by_workdir[wd] = parked_by_workdir.get(wd, 0) + 1
+            self._parked_by_workdir = parked_by_workdir
             labels = {sid: self._statusbar_label(sid, parked_by_workdir)
                      for sid in self.sessions}
             if self.own_sid:
