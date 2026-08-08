@@ -19,6 +19,7 @@ stderr so the calling Claude session sees why), 2 argparse usage error, 3 =
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -913,6 +914,21 @@ def cmd_pr_list(args) -> int:
 def cmd_task_add(args) -> int:
     conn = db.connect()
     if args.park:
+        # A park is DIR-scoped scratch data by design (spec's scope line: "no
+        # priorities, no tags... no editing beyond drop") and has no parent,
+        # no blockers and no spec pointer - --owner, --parent, --blocked-by
+        # and --spec describe REAL task structure that a park cannot carry,
+        # so silently dropping them on the floor would misrepresent what
+        # `relay task add --park --owner x ...` actually did. Refuse instead.
+        # --project is the one exception: it is meaningful for a parked row
+        # (it is what `wipe --all` / Z zap match on), so it is honoured
+        # rather than refused.
+        if args.owner or args.parent is not None or args.blocked_by \
+                or args.spec:
+            return _err("--park cannot be combined with --owner, --parent, "
+                        "--blocked-by or --spec - a parked item is DIR-"
+                        "scoped scratch data with none of those. Drop "
+                        "--park to create a real task instead.")
         # Parking needs no swarm identity: the point is to record a follow-up
         # you would otherwise silently drop, which a solo unregistered session
         # has as much reason to do as a swarm worker. DIR scope, deliberately -
@@ -921,17 +937,34 @@ def cmd_task_add(args) -> int:
         me = db.get_by_iterm_id(conn, my_iterm_id())
         # Carry a project, or the row is unreachable: list_projects and
         # wipe_project both filter/match on a non-empty project, so a
-        # projectless park can never be zapped or wiped. Registered session
-        # uses its own; otherwise the workdir basename, which is exactly
-        # what _default_project falls back to when a session joins.
-        project = (me["project"] if me else "") \
+        # projectless park can never be zapped or wiped. An explicit
+        # --project wins (it is what makes this row reachable from THAT
+        # project's cleanup, and the operator asked for it by name);
+        # otherwise the registered session's own, or the workdir basename -
+        # exactly what _default_project falls back to when a session joins.
+        project = args.project or (me["project"] if me else "") \
             or os.path.basename(os.path.normpath(os.getcwd()))
         if not project:
             return _err("cannot derive a project for this directory - a "
                         "parked item with no project can never be cleaned "
                         "up, so it is refused rather than stranded")
+        # Context: stamp only what this CLI process can honestly obtain.
+        # Unlike the TUI's park modal, a CLI verb has no SessionInfo (that is
+        # watcher-process, in-memory state) so there is no "last command" to
+        # stamp here - only what a registered session's own DB rows carry.
+        # An unregistered caller gets no context, not an invented one.
+        context = ""
+        if me:
+            ctx = {}
+            cur = db.current_task_for(conn, me["name"])
+            if cur:
+                ctx["doing"] = f"#{cur['id']} {cur['title']}"
+            if me["status_text"]:
+                ctx["status"] = me["status_text"]
+            if ctx:
+                context = json.dumps(ctx)
         tid = db.park_task(conn, args.title, os.getcwd(),
-                           owner=None, project=project,
+                           owner=None, project=project, context=context,
                            created_by=(me["name"] if me else "session"))
         print(f"parked #{tid} in {os.getcwd()}  {args.title}\n"
               "Nobody is working on it. `relay parked` lists it; the operator\n"
@@ -1080,9 +1113,17 @@ def cmd_next(args) -> int:
         return 0
     print("claimed - it is now an ordinary relay task (state: doing)\n")
     print(swarm.parked_item_text(row))
+    # "read the context above" only makes sense when there IS a context
+    # stamp to read - an item parked with none (e.g. `relay task add
+    # --park` with nothing to honestly stamp) renders no context lines at
+    # all, and pointing the reader at nothing is worse than saying nothing.
+    seed_note = ("Treat it as a seed, not a spec: read the context above, "
+                 "and ask\nrather than inferring scope from one line."
+                 if swarm.has_park_context(row) else
+                 "Treat it as a seed, not a spec - ask rather than\n"
+                 "inferring scope from one line.")
     print("\nIt was captured in seconds while the operator was mid-something\n"
-          "else. Treat it as a seed, not a spec: read the context above, and\n"
-          "ask rather than inferring scope from one line. Mark it finished\n"
+          f"else. {seed_note} Mark it finished\n"
           f"with `relay task update {row['id']} --state done`.")
     return 0
 
@@ -1091,6 +1132,13 @@ def cmd_parked(args) -> int:
     """List parked work without claiming any of it."""
     conn = db.connect()
     if args.drop is not None:
+        # --drop matches by id alone (db.drop_parked takes no workdir), so
+        # --all changes nothing about how it behaves - silently accepting
+        # both flags would let an operator believe --all scoped the drop
+        # somehow. Refuse instead of pretending to honour it.
+        if args.all:
+            return _err("--all does nothing with --drop - --drop already "
+                        "matches by id across every directory. Drop --all.")
         if not db.drop_parked(conn, args.drop):
             return _err(f"no parked item #{args.drop} (real tasks are not "
                         f"droppable this way - use `relay task update`). "
@@ -1109,7 +1157,16 @@ def cmd_parked(args) -> int:
     for r in rows:
         print(swarm.parked_item_text(r))
         print()
-    print(f"{len(rows)} parked · `relay next` claims the oldest one you can take")
+    if args.all:
+        # relay next only ever claims from THIS directory - do not promise
+        # a claim against the cross-directory list just printed. Verified:
+        # `relay parked --all` from an empty directory lists items parked
+        # elsewhere, and `relay next` there still says "nothing parked".
+        print(f"{len(rows)} parked across every directory · `relay next` "
+              "claims from YOUR directory only, not this list")
+    else:
+        print(f"{len(rows)} parked · `relay next` claims the oldest one "
+              "you can take")
     return 0
 
 

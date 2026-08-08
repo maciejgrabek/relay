@@ -1707,6 +1707,148 @@ def run():
 
     pk.close()
 
+    # --- relay task add --park: incompatible flags must not be silently -----
+    # dropped. --owner/--parent/--blocked-by/--spec describe real task
+    # structure a park cannot carry (it is DIR-scoped scratch data with no
+    # editing beyond drop) - refuse rather than filing the row under a
+    # different shape than what was asked for. --project is the one
+    # exception: honoured, because it is what determines the row's
+    # reachability from `wipe --all` / Z zap.
+    code, out, err = run_cli("task", "add", "x", "--park", "--owner", "bob",
+                             iterm_id="w0t1p0:PARK-FLAGS-1")
+    ok &= check("--park + --owner refuses (a park is DIR-scoped, not "
+                "owned)", code != 0)
+    ok &= check("--park + --owner refusal names the flag",
+                "--owner" in err)
+
+    code, out, err = run_cli("task", "add", "y", "--park", "--parent", "1",
+                             iterm_id="w0t1p0:PARK-FLAGS-1")
+    ok &= check("--park + --parent refuses", code != 0)
+
+    code, out, err = run_cli("task", "add", "z", "--park", "--blocked-by",
+                             "1", iterm_id="w0t1p0:PARK-FLAGS-1")
+    ok &= check("--park + --blocked-by refuses", code != 0)
+
+    flags_dir = tempfile.mkdtemp(prefix="relay-park-flags-")
+    owd = os.getcwd()
+    os.chdir(flags_dir)
+    try:
+        code, out, err = run_cli("task", "add", "explicit project idea",
+                                 "--park", "--project", "explicit-proj",
+                                 iterm_id="w0t1p0:PARK-FLAGS-1")
+        ok &= check("--park + --project is honoured, not refused", code == 0)
+    finally:
+        os.chdir(owd)
+    pf = db.connect()
+    prow = pf.execute("SELECT * FROM tasks WHERE title=?",
+                      ("explicit project idea",)).fetchone()
+    ok &= check("--park + --project files the row under the explicit "
+                "project, not the workdir basename",
+                prow is not None and prow["project"] == "explicit-proj")
+    pf.close()
+
+    # --- relay task add --park: context stamp, honestly obtained -----------
+    # A registered caller's own status_text/current task can be stamped; an
+    # unregistered caller (no CLI-side SessionInfo, unlike the TUI) gets no
+    # context rather than an invented one.
+    ctx_dir = tempfile.mkdtemp(prefix="relay-park-ctxcli-")
+    pc = db.connect()
+    db.register(pc, "ctx-worker", "CTX-CLI-1", "worker", "ctxproj")
+    db.set_status(pc, "ctx-worker", "reviewing PR #9")
+    pc.close()
+    owd = os.getcwd()
+    os.chdir(ctx_dir)
+    try:
+        code, out, err = run_cli("task", "add", "with status",
+                                 "--park", iterm_id="w0t1p0:CTX-CLI-1")
+        ok &= check("registered --park succeeds", code == 0)
+    finally:
+        os.chdir(owd)
+    pc2 = db.connect()
+    ctxrow = pc2.execute("SELECT * FROM tasks WHERE title=?",
+                         ("with status",)).fetchone()
+    ok &= check("registered caller's status_text is stamped into context",
+                ctxrow is not None and "reviewing PR #9" in ctxrow["context"])
+    pc2.close()
+
+    # --- relay next: "read the context above" only when there is any -------
+    nc = db.connect()
+    db.register(nc, "nocontext-worker", "NOCTX-1", "worker", "ncproj")
+    nc_dir = tempfile.mkdtemp(prefix="relay-park-nocontext-")
+    db.park_task(nc, "bare idea, no context", nc_dir, owner=None,
+                project="ncproj")
+    nc.close()
+    owd = os.getcwd()
+    os.chdir(nc_dir)
+    try:
+        code, out, _ = run_cli("next", iterm_id="w0t1p0:NOCTX-1")
+    finally:
+        os.chdir(owd)
+    ok &= check("next: claims the contextless item", code == 0)
+    ok &= check("next: does NOT tell the reader to read context that "
+                "was never rendered",
+                "read the context above" not in out)
+
+    wc = db.connect()
+    db.register(wc, "withcontext-worker", "WCTX-1", "worker", "wcproj")
+    wc_dir = tempfile.mkdtemp(prefix="relay-park-withcontext-")
+    db.park_task(wc, "idea with context", wc_dir, owner=None,
+                project="wcproj", context='{"status":"mid-review"}')
+    wc.close()
+    owd = os.getcwd()
+    os.chdir(wc_dir)
+    try:
+        code, out, _ = run_cli("next", iterm_id="w0t1p0:WCTX-1")
+    finally:
+        os.chdir(owd)
+    ok &= check("next: DOES point at the context when there is some",
+                "read the context above" in out)
+
+    # --- relay parked --all: footer must not promise a claim it cannot -----
+    # make. Verified bug: `relay parked --all` lists items from elsewhere and
+    # used to say `relay next` claims the oldest one you can take, which is
+    # false the moment "the oldest one" is not in this directory.
+    ac = db.connect()
+    db.register(ac, "all-footer-worker", "ALLFOOT-1", "worker", "afproj")
+    elsewhere_dir = tempfile.mkdtemp(prefix="relay-park-elsewhere-")
+    db.park_task(ac, "elsewhere idea", elsewhere_dir, owner=None,
+                project="afproj")
+    ac.close()
+    empty_dir = tempfile.mkdtemp(prefix="relay-park-empty-")
+    owd = os.getcwd()
+    os.chdir(empty_dir)
+    try:
+        code, out, _ = run_cli("parked", "--all",
+                               iterm_id="w0t1p0:ALLFOOT-1")
+        ok &= check("parked --all: lists the elsewhere item",
+                    "elsewhere idea" in out)
+        ok &= check("parked --all: footer does not claim `relay next` "
+                    "takes the oldest one YOU CAN TAKE from this list",
+                    "claims the oldest one you can take" not in out)
+        code2, out2, _ = run_cli("next", iterm_id="w0t1p0:ALLFOOT-1")
+        ok &= check("next in the empty dir really does find nothing, "
+                    "confirming the footer would have lied",
+                    "nothing parked" in out2)
+    finally:
+        os.chdir(owd)
+
+    # --- relay parked --all --drop N: --all must not be silently ignored ---
+    dc = db.connect()
+    dropme = db.park_task(dc, "droppable", tempfile.mkdtemp(), owner=None,
+                          project="dproj")
+    dc.close()
+    code, out, err = run_cli("parked", "--all", "--drop", str(dropme),
+                             iterm_id="w0t1p0:ALLFOOT-1")
+    ok &= check("parked --all --drop refuses instead of silently "
+                "ignoring --all", code != 0)
+    dc2 = db.connect()
+    still_there = dc2.execute("SELECT * FROM tasks WHERE id=?",
+                              (dropme,)).fetchone()
+    dc2.close()
+    ok &= check("parked --all --drop: the item was NOT dropped by the "
+                "refused call", still_there is not None
+                and still_there["parked"] == 1)
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

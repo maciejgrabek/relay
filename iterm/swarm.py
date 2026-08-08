@@ -1095,6 +1095,28 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     return "\n".join(out)
 
 
+def _park_context_dict(row) -> dict:
+    """The parsed context stamp, or {} for absent/malformed JSON - shared by
+    parked_item_text (what to print) and has_park_context (whether there is
+    anything to print), so the two can never disagree about what counts as
+    context."""
+    import json
+    raw = _get(row, "context", "") or ""
+    try:
+        ctx = json.loads(raw) if raw else {}
+    except Exception:
+        ctx = {}
+    return ctx if isinstance(ctx, dict) else {}
+
+
+def has_park_context(row) -> bool:
+    """Whether a parked row's context stamp has anything parked_item_text
+    would actually render - i.e. whether telling the reader to "read the
+    context above" would be pointing at real lines instead of nothing."""
+    ctx = _park_context_dict(row)
+    return any(ctx.get(k) for k in ("doing", "last", "status"))
+
+
 def parked_item_text(row) -> str:
     """One parked item, rendered for a session that is about to work on it.
 
@@ -1110,21 +1132,15 @@ def parked_item_text(row) -> str:
     "earmarked for someone else" - which is exactly why `relay next` just
     refused it.
     """
-    import json
     tid = _get(row, "id", "?")
     out = [f"#{tid}  {_get(row, 'title', '')}",
            f"     dir  {_get(row, 'workdir', '')}"]
     owner = _get(row, "owner")
     if owner:
         out.append(f"   owner  {owner}")
-    raw = _get(row, "context", "") or ""
-    try:
-        ctx = json.loads(raw) if raw else {}
-    except Exception:
-        ctx = {}
-    if isinstance(ctx, dict):
-        for key, label in (("doing", "doing"), ("last", "last"),
-                           ("status", "status")):
-            if ctx.get(key):
-                out.append(f"  {label:>7}  {ctx[key]}")
+    ctx = _park_context_dict(row)
+    for key, label in (("doing", "doing"), ("last", "last"),
+                       ("status", "status")):
+        if ctx.get(key):
+            out.append(f"  {label:>7}  {ctx[key]}")
     return "\n".join(out)
