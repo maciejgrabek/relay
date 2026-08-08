@@ -566,6 +566,49 @@ def test_park_modal_text():
     chk("no TAB in footer when scope_label empty",
         not any("TAB scope" in r for r in urows))
 
+    # Body structure: row adjacency must be: buffer row, blank row, scope row
+    # Check registered tab case
+    reg_rows = t.splitlines()
+    buffer_row_idx = None
+    for i, r in enumerate(reg_rows):
+        if r.startswith("║") and "retry backoff" in r:
+            buffer_row_idx = i
+            break
+    chk("buffer row found for structure test (registered)",
+        buffer_row_idx is not None and buffer_row_idx > 1)
+    if buffer_row_idx is not None:
+        # Blank box row is "║" + spaces + "║▓"
+        next_row = reg_rows[buffer_row_idx + 1] if buffer_row_idx + 1 < len(reg_rows) else ""
+        # Extract content between the box chars and check if it's all spaces
+        is_blank = (next_row.startswith("║") and next_row.endswith("║▓") and
+                    next_row[1:-2].strip() == "")
+        chk("row after buffer is blank (registered)",
+            is_blank)
+        chk("SCOPE row follows blank (registered)",
+            buffer_row_idx + 2 < len(reg_rows) and
+            "SCOPE:" in reg_rows[buffer_row_idx + 2])
+
+    # Check unregistered tab case
+    unreg_rows = unreg.splitlines()
+    unreg_buffer_row_idx = None
+    for i, r in enumerate(unreg_rows):
+        if r.startswith("║") and "_" in r and "SCOPE" not in r:
+            unreg_buffer_row_idx = i
+            break
+    chk("buffer row found for structure test (unregistered)",
+        unreg_buffer_row_idx is not None)
+    if unreg_buffer_row_idx is not None:
+        # Blank box row is "║" + spaces + "║▓"
+        next_row = unreg_rows[unreg_buffer_row_idx + 1] if unreg_buffer_row_idx + 1 < len(unreg_rows) else ""
+        # Extract content between the box chars and check if it's all spaces
+        is_blank = (next_row.startswith("║") and next_row.endswith("║▓") and
+                    next_row[1:-2].strip() == "")
+        chk("row after buffer is blank (unregistered)",
+            is_blank)
+        chk("SCOPE row follows blank (unregistered)",
+            unreg_buffer_row_idx + 2 < len(unreg_rows) and
+            "SCOPE:" in unreg_rows[unreg_buffer_row_idx + 2])
+
     # Property-based: cursor must be present for all buffer lengths at all widths
     test_widths = [40, 80]
     test_buffer_lengths = [0, 1, 10, 50, 74, 100, 300, 500]

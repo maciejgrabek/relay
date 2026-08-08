@@ -661,7 +661,7 @@ def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
         footer = "ENTER park · ESC cancel"
 
     # Build non-buffer lines
-    lines_for_inner = ["", scope_row]
+    lines_for_inner = [scope_row]
     if existing:
         lines_for_inner += ["", f"already parked here ({len(existing)}):"]
         lines_for_inner += [f"  {t}" for t in existing[:PARK_EXISTING_SHOWN]]
