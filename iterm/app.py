@@ -653,18 +653,15 @@ def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
         # to hold and SESSION scope does not exist for it. Say that rather
         # than rendering a toggle the modal cannot honour.
         scope_row = "SCOPE: [·] DIR  (tab not registered)"
-    lines = ["", scope_row]
+    lines = [f"{buffer}_", "", scope_row]
     if existing:
         lines += ["", f"already parked here ({len(existing)}):"]
         lines += [f"  {t}" for t in existing[:PARK_EXISTING_SHOWN]]
         extra = len(existing) - PARK_EXISTING_SHOWN
         if extra > 0:
             lines.append(f"  +{extra} more")
-    modal = dos_modal_text("PARK AN IDEA", lines, width,
+    return dos_modal_text("PARK AN IDEA", lines, width,
                           footer="TAB scope · ENTER park · ESC cancel")
-    # Buffer with cursor shown above the modal, clamped to width
-    buffer_line = f"{buffer}_"[:width]
-    return f"{buffer_line}\n{modal}"
 
 
 def getting_started_panel(width: int) -> str:

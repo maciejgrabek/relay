@@ -528,9 +528,13 @@ def test_park_modal_text():
                                 "statusbar click queue is O(n)"], 80)
     rows = t.splitlines()
     chk("park title row", any("PARK AN IDEA" in r for r in rows))
-    chk("buffer is shown", any("retry backoff on inject" in r for r in rows))
+    chk("buffer is shown INSIDE the box, not floating above it",
+        any(r.startswith("║") and "retry backoff on inject" in r
+            for r in rows))
     chk("cursor glyph follows the buffer",
         any("retry backoff on inject_" in r for r in rows))
+    chk("nothing renders outside the box",
+        all(r == "" or r[0] in "╔║╠╚ " for r in rows))
     chk("scope row names the session", any("bff-worker" in r for r in rows))
     chk("session scope is the marked one",
         any("[·] bff-worker" in r for r in rows))
@@ -562,8 +566,8 @@ def test_park_modal_text():
     chk("width clamped", all(len(r) <= 40 for r in narrow.splitlines()))
 
     empty = appmod.park_modal_text("", "w", False, [], 80)
-    chk("empty buffer still shows a cursor",
-        any(r.strip().startswith("_") for r in empty.splitlines()))
+    chk("empty buffer still shows a cursor, inside the box",
+        any(r.startswith("║") and "_" in r for r in empty.splitlines()))
 
 
 def test_statusbar_label():
