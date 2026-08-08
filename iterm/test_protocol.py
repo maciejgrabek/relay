@@ -46,6 +46,22 @@ def test_parked_item_text():
     return ok
 
 
+def test_parked_topic():
+    import protocol
+    ok = True
+    ok &= check("parked is a topic", "parked" in protocol.TOPICS)
+    ok &= check("timers is a topic", "timers" in protocol.TOPICS)
+    p = protocol.TOPICS["parked"]
+    ok &= check("teaches relay next", "relay next" in p)
+    ok &= check("teaches relay parked", "relay parked" in p)
+    ok &= check("says relay never pushes",
+                "never" in p.lower() and "push" in p.lower())
+    ok &= check("says claim one then stop", "one" in p.lower())
+    for name, body in protocol.TOPICS.items():
+        ok &= check(f"{name} topic has no em-dash", chr(8212) not in body)
+    return ok
+
+
 def test_task_add_park_parser():
     import cli
     p = cli.build_parser()
@@ -86,7 +102,8 @@ def run():
                 and "--pr" in protocol.PR_PROTOCOL)
 
     ok &= check("TOPICS exposes every topic",
-                set(protocol.TOPICS) == {"swarm", "pr", "discuss"})
+                set(protocol.TOPICS) == {"swarm", "pr", "discuss",
+                                         "parked", "timers"})
     ok &= check("no em-dash anywhere in the protocol text",
                 all("\u2014" not in t for t in protocol.TOPICS.values()))
 
@@ -141,5 +158,6 @@ def run():
 if __name__ == "__main__":
     ok = run()
     ok &= test_parked_item_text()
+    ok &= test_parked_topic()
     ok &= test_task_add_park_parser()
     sys.exit(0 if ok else 1)

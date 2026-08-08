@@ -822,9 +822,9 @@ def cmd_help(args) -> int:
     session reading the rules must be able to do so before committing to
     them."""
     if not args.topic:
-        print("relay help <topic>\n")
+        print("relay help <topic> - the protocol, registering nothing\n")
         for name in protocol.TOPICS:
-            print(f"  {name}")
+            print(f"  {name:<10} {protocol.TOPIC_BLURB.get(name, '')}")
         return 0
     print(protocol.TOPICS[args.topic], end="")
     return 0

@@ -179,5 +179,90 @@ failed, and does not hand your decision to the human.
 Nobody should keep posting after a discussion is closed.
 """
 
+PARKED_PROTOCOL = """\
+PARKED WORK - PICKING UP WHAT THE OPERATOR SHELVED
+
+While you were busy, the operator had a thought. Rather than typing it at you
+- which would have pulled this session toward work that was not the point of
+the turn - they pressed `i` in the relay panel and parked it. Parked items are
+addressed by DIRECTORY, so anything parked in your workdir is yours to take.
+
+    relay parked          what is parked here (claims nothing)
+    relay next            claim the oldest one you can take
+    relay parked --all    every directory
+    relay parked --drop N remove one
+
+RELAY NEVER PUSHES PARKED WORK AT YOU. The reason an item was parked is that
+the operator did not want it yet. Relay can inject into an idle tab and
+deliberately does not do so with this, because a backlog that drains itself is
+drift, not help. You take an item when a human asks you to.
+
+THE RULES, none of which the CLI can check for you:
+
+  A parked item is a SEED, not a spec. It was captured in three seconds while
+  the operator was mid-something-else. `relay next` prints the context stamp -
+  what this session was doing when the thought arrived. Read it. If the line
+  is still ambiguous, ASK. Do not infer scope from seven words.
+
+  CLAIM ONE, THEN STOP. Finishing an item and immediately claiming the next is
+  the self-draining backlog relay refuses to build. Coming back for another is
+  the operator's call, not yours.
+
+  HAND BACK WHAT IS STALE. If the premise no longer holds - the code moved,
+  the bug is fixed, the idea was superseded - say so out loud instead of
+  implementing it. A three-day-old line does not know what changed.
+
+  ONCE CLAIMED IT IS ORDINARY WORK. `relay next` sets state=doing and it shows
+  on the board like anything else. Finish with
+  `relay task update <id> --state done`.
+
+  SURFACE, NEVER CLAIM. When you finish a task, run `relay parked` and tell
+  the operator what is there - then stop:
+
+      Done. 3 items parked in /Work/relay:
+        retry backoff on inject
+        widget shows parked count
+        +1 more
+      Want me to take one?
+
+  PARKING YOUR OWN FOLLOW-UPS. `relay task add "<line>" --park` shelves
+  something you noticed but should not do now. It lands unowned in this
+  directory. Park what you would otherwise silently drop - not everything you
+  noticed. A backlog nobody reads is worse than no backlog.
+"""
+
+TIMERS_PROTOCOL = """\
+TIMERS - STANDING RESPONSIBILITY ON AN INTERVAL
+
+A timer types text into YOUR OWN tab every N minutes while you are idle at a
+ready prompt. It binds to the tab, not to a swarm name, so it works in a plain
+unregistered session.
+
+    relay timer add --key <slug> --every <1-90> --times <1-50> --say "<text>"
+    relay timer list
+    relay timer rm --key <slug>
+
+MOST "keep an eye on X" REQUESTS SHOULD NOT BECOME A TIMER. One earns its
+place only when the responsibility is standing rather than a one-off, it must
+run when nobody is watching the terminal, and each firing is useful even if
+nothing changed. If any of those is false, say so and do not register one.
+
+--key is a stable slug: re-running add with the same key UPDATES that timer
+rather than adding a second one. --times is a mandatory fire cap; unattended
+self-injection needs a ceiling. Payloads are single-line, so put real
+instructions in a file and make the payload a pointer to it - by the third
+firing your context has likely been compacted, and a payload that assumes you
+remember this conversation will not work.
+"""
+
+TOPIC_BLURB = {
+    "swarm": "joining, messaging, tasks, who does what",
+    "discuss": "settling a question between sessions",
+    "pr": "claiming and routing pull requests",
+    "parked": "picking up work the operator parked for you",
+    "timers": "standing responsibility on an interval",
+}
+
 TOPICS = {"swarm": SWARM_PROTOCOL, "pr": PR_PROTOCOL,
-          "discuss": DISCUSS_PROTOCOL}
+          "discuss": DISCUSS_PROTOCOL, "parked": PARKED_PROTOCOL,
+          "timers": TIMERS_PROTOCOL}
