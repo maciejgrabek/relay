@@ -988,6 +988,7 @@ class RelayApp(App):
         Binding("n", "focus", "Tab"),
         Binding("space", "toggle", "Arm"),
         Binding("p", "pause", "Pause"),
+        Binding("i", "park", "Park idea", show=True),
         Binding("s", "shadow", "Shadow"),
         Binding("comma", "settings", "Settings"),
         Binding("left", "settings_left", "Change", show=False),
@@ -1047,6 +1048,9 @@ class RelayApp(App):
         self._quit_armed = False
         self._extreme_armed = None    # None | sid armed for the second E press
         self._extreme_form = None    # None | {"sid": str}
+        # None | {"sid": str, "name": str, "workdir": str, "buf": str,
+        #         "dir": bool} - the park-an-idea capture modal
+        self._park = None
         self._modal_open = False   # DOS-style dialog floating over the UI
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
@@ -1059,7 +1063,7 @@ class RelayApp(App):
         keypress acts on a tab you cannot see."""
         return (self._settings_visible or self._swarm_visible
                 or self._help_visible or self._timers_visible
-                or self._modal_open)
+                or self._modal_open or self._park is not None)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -1701,6 +1705,14 @@ class RelayApp(App):
 
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
+        if self._park is not None:
+            # Priority bindings bypass on_key's swallow entirely, so TAB has
+            # to be refused here or it flips the view with a half-typed idea
+            # still in the buffer. See commit 5ad1076.
+            if self._park["name"]:
+                self._park["dir"] = not self._park["dir"]
+                self._park_render()
+            return
         if self._modal_open:
             # Bound with priority=True (so Tab works while an Input holds
             # focus), which means Textual dispatches this action BEFORE
@@ -1873,6 +1885,27 @@ class RelayApp(App):
             event.stop()
             event.prevent_default()
             return
+        if self._park is not None:
+            k = event.key
+            if k == "escape":
+                self._park_close()
+            elif k == "enter":
+                self._park_save()
+            elif k == "tab":
+                # No swarm name means no SESSION scope to flip to.
+                if self._park["name"]:
+                    self._park["dir"] = not self._park["dir"]
+                    self._park_render()
+            elif k == "backspace":
+                self._park["buf"] = self._park["buf"][:-1]
+                self._park_render()
+            elif len(getattr(event, "character", "") or "") == 1 \
+                    and event.character.isprintable():
+                self._park["buf"] += event.character
+                self._park_render()
+            event.stop()
+            event.prevent_default()
+            return
         if not self._timers_visible:
             return
         if self._timer_form is not None:
@@ -1965,6 +1998,9 @@ class RelayApp(App):
 
     # --- ESC: universal "take me back" for every overlay ----------------------
     def action_dismiss_view(self) -> None:
+        if self._park is not None:
+            self._park_close()
+            return
         if self._modal_open:
             self._modal_close()
             return
@@ -2313,6 +2349,98 @@ class RelayApp(App):
             log.write_line("extreme: could not arm (session gone or "
                            "not INSANE)")
         self._extreme_form_close()
+
+    # --- park an idea (i): capture a thought at zero cost to any session's
+    # context, for a session to claim later with `relay next` ----------------
+    def action_park(self) -> None:
+        """Capture a thought against the selected session, at zero cost to
+        that session's context. The SELECTION is the addressing: owner,
+        workdir and the context stamp all come off the highlighted row."""
+        if self._any_overlay_open() or self._extreme_form is not None:
+            return
+        sid = self._selected_sid()
+        if not sid:
+            self._modal_show("CANNOT PARK",
+                             ["No session selected.",
+                              "Park addresses a session and its directory."])
+            return
+        info = self.watcher.sessions.get(sid) if self.watcher else None
+        workdir = self._workdir_for(info)
+        if not workdir:
+            self._modal_show("CANNOT PARK",
+                             ["Relay does not know this tab's directory.",
+                              "An item with no directory can never be found",
+                              "again - so it is refused, not saved."])
+            return
+        # SESSION scope needs a swarm name for tasks.owner, and only a
+        # REGISTERED tab has one - claim_next_parked matches ownership by
+        # name. An unregistered tab therefore parks DIR-scoped, which is
+        # also what its operator wants: relay next in that directory takes
+        # unowned items first-come.
+        reg = swarmdb.get_by_iterm_id(self._swarm_db_conn(), sid)
+        name = reg["name"] if reg else ""
+        self._park = {"sid": sid, "name": name,
+                      "project": (reg["project"] if reg else ""),
+                      "workdir": workdir, "buf": "", "dir": not name}
+        self._park_render()
+
+    def _park_render(self) -> None:
+        p = self._park
+        if p is None:
+            return
+        existing = [r["title"] for r in
+                    swarmdb.list_parked(self._swarm_db_conn(), p["workdir"])]
+        w = self.query_one("#modal", Static)
+        # An unregistered tab has no name, so park_modal_text renders a
+        # DIR-only scope row rather than a toggle it cannot honour.
+        w.update(park_modal_text(p["buf"], p["name"], p["dir"], existing,
+                                 self.size.width))
+        w.display = True
+
+    def _park_close(self) -> None:
+        self._park = None
+        w = self.query_one("#modal", Static)
+        w.display = False
+
+    def _park_save(self) -> None:
+        p = self._park
+        if p is None or not p["buf"].strip():
+            return
+        conn = self._swarm_db_conn()
+        # project is carried so `wipe --all` / `Z` zap remove parked items
+        # with the rest of the project instead of stranding them - see the
+        # operator decision recorded for Task 3.
+        swarmdb.park_task(conn, p["buf"].strip(), p["workdir"],
+                          owner=None if p["dir"] else (p["name"] or None),
+                          project=p.get("project", ""),
+                          context=self._park_context(p["name"]),
+                          created_by="operator")
+        self._park_close()
+
+    def _workdir_for(self, info) -> str:
+        """The selected tab's directory, or '' when relay does not know it.
+
+        Read off SessionInfo, NOT off the sessions table: an unregistered tab
+        has no sessions row at all, and an unregistered tab is exactly the
+        case parked work is built for. The watcher caches iTerm2's `path` on
+        every tab each tick (Task 4), the same way it caches `job`.
+        """
+        return (getattr(info, "workdir", "") or "").strip()
+
+    def _park_context(self, name: str) -> str:
+        """An inert JSON stamp of what this session was doing at capture time.
+        Free to collect - relay already has all of it - and it is what stops a
+        seven-word idea from being undecodable three days later."""
+        import json
+        conn = self._swarm_db_conn()
+        row = swarmdb.get_session(conn, name) if name else None
+        cur = swarmdb.current_task_for(conn, name) if name else None
+        out = {}
+        if cur:
+            out["doing"] = f"#{cur['id']} {cur['title']}"
+        if row and row["status_text"]:
+            out["status"] = row["status_text"]
+        return json.dumps(out)
 
     def _shell_verb(self, verb: str, doing: str, extra=None) -> None:
         here = os.path.dirname(os.path.abspath(__file__))

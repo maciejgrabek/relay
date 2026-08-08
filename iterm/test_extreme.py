@@ -645,6 +645,19 @@ def test_park_modal_text():
         any(r.startswith("║") and "_" in r for r in empty.splitlines()))
 
 
+def test_park_wiring():
+    import app as appmod
+    src = open(appmod.__file__).read()
+    chk("i is bound to park", 'Binding("i", "park"' in src)
+    chk("p is still pause", 'Binding("p", "pause"' in src)
+    chk("park state initialised", "self._park = None" in src)
+    chk("park counts as an overlay", "self._park is not None" in src)
+    chk("swarm_view guards park (priority binding bypasses on_key)",
+        "_park" in src.split("def action_swarm_view")[1].split("def ")[0])
+    chk("dismiss_view closes park",
+        "_park" in src.split("def action_dismiss_view")[1].split("def ")[0])
+
+
 def test_statusbar_label():
     import statusbar
     chk("extreme circle is purple",
@@ -670,6 +683,7 @@ if __name__ == "__main__":
     test_push_line()
     test_dos_modal_text()
     test_park_modal_text()
+    test_park_wiring()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
