@@ -28,8 +28,8 @@ arm/disarm them with the arrow keys.
   ○ MANUAL  ◌ STANDBY   3m   coord         coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
-  ↑↓ move · SPACE arm · ENTER answer · i park · 1/2/3 send · n go to tab · x hide
-  a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · Z×2 zap · E×2 extreme · q quit
+  ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · v audit · f feed · t timers · E×2 extreme
+  a arm all · d disarm all · TAB swarm · p pause · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
 ```
 
 The list is on top and the selected session's **live terminal feed** is stacked
@@ -1278,7 +1278,7 @@ from the UI.
 
 Note: a timer does not fire while its session is both hidden (quarantined)
 and disarmed - unhide or arm the session to resume it. This is a side effect
-of the poll loop's parked-session optimization, which skips reading a
+of the poll loop's hidden+disarmed optimization, which skips reading a
 hidden+disarmed session's screen entirely (nothing to check in on).
 
 Config, in `~/.relay/config`:
