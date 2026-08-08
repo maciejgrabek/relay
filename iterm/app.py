@@ -2129,14 +2129,20 @@ class RelayApp(App):
             self._zap_armed = True
             self.set_timer(self._CONFIRM_WINDOW,
                            lambda: setattr(self, "_zap_armed", False))
-            nt = len(swarmdb.list_tasks(self._swarm_db, project=p))
+            # project_task_counts, not list_tasks: parked rows carry a
+            # project too, and the underlying wipe_project DELETE is
+            # unfiltered - a count built on list_tasks alone would
+            # understate what this permanently destroys.
+            n_live, n_parked = swarmdb.project_task_counts(self._swarm_db, p)
+            nt = n_live + n_parked
             ns = len(swarmdb.list_sessions(self._swarm_db, project=p))
             nm = len(swarmdb.message_history(self._swarm_db, project=p,
                                              limit=10**9))
+            parked_note = f" [{n_live} live + {n_parked} parked]" if n_parked else ""
             log.write_line(
                 f"zap ARMED: press Z again to DELETE ALL of project '{p}' "
-                f"({nt} tasks + {ns} sessions + {nm} messages, auto-cancels "
-                f"in {int(self._CONFIRM_WINDOW)}s)")
+                f"({nt} tasks{parked_note} + {ns} sessions + {nm} messages, "
+                f"auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._zap_armed = False
         self._shell_verb("wipe", f"deleting ALL of project '{p}'",

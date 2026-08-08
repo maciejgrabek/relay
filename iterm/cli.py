@@ -1757,7 +1757,11 @@ def cmd_wipe(args) -> int:
         if not args.project:
             return _err("--all requires --project (refusing to wipe every "
                         "project at once)")
-        nt = len(db.list_tasks(conn, project=args.project))
+        # project_task_counts, not list_tasks: parked rows carry a project
+        # too, and wipe_project's DELETE is unfiltered - a count built on
+        # list_tasks alone would understate what this permanently destroys.
+        n_live, n_parked = db.project_task_counts(conn, args.project)
+        nt = n_live + n_parked
         ns = len(db.list_sessions(conn, project=args.project))
         nm = len(db.message_history(conn, project=args.project, limit=10**9))
         # Relay-created worktrees the DB wipe would otherwise orphan on disk.
@@ -1781,9 +1785,11 @@ def cmd_wipe(args) -> int:
         if not (nt or ns or nm):
             return 0
         wt_note = f" + {n_rm} worktree(s)" if n_rm else ""
+        parked_note = f" [{n_live} live + {n_parked} parked]" if n_parked else ""
         if not args.yes and not _confirm(
                 f"permanently DELETE all of project '{args.project}' "
-                f"({nt} tasks + {ns} sessions + {nm} messages{wt_note})?"):
+                f"({nt} tasks{parked_note} + {ns} sessions + {nm} "
+                f"messages{wt_note})?"):
             print("aborted.")
             return 0
         nt2, ns2, nm2 = db.wipe_project(conn, args.project)

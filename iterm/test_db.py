@@ -684,6 +684,26 @@ def run():
                 len(db.list_tasks(wdb, project="P2")) == 1
                 and db.get_session(wdb, "s2") is not None
                 and len(db.message_history(wdb, project="P2")) == 1)
+
+    # project_task_counts: the honest split a whole-project wipe confirmation
+    # must show. Parked rows carry a project (see park_task), so
+    # wipe_project's unfiltered DELETE destroys them too - the count that
+    # gates that delete must match what actually gets destroyed, not what
+    # list_tasks (which hides parked rows) would report.
+    db.register(wdb, "s3", "S3", "worker", "P3", now=16.0)
+    db.add_task(wdb, "p3-live-1", project="P3", owner="s3", now=17.0)
+    db.add_task(wdb, "p3-live-2", project="P3", owner="s3", now=18.0)
+    db.park_task(wdb, "p3 idea", "/Work/p3", owner="s3", project="P3",
+                 now=19.0)
+    n_live, n_parked = db.project_task_counts(wdb, "P3")
+    ok &= check("project_task_counts splits live vs parked",
+                n_live == 2 and n_parked == 1)
+    ok &= check("project_task_counts total is more than list_tasks alone "
+                "would report",
+                n_live + n_parked > len(db.list_tasks(wdb, project="P3")))
+    nt3, ns3, nm3 = db.wipe_project(wdb, "P3")
+    ok &= check("project_task_counts total equals what wipe_project deletes",
+                n_live + n_parked == nt3)
     wdb.close()
 
     # --- v5: message kind + worktree_repo ------------------------------------

@@ -757,9 +757,27 @@ def orphan_parked(conn, owner: str) -> int:
     return cur.rowcount
 
 
+def project_task_counts(conn, project: str) -> tuple:
+    """(n_live, n_parked) for one project. Parked rows carry a project (see
+    park_task), so a whole-project wipe destroys them too even though
+    list_tasks hides them - a confirmation built on list_tasks alone would
+    understate a permanent delete. Callers that need an honest total before
+    destroying a project should sum both halves themselves."""
+    n_live = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE project=? AND parked=0",
+        (project,)).fetchone()[0]
+    n_parked = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE project=? AND parked=1",
+        (project,)).fetchone()[0]
+    return (n_live, n_parked)
+
+
 def current_task_for(conn, owner: str) -> Optional[sqlite3.Row]:
     """The task to show in the TUI's TASK NOW column: an in-flight task if any
-    (doing beats blocked beats todo), most recently updated first."""
+    (doing beats blocked beats todo), most recently updated first. Parked
+    rows (parked=1) are excluded for the same reason list_tasks excludes
+    them: a half-formed thought must never be displayed as a coordinator's
+    active work."""
     return conn.execute(
         """SELECT * FROM tasks WHERE owner=? AND state!='done' AND parked=0
            ORDER BY CASE state WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1
