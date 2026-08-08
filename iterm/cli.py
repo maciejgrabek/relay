@@ -309,11 +309,13 @@ def cmd_send(args) -> int:
         status, detail = swarm.resolve_pr_route(row, owner_session)
         if status == "unclaimed":
             print(f"relay: unclaimed: {repo}#{number} has no owner recorded "
-                  f"- nobody ran `relay pr claim`. Escalate to the human.",
+                  f"- nobody ran `relay pr claim`. Escalate to the human. "
+                  f"See relay help pr",
                   file=sys.stderr)
             return EXIT_UNCLAIMED
         if status == "gone":
-            print(f"relay: owner gone: {detail}. Escalate to the human.",
+            print(f"relay: owner gone: {detail}. Escalate to the human. "
+                  f"See relay help pr",
                   file=sys.stderr)
             return EXIT_OWNER_GONE
         db.queue_message(conn, me["name"], detail, body, me["project"],
@@ -402,7 +404,8 @@ def _catch_up_or_err(conn, th, me, verb: str) -> int:
         db.mark_delivered(conn, m["id"])
     return _err(f"read before you {verb} - the posts above arrived after you "
                 f"last looked. Full transcript: relay thread {th['id']}. "
-                f"Re-run your command if it still stands.")
+                f"Re-run your command if it still stands. See relay help "
+                f"discuss")
 
 
 def _broadcast(conn, th, sender: str, body: str, kind: str) -> None:
@@ -1090,7 +1093,8 @@ def cmd_parked(args) -> int:
     if args.drop is not None:
         if not db.drop_parked(conn, args.drop):
             return _err(f"no parked item #{args.drop} (real tasks are not "
-                        f"droppable this way - use `relay task update`)")
+                        f"droppable this way - use `relay task update`). "
+                        f"See relay help parked")
         print(f"dropped parked item #{args.drop}")
         return 0
     where = None if args.all else _my_workdir()
@@ -1211,7 +1215,8 @@ def cmd_timer_add(args) -> int:
                 f"this session already has {existing_count} self-registered "
                 f"timer(s) - the per-session limit is "
                 f"{_MAX_TIMERS_PER_SESSION}. See `relay timer list` and "
-                f"remove one with `relay timer rm` first.")
+                f"remove one with `relay timer rm` first. See relay help "
+                f"timers")
         tid = db.add_timer(conn, iterm_session_id=sid, label=f"self:{key}",
                            interval_min=interval, payload=payload,
                            mode="idle", max_fires=times, key=key, now=now)
@@ -1720,7 +1725,8 @@ def cmd_spawn(args) -> int:
             f"permission prompt with nobody at that tab to clear it, and looks "
             f"identical to a worker that is thinking. Arm it: --arm wild (or "
             f"safe / insane), or set [swarm] spawn_arm in ~/.relay/config. If "
-            f"you will sit at that tab yourself, say so: --arm off")
+            f"you will sit at that tab yourself, say so: --arm off. See "
+            f"relay help swarm")
     if not args.worktree and not args.share:
         held = swarm.checkout_occupants(db.list_sessions(db.connect()), workdir,
                                         exclude=(args.name,))
@@ -1731,7 +1737,7 @@ def cmd_spawn(args) -> int:
                 f"neither notices. Give this one its own: add --worktree "
                 f"(branch relay/{args.name}, dir "
                 f"{os.path.basename(workdir)}-{args.name}). If it will only "
-                f"read there, say so: --share")
+                f"read there, say so: --share. See relay help swarm")
     repo = None
     if args.worktree:
         repo = workdir

@@ -72,6 +72,13 @@ def test_task_add_park_parser():
     return ok
 
 
+def test_refusals_point_at_help():
+    import cli
+    src = open(cli.__file__).read()
+    n = src.count("relay help ")
+    return check("refusals cite a help topic at least four times", n >= 4)
+
+
 def run():
     ok = True
     p = protocol.SWARM_PROTOCOL
@@ -160,4 +167,5 @@ if __name__ == "__main__":
     ok &= test_parked_item_text()
     ok &= test_parked_topic()
     ok &= test_task_add_park_parser()
+    ok &= test_refusals_point_at_help()
     sys.exit(0 if ok else 1)

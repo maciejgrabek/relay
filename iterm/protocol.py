@@ -253,6 +253,10 @@ self-injection needs a ceiling. Payloads are single-line, so put real
 instructions in a file and make the payload a pointer to it - by the third
 firing your context has likely been compacted, and a payload that assumes you
 remember this conversation will not work.
+
+A tab may have at most 5 self-registered timers at once - registering a 6th
+new key is refused until you remove one with `relay timer rm`. Timers an
+operator adds from the `t` overlay do not count toward that cap.
 """
 
 TOPIC_BLURB = {
