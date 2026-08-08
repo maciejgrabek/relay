@@ -909,6 +909,31 @@ def cmd_pr_list(args) -> int:
 
 def cmd_task_add(args) -> int:
     conn = db.connect()
+    if args.park:
+        # Parking needs no swarm identity: the point is to record a follow-up
+        # you would otherwise silently drop, which a solo unregistered session
+        # has as much reason to do as a swarm worker. DIR scope, deliberately -
+        # a follow-up belongs to the codebase, not to the tab that noticed it,
+        # and that tab is often about to close.
+        me = db.get_by_iterm_id(conn, my_iterm_id())
+        # Carry a project, or the row is unreachable: list_projects and
+        # wipe_project both filter/match on a non-empty project, so a
+        # projectless park can never be zapped or wiped. Registered session
+        # uses its own; otherwise the workdir basename, which is exactly
+        # what _default_project falls back to when a session joins.
+        project = (me["project"] if me else "") \
+            or os.path.basename(os.path.normpath(os.getcwd()))
+        if not project:
+            return _err("cannot derive a project for this directory - a "
+                        "parked item with no project can never be cleaned "
+                        "up, so it is refused rather than stranded")
+        tid = db.park_task(conn, args.title, os.getcwd(),
+                           owner=None, project=project,
+                           created_by=(me["name"] if me else "session"))
+        print(f"parked #{tid} in {os.getcwd()}  {args.title}\n"
+              "Nobody is working on it. `relay parked` lists it; the operator\n"
+              "sees the count on the relay badge.")
+        return 0
     me, rc = _require_me(conn)
     if me is None:
         return rc
@@ -2067,6 +2092,10 @@ def build_parser() -> argparse.ArgumentParser:
     ta.add_argument("--spec", default=None)
     ta.add_argument("--blocked-by", dest="blocked_by", default=None)
     ta.add_argument("--project", default=None)
+    ta.add_argument("--park", action="store_true",
+                    help="park it for the operator instead of creating work: "
+                         "an unowned item in THIS directory that a session "
+                         "claims later with `relay next`")
     ta.set_defaults(fn=cmd_task_add)
 
     tu = tsub.add_parser("update", help="change a task's state")

@@ -46,6 +46,16 @@ def test_parked_item_text():
     return ok
 
 
+def test_task_add_park_parser():
+    import cli
+    p = cli.build_parser()
+    a = p.parse_args(["task", "add", "follow-up", "--park"])
+    ok = check("--park parses", a.park is True)
+    b = p.parse_args(["task", "add", "follow-up"])
+    ok &= check("--park defaults off", b.park is False)
+    return ok
+
+
 def run():
     ok = True
     p = protocol.SWARM_PROTOCOL
@@ -131,4 +141,5 @@ def run():
 if __name__ == "__main__":
     ok = run()
     ok &= test_parked_item_text()
+    ok &= test_task_add_park_parser()
     sys.exit(0 if ok else 1)
