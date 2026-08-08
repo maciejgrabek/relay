@@ -961,6 +961,82 @@ async def go():
             "down now moves the selection",
             tl._selected_sid() == "s1")
 
+    # --- park (i) project derivation: a '' project is invisible to every ----
+    # cleanup path relay has (list_projects filters project != '',
+    # wipe_project matches an exact string, an unowned item has no owner for
+    # W's orphan-wipe either) - so an unregistered tab must derive a project
+    # from its workdir basename (the _default_project convention, cli.py:160)
+    # rather than park one with project=''. A registered tab keeps using its
+    # own session's project. Driven directly through action_park/_park_save
+    # (not simulated keystrokes) so the assertion is on the row park_task
+    # actually writes, read back from a real (tempdir) db.
+    import db as _db2
+    import tempfile as _tempfile
+
+    def _one_at(sid, workdir):
+        return {sid: SessionInfo(sid, title=sid, window_idx=0, tab_idx=0,
+                                 last_screen=["x"], workdir=workdir)}
+
+    park_dir = _tempfile.mkdtemp(prefix="relay-park-proj-")
+    expected_project = os.path.basename(park_dir)
+
+    pu = _TestApp(_one_at("pu1", park_dir), dry_run=True)
+    async with pu.run_test() as pilot:
+        await pilot.pause()
+        pu._refresh()
+        await pilot.pause()
+        chk("park setup: unregistered session selected",
+            pu._selected_sid() == "pu1")
+        pu.action_park()
+        chk("i opens the park modal for a known workdir",
+            pu._park is not None)
+        pu._park["buf"] = "unregistered idea"
+        pu._park_save()
+        rows = [dict(r) for r in _db2.list_parked(
+            pu._swarm_db_conn(), park_dir)]
+        chk("unregistered park saved", len(rows) == 1
+            and rows[0]["title"] == "unregistered idea")
+        chk("unregistered park's project is the workdir basename, not '' "
+            "(a '' project would be invisible to list_projects / "
+            "wipe_project / Z zap)",
+            rows[0]["project"] == expected_project and expected_project)
+        chk("unregistered park has no owner (DIR scope: no swarm name "
+            "exists to own it)", rows[0]["owner"] is None)
+
+    reg_dir = _tempfile.mkdtemp(prefix="relay-park-reg-")
+    _rconn = _db2.connect()
+    _db2.register(_rconn, "park-worker", "pr1", "worker", "explicit-project")
+
+    pr = _TestApp(_one_at("pr1", reg_dir), dry_run=True)
+    async with pr.run_test() as pilot:
+        await pilot.pause()
+        pr._refresh()
+        await pilot.pause()
+        pr.action_park()
+        chk("i opens the park modal for a registered session",
+            pr._park is not None)
+        pr._park["buf"] = "registered idea"
+        pr._park_save()
+        rows = [dict(r) for r in _db2.list_parked(
+            pr._swarm_db_conn(), reg_dir)]
+        chk("registered park saved", len(rows) == 1
+            and rows[0]["title"] == "registered idea")
+        chk("registered park keeps the session's own project, not the "
+            "workdir basename",
+            rows[0]["project"] == "explicit-project")
+        chk("registered park defaults to SESSION scope (owner is the "
+            "swarm name)", rows[0]["owner"] == "park-worker")
+
+    pd = _TestApp(_one_at("pd1", "/"), dry_run=True)
+    async with pd.run_test() as pilot:
+        await pilot.pause()
+        pd._refresh()
+        await pilot.pause()
+        pd.action_park()
+        chk("a workdir with no usable basename ('/') refuses the park "
+            "instead of stranding it with an unreachable '' project",
+            pd._park is None and pd._modal_open)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

@@ -2379,8 +2379,28 @@ class RelayApp(App):
         # unowned items first-come.
         reg = swarmdb.get_by_iterm_id(self._swarm_db_conn(), sid)
         name = reg["name"] if reg else ""
+        if reg:
+            project = reg["project"]
+        else:
+            # An unregistered tab has no project on file, and tasks.project
+            # would default to '' - but list_projects filters WHERE project
+            # != '', wipe_project matches by exact project string, and a
+            # DIR-scoped park has no owner either, so a '' project makes the
+            # row invisible to every cleanup path relay has. Fall back to the
+            # tab's workdir basename, the same convention _default_project
+            # uses for a session that joins without --project (cli.py:160),
+            # so the parked item lands in the project a session in that
+            # directory would join.
+            project = os.path.basename(os.path.normpath(workdir))
+            if not project:
+                self._modal_show(
+                    "CANNOT PARK",
+                    ["Could not derive a project name",
+                     "from this tab's directory - refusing",
+                     "rather than stranding the idea unreachably."])
+                return
         self._park = {"sid": sid, "name": name,
-                      "project": (reg["project"] if reg else ""),
+                      "project": project,
                       "workdir": workdir, "buf": "", "dir": not name}
         self._park_render()
 
@@ -2388,8 +2408,16 @@ class RelayApp(App):
         p = self._park
         if p is None:
             return
-        existing = [r["title"] for r in
-                    swarmdb.list_parked(self._swarm_db_conn(), p["workdir"])]
+        try:
+            existing = [r["title"] for r in
+                        swarmdb.list_parked(self._swarm_db_conn(), p["workdir"])]
+        except Exception:
+            # Read-for-display only, and it runs on every keystroke - a
+            # transient sqlite contention error must degrade the "already
+            # parked" list, not take the whole modal down with the
+            # operator's half-written idea still in it. Mirrors the guarded
+            # reads in _render_timers and the preview feed's timers read.
+            existing = []
         w = self.query_one("#modal", Static)
         # An unregistered tab has no name, so park_modal_text renders a
         # DIR-only scope row rather than a toggle it cannot honour.
