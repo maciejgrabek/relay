@@ -789,7 +789,12 @@ class Watcher:
             self._miss[name] = self._miss.get(name, 0) + 1
             if self._miss[name] >= self.close_misses and not closed:
                 try:
-                    swarmdb.mark_closed(conn, name, time.time())
+                    if swarmdb.mark_closed(conn, name, time.time()):
+                        # Its parked items become the directory's, so a sibling
+                        # session in the same workdir can pick them up. Parked
+                        # only - live tasks still wait for restore/clean, which
+                        # are the operator's dispositions to make.
+                        swarmdb.orphan_parked(conn, name)
                     # Reset the miss count so a later respawn under the same
                     # name starts fresh instead of re-closing on its first tick.
                     self._miss.pop(name, None)

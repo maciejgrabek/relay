@@ -672,10 +672,11 @@ def closed_tests():
         nonlocal ok
         print(("PASS" if c else "FAIL"), n); ok = ok and c
 
-    marked, cleared = [], []
-    W.swarmdb.mark_closed = lambda conn, name, ts: marked.append(name)
+    marked, cleared, orphaned = [], [], []
+    W.swarmdb.mark_closed = lambda conn, name, ts: marked.append(name) or True
     W.swarmdb.clear_closed = lambda conn, name: cleared.append(name)
     W.swarmdb.list_tasks = lambda conn, project=None, owner=None: []
+    W.swarmdb.orphan_parked = lambda conn, name: orphaned.append(name)
 
     w = Watcher(connection=None, dry_run=False, cfg=C.Config())
     w._db = object()
@@ -687,16 +688,21 @@ def closed_tests():
 
     w._mark_closed_sessions()
     chk("miss 1: not yet marked", marked == [])
+    chk("miss 1: not yet orphaned", orphaned == [])
     w._mark_closed_sessions()
     chk("miss 2: marked closed", marked == ["w1"])
+    chk("miss 2: parked work orphaned to the directory", orphaned == ["w1"])
     # once the DB row reflects closed_at != 0, the `not closed` guard stops a
-    # re-mark. Simulate that by having list_sessions now report it closed.
+    # re-mark, so orphan_parked (which only fires on a successful mark_closed)
+    # is not called again either.
     marked.clear()
+    orphaned.clear()
     W.swarmdb.list_sessions = lambda conn: [
         {"name": "w1", "iterm_session_id": "S1", "role": "worker",
          "project": "p", "closed_at": 123.0}]
     w._mark_closed_sessions()
     chk("already-closed row is not re-marked", marked == [])
+    chk("already-closed row is not re-orphaned", orphaned == [])
 
     # tab reappears -> miss counter resets, closed cleared
     w.sessions = {"S1": object()}
