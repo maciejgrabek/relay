@@ -37,8 +37,16 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 10",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 10)
+    ok &= check("fresh connect stamps user_version = 11",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 11)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    ok &= check("tasks has parked/workdir/context",
+                {"parked", "workdir", "context"} <= cols)
+    tid = db.add_task(conn, "plain task", project="p")
+    row = db.get_task(conn, tid)
+    ok &= check("parked defaults to 0", row["parked"] == 0)
+    ok &= check("workdir defaults to ''", row["workdir"] == "")
+    ok &= check("context defaults to ''", row["context"] == "")
 
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
@@ -59,12 +67,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 10
+                mig.execute("PRAGMA user_version").fetchone()[0] == 11
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 10
+                mig.execute("PRAGMA user_version").fetchone()[0] == 11
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -98,11 +106,29 @@ def run():
     omig = db.connect(opath)
     _oid = db.queue_message(omig, "a", "b", "post-migration", reply_to=1)
     ok &= check("v9 db migrates and takes reply_to",
-                omig.execute("PRAGMA user_version").fetchone()[0] == 10
+                omig.execute("PRAGMA user_version").fetchone()[0] == 11
                 and omig.execute("SELECT reply_to FROM messages WHERE id=?",
                                  (_oid,)).fetchone()[0] == 1)
     omig.close()
     rconn.close()
+
+    # v10 -> v11: tasks gains parked/workdir/context.
+    p2 = _tmpdb()
+    old = db.connect(p2)
+    old.execute("PRAGMA user_version = 10")
+    old.execute("ALTER TABLE tasks DROP COLUMN parked")
+    old.execute("ALTER TABLE tasks DROP COLUMN workdir")
+    old.execute("ALTER TABLE tasks DROP COLUMN context")
+    old.commit()
+    old.close()
+    mig = db.connect(p2)
+    ok &= check("v10 DB migrates to 11",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 11)
+    mcols = {r[1] for r in mig.execute("PRAGMA table_info(tasks)")}
+    ok &= check("migrated DB has the three columns",
+                {"parked", "workdir", "context"} <= mcols)
+    mig.close()
+    os.unlink(p2)
 
     # --- find_reply (relay ask correlation) -----------------------------------
     apath = _tmpdb()
@@ -334,7 +360,7 @@ def run():
     hold.close()
     hmig = db.connect(hpath)
     ok &= check("v8 -> v9 migration runs",
-                hmig.execute("PRAGMA user_version").fetchone()[0] == 10)
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 11)
     ok &= check("legacy 'human' session row is cleared",
                 db.get_session(hmig, "human") is None)
     legacy_task = hmig.execute(
@@ -530,7 +556,7 @@ def run():
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
     ok &= check("fresh DB is schema v9",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 10)
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 11)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -572,7 +598,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 10)
+                up.execute("PRAGMA user_version").fetchone()[0] == 11)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -730,7 +756,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 10)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 11)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -803,7 +829,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 10)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 11)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")

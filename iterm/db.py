@@ -82,7 +82,10 @@ CREATE TABLE IF NOT EXISTS tasks(
   spec_path TEXT,
   blocked_by TEXT NOT NULL DEFAULT '',
   created_by TEXT,
-  updated_at REAL NOT NULL
+  updated_at REAL NOT NULL,
+  parked INTEGER NOT NULL DEFAULT 0,
+  workdir TEXT NOT NULL DEFAULT '',
+  context TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS timers(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,7 +177,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 10
+_CURRENT_VERSION = 11
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -235,6 +238,15 @@ _MIGRATIONS = {
     # every existing message path keeps working untouched.
     9: ("ALTER TABLE messages ADD COLUMN reply_to INTEGER",
         "ALTER TABLE messages ADD COLUMN thread_id INTEGER"),
+    # v11: parked work. A parked row is a thought the operator captured
+    # without spending a session's context - not assignable work, so every
+    # coordinator-facing read filters parked=0. `workdir` is the address
+    # (project is a swarm-routing label and two sessions of one project
+    # routinely sit in sibling worktrees); `context` is an inert JSON stamp
+    # of what the session was doing at capture time.
+    10: ("ALTER TABLE tasks ADD COLUMN parked INTEGER NOT NULL DEFAULT 0",
+         "ALTER TABLE tasks ADD COLUMN workdir TEXT NOT NULL DEFAULT ''",
+         "ALTER TABLE tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''"),
 }
 
 
