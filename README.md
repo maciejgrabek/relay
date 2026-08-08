@@ -16,7 +16,7 @@ arm/disarm them with the arrow keys.
   ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝
   ██║  ██║███████╗███████╗██║  ██║   ██║
   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝
-  RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued
+  RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued · 3 parked
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
   MODE      STATUS      ↻    SESSION       ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
@@ -28,7 +28,7 @@ arm/disarm them with the arrow keys.
   ○ MANUAL  ◌ STANDBY   3m   coord         coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
-  ↑↓ move · SPACE arm · ENTER answer · 1/2/3 send · n go to tab · x hide
+  ↑↓ move · SPACE arm · ENTER answer · i park · 1/2/3 send · n go to tab · x hide
   a arm all · d disarm all · TAB swarm · R×2 restore · W×2 wipe · Z×2 zap · E×2 extreme · q quit
 ```
 
@@ -106,6 +106,31 @@ you - NO mode auto-answers your decisions.**
 
 Use `safe` where a wrong Enter would hurt; `wild`/`insane` in scratch/throwaway
 workspaces where you just want the friction gone.
+
+### Parked work (`i`)
+
+While a session works, you'll have a thought about what it (or another
+session) should do next. Typing it into the session pulls that session's
+context toward something it wasn't doing - it drifts. Saying nothing loses the
+thought by the time the turn ends. `i` on the selected row opens a DOS-style
+modal, you type one line, `ENTER` parks it. Nothing was ever sent to the
+session, so the capture costs it **zero context**.
+
+`TAB` inside the modal toggles SESSION (owned by that tab's swarm name) vs DIR
+(owned by nobody, directory-wide) scope; an unregistered tab is DIR-only -
+there's no swarm name to hand it to. The modal also lists what's already
+parked in that directory, so you see the pile before you add to it.
+
+A session picks up its own parked work with `relay next` (claims the oldest
+item it owns, then the oldest unowned one - never another session's) or
+browses without claiming via `relay parked`. **Relay never pushes a parked
+item into a session.** Extreme mode already knows how to inject a prompt into
+an idle tab, and deliberately does not do that here: the item was parked
+because you didn't want it worked on yet, and auto-draining the backlog would
+turn "don't forget this" into "drift, unattended" - the failure this feature
+exists to prevent, not enable. The only nudges toward a parked item are
+visibility: the header count, each tab's status-bar badge, and the modal's own
+list. Full protocol: `relay help parked`.
 
 ### Pause and shadow (reversible controls)
 
@@ -226,6 +251,7 @@ can't silently auto-approve.)
 | `a` / `d` | Arm all (safe) / disarm all |
 | `s` | **Shadow-arm** the selected tab: dry-run only, never acts (see below) |
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
+| `i` | **Park an idea** against the selected row (see [Parked work](#parked-work-i)) |
 | `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |
@@ -900,16 +926,25 @@ monitor via `relay task list`). Both skills share one CLI verb reference,
 [`skills/relay-cli-reference.md`](skills/relay-cli-reference.md), copied
 above.
 
-[`skills/relay-self-scheduling`](skills/relay-self-scheduling/SKILL.md) is
-the third, and is not swarm-scoped: it loads in any tab told to own something
-on a repeating schedule ("you're responsible for PRs"). It deliberately
-carries no flag syntax - the CLI's own errors teach that, whether or not a
-skill loaded. What it carries is the judgment the CLI cannot check: when a
-standing timer is the wrong tool, how to write a payload that still makes
-sense after the session has been compacted three times, and what intervals
-and caps are sane.
+[`skills/relay-self-scheduling`](skills/relay-self-scheduling/SKILL.md) and
+[`skills/relay-parked-work`](skills/relay-parked-work/SKILL.md) are the other
+two, and neither is swarm-scoped - both load in a plain unregistered tab.
+`relay-self-scheduling` loads when a tab is told to own something on a
+repeating schedule ("you're responsible for PRs"); it deliberately carries no
+flag syntax - the CLI's own errors teach that, whether or not a skill loaded.
+What it carries is the judgment the CLI cannot check: when a standing timer is
+the wrong tool, how to write a payload that still makes sense after the
+session has been compacted three times, and what intervals and caps are sane.
+`relay-parked-work` loads on "pick the next one from relay" / "what's parked"
+/ "anything queued for me" and carries the same kind of judgment: a parked
+item is a seed, not a spec, and claiming one is the operator's call, not a
+license to auto-drain the backlog (see [Parked work](#parked-work-i)).
 
-`./install.sh` offers to symlink all three into `~/.claude/skills/` so they
+`relay help parked` is the canonical protocol text either way - the skill
+points at it rather than duplicating it, so a session with the skill
+uninstalled still gets the rules by running the CLI.
+
+`./install.sh` offers to symlink all four into `~/.claude/skills/` so they
 version with the repo instead of drifting.
 
 ### Security posture (read this)
