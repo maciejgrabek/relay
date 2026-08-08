@@ -521,6 +521,51 @@ def test_dos_modal_text():
         any("press any key" in r for r in t5.splitlines()))
 
 
+def test_park_modal_text():
+    import app as appmod
+    t = appmod.park_modal_text("retry backoff on inject", "bff-worker", False,
+                               ["widget shows parked count",
+                                "statusbar click queue is O(n)"], 80)
+    rows = t.splitlines()
+    chk("park title row", any("PARK AN IDEA" in r for r in rows))
+    chk("buffer is shown", any("retry backoff on inject" in r for r in rows))
+    chk("cursor glyph follows the buffer",
+        any("retry backoff on inject_" in r for r in rows))
+    chk("scope row names the session", any("bff-worker" in r for r in rows))
+    chk("session scope is the marked one",
+        any("[·] bff-worker" in r for r in rows))
+    chk("existing items listed",
+        any("widget shows parked count" in r for r in rows))
+    chk("footer teaches the keys",
+        any("ENTER park" in r for r in rows) and any("ESC" in r for r in rows))
+
+    d = appmod.park_modal_text("x", "bff-worker", True, [], 80)
+    chk("dir scope marks DIR", any("[·] DIR" in r for r in d.splitlines()))
+    chk("empty existing list renders nothing about parked",
+        not any("already parked" in r for r in d.splitlines()))
+
+    many = appmod.park_modal_text("x", "w", False,
+                                  [f"item {i}" for i in range(9)], 80)
+    mrows = many.splitlines()
+    chk("existing list caps at 5", sum(1 for r in mrows if "item " in r) == 5)
+    chk("overflow is counted", any("+4 more" in r for r in mrows))
+    chk("count in the header line", any("(9)" in r for r in mrows))
+
+    unreg = appmod.park_modal_text("x", "", True, [], 80)
+    urows = unreg.splitlines()
+    chk("no name renders a DIR-only scope row",
+        any("[·] DIR" in r for r in urows))
+    chk("no name says why there is no toggle",
+        any("not registered" in r for r in urows))
+
+    narrow = appmod.park_modal_text("y" * 200, "w", False, [], 40)
+    chk("width clamped", all(len(r) <= 40 for r in narrow.splitlines()))
+
+    empty = appmod.park_modal_text("", "w", False, [], 80)
+    chk("empty buffer still shows a cursor",
+        any(r.strip().startswith("_") for r in empty.splitlines()))
+
+
 def test_statusbar_label():
     import statusbar
     chk("extreme circle is purple",
@@ -545,6 +590,7 @@ if __name__ == "__main__":
     test_tui_chrome()
     test_push_line()
     test_dos_modal_text()
+    test_park_modal_text()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)

@@ -628,6 +628,45 @@ def dos_modal_text(title: str, lines: list, width: int,
     return "\n".join(shaded)
 
 
+PARK_EXISTING_SHOWN = 5
+
+
+def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
+                    existing: list, width: int) -> str:
+    """The park-an-idea capture modal.
+
+    Listing what is already parked here is not decoration: it is the pressure
+    against the backlog becoming a graveyard, and against parking a duplicate
+    of something you forgot. The list is scoped to the WORKDIR and does not
+    move when TAB flips the scope - a list that shifts mid-capture hides the
+    duplicate you are about to create.
+
+    Cursor is a static glyph, not a blink: the pane repaints on a timer and a
+    2s blink reads as broken rather than alive.
+    """
+    if scope_label:
+        sess_mark = "[ ]" if dir_scope else "[·]"
+        dir_mark = "[·]" if dir_scope else "[ ]"
+        scope_row = f"SCOPE: {sess_mark} {scope_label}  {dir_mark} DIR"
+    else:
+        # An unregistered tab has no swarm name, so tasks.owner has nothing
+        # to hold and SESSION scope does not exist for it. Say that rather
+        # than rendering a toggle the modal cannot honour.
+        scope_row = "SCOPE: [·] DIR  (tab not registered)"
+    lines = ["", scope_row]
+    if existing:
+        lines += ["", f"already parked here ({len(existing)}):"]
+        lines += [f"  {t}" for t in existing[:PARK_EXISTING_SHOWN]]
+        extra = len(existing) - PARK_EXISTING_SHOWN
+        if extra > 0:
+            lines.append(f"  +{extra} more")
+    modal = dos_modal_text("PARK AN IDEA", lines, width,
+                          footer="TAB scope · ENTER park · ESC cancel")
+    # Buffer with cursor shown above the modal, clamped to width
+    buffer_line = f"{buffer}_"[:width]
+    return f"{buffer_line}\n{modal}"
+
+
 def getting_started_panel(width: int) -> str:
     """Shown in the preview pane when relay has nothing to control (only its own
     tab is open). Relay acts on OTHER sessions, so an empty roster is the moment
