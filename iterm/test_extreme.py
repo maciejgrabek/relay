@@ -512,6 +512,13 @@ def test_dos_modal_text():
     t3 = appmod.dos_modal_text("T", ["hi"], 10)
     chk("narrow width clamps sanely (min inner width holds)",
         "press any key" in t3 or "hi" in t3)
+    t4 = appmod.dos_modal_text("T", ["hi"], 60, footer="TAB scope · ENTER park")
+    chk("custom footer renders", any("ENTER park" in r for r in t4.splitlines()))
+    chk("custom footer replaces the default",
+        not any("press any key" in r for r in t4.splitlines()))
+    t5 = appmod.dos_modal_text("T", ["hi"], 60)
+    chk("default footer unchanged",
+        any("press any key" in r for r in t5.splitlines()))
 
 
 def test_statusbar_label():

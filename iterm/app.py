@@ -599,19 +599,20 @@ def extreme_push_line(info, dwell: float, now: float, width: int) -> str:
     return text[:max(10, width) - 1] + "\n"
 
 
-def dos_modal_text(title: str, lines: list, width: int) -> str:
+def dos_modal_text(title: str, lines: list, width: int,
+                   footer: str = "[ press any key ]") -> str:
     """A DOS-style dialog as plain text: double-line box, title row,
-    separator, body, centered '[ press any key ]' footer, and a ▓ drop
-    shadow (right edge offset one row, bottom row offset two columns).
-    Pure and width-clamped; single-width glyphs only (the pane renders
-    literally)."""
+    separator, body, centered footer, and a ▓ drop shadow (right edge offset
+    one row, bottom row offset two columns). Pure and width-clamped;
+    single-width glyphs only (the pane renders literally). The footer is
+    parameterised because the park modal is a form, not a dismissal."""
     inner = max(len(title), max((len(l) for l in lines), default=0),
-                len("[ press any key ]"), 24)
+                len(footer), 24)
     inner = min(inner, max(24, width - 6))
     def clip(s):
         return s[:inner]
     body = [clip(l) for l in lines]
-    foot = "[ press any key ]".center(inner)
+    foot = clip(footer).center(inner)
     top = "╔" + "═" * (inner + 2) + "╗"
     sep = "╠" + "═" * (inner + 2) + "╣"
     bot = "╚" + "═" * (inner + 2) + "╝"
