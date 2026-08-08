@@ -491,13 +491,20 @@ class Watcher:
                     # same way `job` is cached, regardless of registration -
                     # this is the only directory source an unregistered solo
                     # tab has. Registered sessions ALSO get it persisted to
-                    # the DB below, since that's what CLI consumers read.
+                    # the DB below, since that's what CLI consumers read - but
+                    # only while the in-memory SessionInfo does not already
+                    # have a workdir cached. set_watcher_workdir itself is a
+                    # no-op once sessions.workdir is non-empty (it only writes
+                    # into an empty column), so calling it every tick for
+                    # every registered session was a write transaction spent
+                    # on a guaranteed no-op against a DB the TUI, watcher and
+                    # CLI all contend for. `info` still holds the PREVIOUS
+                    # tick's workdir here (it is updated below), so this is
+                    # exactly "already known".
                     reg = self.registry.get(sid)
-                    if reg:
+                    if reg and path and not (info and info.workdir):
                         conn = self._swarm_conn()
-                        name = reg["name"]
-                        if path:
-                            swarmdb.set_watcher_workdir(conn, name, path)
+                        swarmdb.set_watcher_workdir(conn, reg["name"], path)
                     if info is None:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
