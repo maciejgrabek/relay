@@ -2095,7 +2095,26 @@ class RelayApp(App):
         if on:
             self._parked_cursor = 0
             self._parked_scope = "dir"
-            self._render_parked()
+            # Cleared, not stale: #parkedview has just flipped to
+            # display=block but Textual has not laid it out yet, so
+            # _render_parked (scheduled below, post-layout) cannot compute a
+            # real width or row list synchronously here. Emptying _parked_ids
+            # now means a key landing in that brief window resolves through
+            # _parked_selected_id() to "nothing at the cursor" (the existing
+            # ALREADY TAKEN / no-op refusal) rather than an id left over from
+            # whatever was on screen the last time the overlay was open.
+            self._parked_ids = []
+            # call_after_refresh, NOT a call here: #parkedview.size.width is
+            # still 0 immediately after the display flip above (no layout
+            # pass has run), so a synchronous render here clamps to the
+            # width floor on every open regardless of actual terminal width.
+            # Deliberately NOT added to the periodic _refresh tick either -
+            # that would re-snapshot _parked_ids under a stationary cursor,
+            # which is the exact hazard an earlier round of this feature
+            # already shipped once (ENTER silently assigning the wrong item).
+            # A one-shot post-layout callback fixes the first paint without
+            # reintroducing that.
+            self.call_after_refresh(self._render_parked)
 
     def _render_parked(self) -> None:
         rows = self._parked_rows()

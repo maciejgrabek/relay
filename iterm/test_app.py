@@ -1725,6 +1725,38 @@ async def go():
         await pilot.pause()
         a.watcher.sessions["s1"].workdir = "/tmp/pk"
 
+    # --- finding 2: the first frame must not paint clamped to the 40-column
+    # floor. action_parked used to call _render_parked() synchronously right
+    # after flipping #parkedview to display:block, before Textual had laid
+    # the pane out - so size.width read 0 on every open (max(40, 0-4)==40)
+    # regardless of the real terminal width, and nothing repainted it since
+    # parked is deliberately not on the periodic _refresh tick. Driven at a
+    # wide terminal, where 40 could not be an honest width, so a regression
+    # to the synchronous call fails this immediately.
+    def _one_wide():
+        return {"s0": SessionInfo("s0", title="wide", window_idx=0, tab_idx=0,
+                                  last_screen=["x"])}
+
+    aw = _TestApp(_one_wide(), dry_run=True)
+    async with aw.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        aw.watcher.sessions["s0"].workdir = "/tmp/pk-wide"
+        connw = aw._swarm_db_conn()
+        import db as _dbw
+        _dbw.park_task(connw, "check the first paint's width", "/tmp/pk-wide",
+                       project="pk-wide")
+        await pilot.press("b")
+        await pilot.pause()
+        _rendered = str(aw.query_one("#parkedview", Static).render())
+        _widest = max((len(line) for line in _rendered.splitlines()),
+                      default=0)
+        chk(f"finding 2: the first parked frame at a 140-column terminal is "
+            f"not clamped to the 40-column floor (observed widest line: "
+            f"{_widest})", _widest > 40)
+        chk("finding 2: the key bar (esc close) survives the first paint - "
+            "clamped to 40 it gets cut off mid-word",
+            any("esc close" in line for line in _rendered.splitlines()))
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch
