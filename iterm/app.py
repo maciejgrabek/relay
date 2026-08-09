@@ -138,7 +138,7 @@ KEYBAR = (
            ("v", "audit"), ("f", "feed"), ("t", "timers"), ("E×2", "extreme")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("p", "pause"), (",", "settings"), ("R×2", "restore"),
+             ("p", "pause"), ("!", "stop/tell"), (",", "settings"), ("R×2", "restore"),
              ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
 
 
@@ -786,6 +786,7 @@ def help_text() -> str:
         row("m", "mascot: float the creature on your desktop, above other apps"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
+        row("!", "INTERVENE: stop running sessions and/or broadcast to them"),
         row(",", "settings editor - up/down move, left/right change, p plays a sound"),
         row("R R", "restore dead task-owners (double-press confirms)"),
         row("W W", "WIPE dead sessions' work (double-press confirms)"),

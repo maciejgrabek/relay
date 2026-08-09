@@ -1287,6 +1287,12 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
+    chk("! is in the key bar", "!" in appmod.KEYBAR)
+    chk("! is in the help screen", "!" in appmod.help_text())
+    chk("help explains what ! does",
+        "intervene" in appmod.help_text().lower()
+        or "stop" in appmod.help_text().lower())
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

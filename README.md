@@ -29,7 +29,7 @@ arm/disarm them with the arrow keys.
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · v audit · f feed · t timers · E×2 extreme
-  a arm all · d disarm all · TAB swarm · p pause · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
+  a arm all · d disarm all · TAB swarm · p pause · ! stop/tell · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
 ```
 
 The list is on top and the selected session's **live terminal feed** is stacked
@@ -106,6 +106,29 @@ you - NO mode auto-answers your decisions.**
 
 Use `safe` where a wrong Enter would hurt; `wild`/`insane` in scratch/throwaway
 workspaces where you just want the friction gone.
+
+### Intervene (`!`)
+
+Extreme mode pushes a prompt into an idle tab and [timers](#session-timers) fire
+on a schedule - relay can start work with nobody watching, and until now had no
+way to stop it. `p` doesn't help: it pauses relay's own hands, not the agents
+already running. `!` on the selected row opens a modal with a scope and three
+modes, counts filled in before you commit.
+
+- **STOP** sends a bare `ESC` to every targeted session right away - interrupts
+  mid-turn, whatever it's doing.
+- **TELL** queues a message, delivered to each session the next time it reaches
+  a ready prompt. It does not interrupt.
+- **STOP + TELL** does both: the `ESC` lands now, the message waits for idle.
+
+The timing is not interchangeable: typing "stop, do X instead" as TELL on a
+working session means X arrives only once that session finishes the turn you
+wanted it to abandon.
+
+`TAB` cycles mode, `←`/`→` cycles scope through selected / project / all, and
+the counts update on every scope change so the blast radius is visible before
+`ENTER`. Braking also drops any session out of extreme mode - otherwise the
+next idle push would restart the work you just stopped.
 
 ### Parked work (`i`)
 
@@ -256,6 +279,7 @@ can't silently auto-approve.)
 | `a` / `d` | Arm all (safe) / disarm all |
 | `s` | **Shadow-arm** the selected tab: dry-run only, never acts (see below) |
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
+| `!` | **Intervene**: stop running sessions and/or broadcast to them (see [Intervene](#intervene-)) |
 | `i` | **Park an idea** against the selected row (see [Parked work](#parked-work-i)) |
 | `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
