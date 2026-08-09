@@ -795,6 +795,15 @@ async def go():
         sum(1 for r in _po_clamped.splitlines()
             if r.lstrip().startswith("▸")) == 1)
 
+    # `b` discoverability: the earlier `i` key shipped without reaching the
+    # key bar or help screen and had to be retrofitted - this is the "don't
+    # repeat that" check for `b`. A bare "b" is not a safe substring test
+    # (it also occurs in the theme's hex colors and in "bold"), so this
+    # matches the exact rendered key markup instead.
+    chk("b is in the key bar", "]b[/]" in appmod.KEYBAR
+        and "parked" in appmod.KEYBAR.lower())
+    chk("b is in the help screen", "parked" in appmod.help_text().lower())
+
     # live-feed header timers summary (one line, plain text)
     _sm = appmod.timers_summary(
         [{"interval_min": 5, "payload": "check PRs", "mode": "idle",

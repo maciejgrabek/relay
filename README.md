@@ -28,7 +28,7 @@ arm/disarm them with the arrow keys.
   ○ MANUAL  ◌ STANDBY   3m   coord         coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
-  ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · v audit · f feed · t timers · E×2 extreme
+  ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · b parked · v audit · f feed · t timers · E×2 extreme
   a arm all · d disarm all · TAB swarm · p pause · ! stop/tell · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
 ```
 
@@ -145,16 +145,29 @@ timer.
 ### Parked work (`i`)
 
 While a session works, you'll have a thought about what it (or another
-session) should do next. Typing it into the session pulls that session's
-context toward something it wasn't doing - it drifts. Saying nothing loses the
-thought by the time the turn ends. `i` on the selected row opens a DOS-style
-modal, you type one line, `ENTER` parks it. Nothing was ever sent to the
-session, so the capture costs it **zero context**.
+session) should do next. You have three options. Type it into the session -
+it lands in that session's context and pulls it toward work that wasn't the
+point of the turn, so it drifts. Say nothing - the thought is gone by the time
+the turn ends. Or park it: `i` on the selected row opens a DOS-style modal,
+you type one line, `ENTER` parks it. Nothing was ever sent to the session, so
+the capture costs it **zero context**.
 
-`TAB` inside the modal toggles SESSION (owned by that tab's swarm name) vs DIR
-(owned by nobody, directory-wide) scope; an unregistered tab is DIR-only -
-there's no swarm name to hand it to. The modal also lists what's already
-parked in that directory, so you see the pile before you add to it.
+For example: `bff-worker` is mid-refactor and you notice the retry backoff on
+an unrelated service needs tuning. Press `i`, type "tune retry backoff on
+inject", `ENTER`. `bff-worker` never sees the line and keeps refactoring
+uninterrupted. Later, either some session claims it unprompted with
+`relay next`, or you hand it to one directly: select that session's row in the
+roster, press `b` to open the parked overlay, move to the item, `ENTER` -
+it's assigned and that session gets a wake-up naming the task.
+
+`TAB` inside the capture modal toggles SESSION (owned by that tab's swarm
+name) vs DIR (owned by nobody, directory-wide) scope; an unregistered tab is
+DIR-only - there's no swarm name to hand it to. The modal also lists what's
+already parked in that directory, so you see the pile before you add to it -
+but only the five most recent. `b` opens the full pile instead: every parked
+item, oldest first, regardless of the modal's cap. `↑↓` moves the cursor,
+`←→` widens the scope from this directory to all of them, `d` drops the
+highlighted item, and `i` from inside jumps straight to capture.
 
 A session picks up its own parked work with `relay next` (claims the oldest
 item it owns, then the oldest unowned one - never another session's) or
@@ -164,8 +177,8 @@ an idle tab, and deliberately does not do that here: the item was parked
 because you didn't want it worked on yet, and auto-draining the backlog would
 turn "don't forget this" into "drift, unattended" - the failure this feature
 exists to prevent, not enable. The only nudges toward a parked item are
-visibility: the header count, each tab's status-bar badge, and the modal's own
-list. Full protocol: `relay help parked`.
+visibility: the header count, each tab's status-bar badge, and the `i` / `b`
+overlays themselves. Full protocol: `relay help parked`.
 
 It runs the other way too: a session that notices a follow-up mid-task can
 shelve it with `relay task add "<line>" --park` instead of drifting into it or
@@ -293,6 +306,7 @@ can't silently auto-approve.)
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
 | `!` | **Intervene**: stop running sessions and/or broadcast to them (see [Intervene](#intervene-)) |
 | `i` | **Park an idea** against the selected row (see [Parked work](#parked-work-i)) |
+| `b` | **Parked overlay**: the whole pile, oldest first - move, drop, or hand one to a session (see [Parked work](#parked-work-i)) |
 | `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |

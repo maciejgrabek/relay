@@ -135,7 +135,8 @@ def _keys(pairs) -> str:
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"), ("i", "park"),
-           ("v", "audit"), ("f", "feed"), ("t", "timers"), ("E×2", "extreme")])
+           ("b", "parked"), ("v", "audit"), ("f", "feed"), ("t", "timers"),
+           ("E×2", "extreme")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), ("!", "stop/tell"), (",", "settings"), ("R×2", "restore"),
@@ -799,6 +800,7 @@ def help_text() -> str:
         row("n", "jump to the selected session's iTerm2 tab"),
         row("x", "hide / show the selected session"),
         row("i", "park an idea against the selected session (zero context cost)"),
+        row("b", "PARKED: the whole pile - drop items, hand one to a session"),
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
