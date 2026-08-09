@@ -1419,6 +1419,32 @@ async def go():
         await pilot.press("tab")
         await pilot.pause()
 
+        # --- fix round 1: the overlay must not stack with its siblings -----
+        # Driven live, not read from the code - all three were missed by the
+        # tests above because they only ever opened ONE overlay at a time.
+        await pilot.press("b")
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB closes parked before opening swarm - only one pane visible",
+            a._swarm_visible and not a._parked_visible)
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("swarm view closed again, nothing left stacked",
+            not a._swarm_visible and not a._parked_visible)
+
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("b")
+        await pilot.pause()
+        chk("b closes timers before opening parked - only one pane visible",
+            a._parked_visible and not a._timers_visible)
+
+        await pilot.press("b")
+        await pilot.pause()
+        chk("a second b re-toggles and closes the parked overlay, "
+            "matching every other overlay in relay", not a._parked_visible)
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch

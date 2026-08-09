@@ -1864,6 +1864,8 @@ class RelayApp(App):
             self.action_help()            # close help first; TAB then flips
         if self._settings_visible:
             self.action_settings()        # ...and settings, same reason
+        if self._parked_visible:
+            self.action_parked()          # ...and parked, same reason
         self._swarm_visible = not self._swarm_visible
         on = self._swarm_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -2037,6 +2039,8 @@ class RelayApp(App):
             self.action_settings()
         if self._help_visible:
             self.action_help()
+        if self._timers_visible:
+            self.action_timers()
         self._parked_visible = not self._parked_visible
         on = self._parked_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -2115,30 +2119,45 @@ class RelayApp(App):
             event.prevent_default()
             return
         if self._parked_visible:
+            # Only matched cases stop the event (mirrors the timers branch
+            # below) - an unmatched key, notably a second 'b', must fall
+            # through to Textual's normal binding dispatch so action_parked()
+            # re-toggles and closes the overlay. A blanket stop() here would
+            # swallow that second 'b' before it ever reaches the binding.
             k = event.key
             rows = self._parked_rows()
             if k == "escape":
                 self.action_parked()
+                event.stop()
+                event.prevent_default()
             elif k == "i":
                 self.action_parked()          # close, then capture
                 self.action_park()
+                event.stop()
+                event.prevent_default()
             elif k == "up":
                 self._parked_cursor = max(0, self._parked_cursor - 1)
                 self._render_parked()
+                event.stop()
+                event.prevent_default()
             elif k == "down":
                 self._parked_cursor = min(max(0, len(rows) - 1),
                                           self._parked_cursor + 1)
                 self._render_parked()
+                event.stop()
+                event.prevent_default()
             elif k in ("left", "right"):
                 self._parked_scope = "all" if self._parked_scope == "dir" else "dir"
                 self._parked_cursor = 0
                 self._render_parked()
+                event.stop()
+                event.prevent_default()
             elif k == "d" and rows:
                 swarmdb.drop_parked(self._swarm_db_conn(),
                                     rows[self._parked_cursor]["id"])
                 self._render_parked()
-            event.stop()
-            event.prevent_default()
+                event.stop()
+                event.prevent_default()
             return
         if not self._timers_visible:
             return
