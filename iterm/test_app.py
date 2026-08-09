@@ -26,6 +26,7 @@ os.environ["RELAY_AUDIT_LOG"] = os.path.join(
 sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
 import config as cfgmod  # noqa: E402
+from textual.widgets import Static  # noqa: E402
 from watcher import SessionInfo  # noqa: E402
 
 
@@ -1107,11 +1108,16 @@ async def go():
     # --- intervene (!): the operator's brake-and-broadcast modal --------------
     def _one():
         # A second session so STOP has something to skip: every stub session
-        # is idle by default, and STOP correctly ignores idle sessions.
+        # is idle by default, and STOP correctly ignores idle sessions. A
+        # third (s2) is mutated to mode="extreme" further down to prove the
+        # brake disarms it - left idle/off here so it doesn't perturb the
+        # working-session counts the earlier ALL-scope assertions depend on.
         return {
             "s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
                               last_screen=["x"]),
             "s1": SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
+                              last_screen=["x"]),
+            "s2": SessionInfo("s2", title="t2", window_idx=0, tab_idx=2,
                               last_screen=["x"]),
         }
 
@@ -1181,6 +1187,31 @@ async def go():
         await pilot.press("space")        # dismiss the report
         await pilot.pause()
 
+        # --- extreme is disarmed on every braked session; other modes are not
+        # An interrupted tab is idle, and extreme pushes a prompt into an idle
+        # tab after a dwell - without the disarm relay would restart the very
+        # work the operator just stopped, within a minute. A plain arm level
+        # (safe/wild/insane) only auto-approves prompts a stopped agent will
+        # not raise, so it must be left alone - proven with s1 as a control.
+        a.watcher.sessions["s1"].mode = "safe"      # control: braked, not extreme
+        a.watcher.sessions["s2"].mode = "extreme"
+        a.watcher.sessions["s2"].state = "working"
+        a.watcher.sessions["s2"].extreme_fires_left = 3
+        a.watcher.sent.clear()
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")          # stop_tell -> stop
+        await pilot.press("right")        # project -> all
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("extreme session disarmed to insane on brake",
+            a.watcher.sessions["s2"].mode == "insane")
+        chk("extreme budget zeroed on disarm",
+            a.watcher.sessions["s2"].extreme_fires_left == 0)
+        chk("a 'safe' control session is left untouched",
+            a.watcher.sessions["s1"].mode == "safe")
+        await pilot.press("space")
+        await pilot.pause()
+
         a.watcher.sent.clear()
         await pilot.press("exclamation_mark")
         await pilot.press("tab")
@@ -1190,6 +1221,28 @@ async def go():
         await pilot.press("enter")
         await pilot.pause()
         chk("TELL sent no keystrokes", a.watcher.sent == [])
+        await pilot.press("space")
+        await pilot.pause()
+
+        # --- TELL reaches unregistered targets but honestly tells none -----
+        # The block above used the default PROJECT scope, which can't reach an
+        # unregistered tab at all (targets == []) - that made "TELL sent no
+        # keystrokes" trivially true regardless of the unregistered-skip logic.
+        # ALL scope gives it real (unregistered) targets to skip instead.
+        a.watcher.sessions["s2"].state = "working"
+        a.watcher.sent.clear()
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")
+        await pilot.press("tab")          # -> tell
+        await pilot.press("right")        # project -> all
+        for ch in "hi":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("TELL still sent no keystrokes with real (unregistered) targets",
+            a.watcher.sent == [])
+        chk("the report honestly says 'told 0' - unregistered has no mailbox",
+            "told 0" in a.query_one("#modal", Static).content)
         await pilot.press("space")
         await pilot.pause()
 
@@ -1207,6 +1260,30 @@ async def go():
         await pilot.press("enter")
         await pilot.pause()
         chk("STOP commits on an empty buffer", a._intervene is None)
+        await pilot.press("space")
+        await pilot.pause()
+
+    # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
+    # A separate dry_run=True app - the block above flipped to dry_run=False
+    # to exercise the real paths, which left the `if self.dry_run:` branch
+    # itself unexercised. A panic button that quietly does something real
+    # under dry-run is the worst possible failure here.
+    ad = _TestApp(_one(), dry_run=True)
+    async with ad.run_test() as pilot:
+        await pilot.pause()
+        ad._refresh()
+        await pilot.pause()
+        ad.watcher.sessions["s1"].state = "working"
+        await pilot.press("exclamation_mark")
+        for ch in "hi":
+            await pilot.press(ch)
+        await pilot.press("right")        # project -> all: real targets exist
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("dry-run sent no keystrokes despite a real working target",
+            ad.watcher.sent == [])
+        chk("dry-run shows the DRY RUN modal, not the real report",
+            "DRY RUN" in ad.query_one("#modal", Static).content)
         await pilot.press("space")
         await pilot.pause()
 
