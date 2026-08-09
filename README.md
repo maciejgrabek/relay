@@ -163,11 +163,12 @@ it's assigned and that session gets a wake-up naming the task.
 `TAB` inside the capture modal toggles SESSION (owned by that tab's swarm
 name) vs DIR (owned by nobody, directory-wide) scope; an unregistered tab is
 DIR-only - there's no swarm name to hand it to. The modal also lists what's
-already parked in that directory, so you see the pile before you add to it -
-but only the five most recent. `b` opens the full pile instead: every parked
-item, oldest first, regardless of the modal's cap. `↑↓` moves the cursor,
-`←→` widens the scope from this directory to all of them, `d` drops the
-highlighted item, and `i` from inside jumps straight to capture.
+already parked in that directory - the five oldest, not the most recent, so
+it won't catch a duplicate of something you just parked. `b` opens the full
+pile instead: every parked item, oldest first, regardless of the modal's cap.
+`↑↓` moves the cursor, `←→` widens the scope from this directory to all of
+them, `d` drops the highlighted item, and `i` from inside jumps straight to
+capture.
 
 A session picks up its own parked work with `relay next` (claims the oldest
 item it owns, then the oldest unowned one - never another session's) or
