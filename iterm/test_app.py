@@ -1360,6 +1360,65 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
+        # --- parked overlay ---------------------------------------------------
+        # The selected session needs a known workdir - action_park refuses
+        # (CANNOT PARK) otherwise, and that's exactly what the 'i from the
+        # overlay opens capture' assertion below exercises.
+        a.watcher.sessions[a._selected_sid()].workdir = "/tmp/pk"
+        conn = a._swarm_db_conn()
+        import db as _db
+        _db.park_task(conn, "first parked", "/tmp/pk", project="pk")
+        _db.park_task(conn, "second parked", "/tmp/pk", project="pk")
+
+        await pilot.press("b")
+        await pilot.pause()
+        chk("b opens the parked overlay", a._parked_visible)
+        chk("cursor starts at the top", a._parked_cursor == 0)
+        chk("scope starts on this directory", a._parked_scope == "dir")
+
+        await pilot.press("right")
+        await pilot.pause()
+        chk("right widens the scope", a._parked_scope == "all")
+        chk("all scope sees the items", len(a._parked_rows()) >= 2)
+
+        await pilot.press("down")
+        await pilot.pause()
+        chk("down moves the cursor", a._parked_cursor == 1)
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.pause()
+        chk("up stops at the top", a._parked_cursor == 0)
+
+        before = len(a._parked_rows())
+        first_id = a._parked_rows()[0]["id"]
+        await pilot.press("d")
+        await pilot.pause()
+        chk("d drops one item", len(a._parked_rows()) == before - 1)
+        chk("d dropped the selected row",
+            first_id not in {r["id"] for r in a._parked_rows()})
+
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("escape closes the overlay", not a._parked_visible)
+
+        await pilot.press("b")
+        await pilot.press("i")
+        await pilot.pause()
+        chk("i from the overlay closes it", not a._parked_visible)
+        chk("i from the overlay opens capture", a._park is not None)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.press("t")
+        await pilot.pause()
+        chk("t still opens timers", a._timers_visible)
+        await pilot.press("t")
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB still opens the swarm view", a._swarm_visible)
+        await pilot.press("tab")
+        await pilot.pause()
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch

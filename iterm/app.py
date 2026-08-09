@@ -1081,7 +1081,7 @@ class RelayApp(App):
         height: 5; border-top: solid $dimmer;
         background: $bg_deep; color: $dim;
     }
-    #swarmview, #helpview, #settingsview, #timersview {
+    #swarmview, #helpview, #settingsview, #timersview, #parkedview {
         display: none; height: 1fr; padding: 0 2;
         background: $bg_deep; color: $accent;
     }
@@ -1100,6 +1100,7 @@ class RelayApp(App):
         Binding("space", "toggle", "Arm"),
         Binding("p", "pause", "Pause"),
         Binding("i", "park", "Park idea", show=True),
+        Binding("b", "parked", "Parked", show=True),
         Binding("s", "shadow", "Shadow"),
         Binding("comma", "settings", "Settings"),
         Binding("left", "settings_left", "Change", show=False),
@@ -1143,6 +1144,9 @@ class RelayApp(App):
         self._timers_visible = False
         self._timers_cursor = 0
         self._timer_form = None   # None | {"id": None|int, "interval": int, "mode": str}
+        self._parked_visible = False
+        self._parked_cursor = 0
+        self._parked_scope = "dir"     # "dir" | "all"
         # Preview (live-feed) pane visibility. Default shown; the real value is
         # read from config in on_mount, toggled live by 'f', and persisted.
         self._preview_visible = True
@@ -1179,6 +1183,7 @@ class RelayApp(App):
         keypress acts on a tab you cannot see."""
         return (self._settings_visible or self._swarm_visible
                 or self._help_visible or self._timers_visible
+                or self._parked_visible
                 or self._modal_open or self._park is not None
                 or self._intervene is not None)
 
@@ -1210,6 +1215,7 @@ class RelayApp(App):
             yield Static(help_text(), id="helpview")
             yield Static("", id="settingsview")
             yield Static("", id="timersview")
+            yield Static("", id="parkedview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
         yield Static("", id="modal", markup=False)
@@ -2007,6 +2013,49 @@ class RelayApp(App):
         elif self._extreme_form is not None:
             self._extreme_form_save()
 
+    # --- parked overlay (b): the whole pile, not just the 5-row preview -------
+    def _parked_workdir(self) -> str:
+        """The selected row's directory - the one `relay next` would claim
+        from. Read off SessionInfo, not the sessions table: an unregistered tab
+        has no row there and is exactly the case parking serves."""
+        sid = self._selected_sid()
+        info = self.watcher.sessions.get(sid) if (sid and self.watcher) else None
+        return (getattr(info, "workdir", "") or "").strip()
+
+    def _parked_rows(self) -> list:
+        try:
+            wd = None if self._parked_scope == "all" else self._parked_workdir()
+            return [dict(r) for r in
+                    swarmdb.list_parked(self._swarm_db_conn(), wd)]
+        except Exception:
+            return []
+
+    def action_parked(self) -> None:
+        if self._swarm_visible:
+            self.action_swarm_view()
+        if self._settings_visible:
+            self.action_settings()
+        if self._help_visible:
+            self.action_help()
+        self._parked_visible = not self._parked_visible
+        on = self._parked_visible
+        self.query_one("#middle").styles.display = "none" if on else "block"
+        self.query_one("#log").styles.display = "none" if on else "block"
+        self.query_one("#parkedview").styles.display = "block" if on else "none"
+        if on:
+            self._parked_cursor = 0
+            self._parked_scope = "dir"
+            self._render_parked()
+
+    def _render_parked(self) -> None:
+        rows = self._parked_rows()
+        label = ("all directories" if self._parked_scope == "all"
+                 else (self._parked_workdir() or "this tab has no directory"))
+        w = self.query_one("#parkedview").size.width - 4
+        self._parked_cursor = min(self._parked_cursor, max(0, len(rows) - 1))
+        self.query_one("#parkedview", Static).update(
+            parked_overlay_text(rows, label, max(40, w), self._parked_cursor))
+
     def on_key(self, event) -> None:
         # Swallows the modal for ordinary bindings. Any binding declared
         # priority=True (e.g. action_swarm_view's Tab) is dispatched BEFORE
@@ -2062,6 +2111,32 @@ class RelayApp(App):
                     and event.character.isprintable():
                 self._park["buf"] += event.character
                 self._park_render()
+            event.stop()
+            event.prevent_default()
+            return
+        if self._parked_visible:
+            k = event.key
+            rows = self._parked_rows()
+            if k == "escape":
+                self.action_parked()
+            elif k == "i":
+                self.action_parked()          # close, then capture
+                self.action_park()
+            elif k == "up":
+                self._parked_cursor = max(0, self._parked_cursor - 1)
+                self._render_parked()
+            elif k == "down":
+                self._parked_cursor = min(max(0, len(rows) - 1),
+                                          self._parked_cursor + 1)
+                self._render_parked()
+            elif k in ("left", "right"):
+                self._parked_scope = "all" if self._parked_scope == "dir" else "dir"
+                self._parked_cursor = 0
+                self._render_parked()
+            elif k == "d" and rows:
+                swarmdb.drop_parked(self._swarm_db_conn(),
+                                    rows[self._parked_cursor]["id"])
+                self._render_parked()
             event.stop()
             event.prevent_default()
             return
