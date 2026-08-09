@@ -757,6 +757,44 @@ async def go():
           "max_fires": 10, "fire_count": 0, "label": "", "key": ""}],
         now=1000.0, session_title="api", width=90)
     chk("timers_view_text escapes '[' in the payload", "\\[a-z]" in _esc)
+
+    # `b` overlay: the whole parked pile, oldest first, with a cursor. Unlike
+    # the capture modal's five-row preview, this view must not cap the list -
+    # being unable to see the rest is the reason it exists.
+    _prows = [{"id": 3, "title": "this is something next to park", "owner": None},
+              {"id": 7, "title": "retry backoff on inject", "owner": None},
+              {"id": 9, "title": "widget shows parked count", "owner": "bff"}]
+    _po = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0)
+    _po_lines = _po.splitlines()
+    chk("parked_overlay_text title row", any("PARKED" in r for r in _po_lines))
+    chk("parked_overlay_text scope label in the header",
+        any("/Work/relay" in r for r in _po_lines))
+    chk("parked_overlay_text row 3",
+        any("#3" in r and "something next to park" in r for r in _po_lines))
+    chk("parked_overlay_text owner shown when set",
+        any("#9" in r and "@bff" in r for r in _po_lines))
+    chk("parked_overlay_text no owner marker when unowned",
+        not any("#3" in r and "@" in r for r in _po_lines))
+    chk("parked_overlay_text cursor on row 0",
+        any(r.lstrip().startswith("▸") and "#3" in r for r in _po_lines))
+    _po1 = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 2)
+    _po1_lines = _po1.splitlines()
+    chk("parked_overlay_text cursor moves",
+        any(r.lstrip().startswith("▸") and "#9" in r for r in _po1_lines))
+    chk("parked_overlay_text exactly one cursor",
+        sum(1 for r in _po1_lines if r.lstrip().startswith("▸")) == 1)
+    _po_empty = appmod.parked_overlay_text([], "/Work/relay", 60, 0)
+    chk("parked_overlay_text empty state teaches i",
+        "i" in _po_empty and "park" in _po_empty.lower())
+    _po_narrow = appmod.parked_overlay_text(
+        [{"id": 1, "title": "y" * 200, "owner": None}], "/Work/x", 40, 0)
+    chk("parked_overlay_text width clamped",
+        all(len(r) <= 40 for r in _po_narrow.splitlines()))
+    _po_clamped = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 99)
+    chk("parked_overlay_text out-of-range cursor clamps",
+        sum(1 for r in _po_clamped.splitlines()
+            if r.lstrip().startswith("▸")) == 1)
+
     # live-feed header timers summary (one line, plain text)
     _sm = appmod.timers_summary(
         [{"interval_min": 5, "payload": "check PRs", "mode": "idle",

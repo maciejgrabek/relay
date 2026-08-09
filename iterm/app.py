@@ -923,6 +923,55 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
     return head + "\n".join(lines)
 
 
+def parked_overlay_text(rows: list, scope_label: str, width: int,
+                        cursor: int) -> str:
+    """The `b` overlay: the whole parked pile, oldest first, with a cursor.
+
+    Modeled on timers_view_text: an open box (border bars only - the header
+    and key-bar rows are plain text, not enclosed in side pipes), the same
+    ▸-on-selected-row cursor convention, and the same header shown whether or
+    not there are rows to list.
+
+    Uncapped on purpose - the capture modal already shows PARK_EXISTING_SHOWN
+    rows, and being unable to see the rest is the entire reason this overlay
+    exists. The `@owner` suffix appears only when an item is earmarked for a
+    specific session; an unowned item is free for anyone in that directory
+    and stays visually quiet - no suffix at all, not even an empty one.
+
+    Rendered with markup ON (like timers_view_text), so the scope label,
+    titles and owners - all free text - are escaped. Every line, including
+    the box border, is clamped to `width`: the pane this lands in cannot
+    scroll sideways, so a bare `[:w]` slice (matching timers_view_text's own
+    bare slicing, not an ellipsis marker) runs over the whole render at the
+    end rather than being recomputed per line.
+    """
+    w = max(40, width)
+    bar = "═" * (w - 2)
+    head = [
+        f"╔{bar}╗",
+        f" ▓ PARKED // {escape(scope_label)}",
+        " ↑↓ move · d drop · enter claim · i park new · esc close",
+        f"╚{bar}╝",
+        "",
+    ]
+    if not rows:
+        body = [
+            " nothing parked here.",
+            "",
+            " `i` on a session parks a thought without spending that",
+            " session's context on it - claim one later with enter.",
+        ]
+        return "\n".join(l[:w] for l in head + body)
+    cur = min(max(0, cursor), len(rows) - 1)
+    body = []
+    for i, r in enumerate(rows):
+        mark = "▸" if i == cur else " "
+        owner = f"  @{escape(str(r['owner']))}" if r.get("owner") else ""
+        title = escape(str(r["title"]))
+        body.append(f" {mark} #{r['id']} {title}{owner}")
+    return "\n".join(l[:w] for l in head + body)
+
+
 def timer_cell(active, pending) -> str:
     """Main-list '⏲ TIMERS' column: the count of active timers on this session,
     '?' when timers await restore, '' when none. active wins. (The next-fire
