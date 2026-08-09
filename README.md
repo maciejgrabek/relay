@@ -115,11 +115,15 @@ way to stop it. `p` doesn't help: it pauses relay's own hands, not the agents
 already running. `!` on the selected row opens a modal with a scope and three
 modes, counts filled in before you commit.
 
-- **STOP** sends a bare `ESC` to every targeted session right away - interrupts
-  mid-turn, whatever it's doing.
-- **TELL** queues a message, delivered to each session the next time it reaches
-  a ready prompt. It does not interrupt.
-- **STOP + TELL** does both: the `ESC` lands now, the message waits for idle.
+- **STOP** sends a bare `ESC` right away to every targeted session that is
+  still working - interrupts mid-turn. Idle targets are skipped; there's
+  nothing to interrupt.
+- **TELL** queues a message for each targeted session that is registered,
+  delivered the next time that session reaches a ready prompt. It does not
+  interrupt. An unregistered tab has no mailbox to queue into, so it is not
+  told.
+- **STOP + TELL** does both, each with its own targeting above: the `ESC`
+  lands now, the message waits for idle.
 
 The timing is not interchangeable: typing "stop, do X instead" as TELL on a
 working session means X arrives only once that session finishes the turn you
@@ -127,8 +131,8 @@ wanted it to abandon.
 
 `TAB` cycles mode, `←`/`→` cycles scope through selected / project / all, and
 the counts update on every scope change so the blast radius is visible before
-`ENTER`. Braking also drops any session out of extreme mode - otherwise the
-next idle push would restart the work you just stopped.
+`ENTER`. Braking also drops any interrupted session out of extreme mode -
+otherwise the next idle push would restart the work you just stopped.
 
 ### Parked work (`i`)
 
