@@ -777,6 +777,36 @@ def claim_next_parked(conn, workdir: str, owner: str,
     return None
 
 
+def claim_parked_by_id(conn, task_id: int, owner: str,
+                       now: Optional[float] = None):
+    """Hand ONE specific parked item to ONE specific owner.
+
+    claim_next_parked picks the oldest item for a caller; this is the
+    operator's verb - they are looking at a list and choosing a row. Because
+    the human is doing the choosing, an item earmarked for another session CAN
+    be reassigned here: that is a reassignment, not a session helping itself to
+    work it has no context on.
+
+    Atomic for the same reason claim_next_parked is: relay runs many CLI
+    processes against one SQLite file with no external lock, so a session
+    running `relay next` can take this very row between the read and the write.
+    The UPDATE re-checks parked=1 and we return None if it lands zero rows, so
+    the caller can say "someone took it" rather than report a hand-off that did
+    not happen.
+    """
+    row = conn.execute("SELECT * FROM tasks WHERE id=? AND parked=1",
+                       (task_id,)).fetchone()
+    if row is None:
+        return None
+    cur = conn.execute(
+        "UPDATE tasks SET parked=0, owner=?, state='doing', updated_at=? "
+        "WHERE id=? AND parked=1", (owner, _now(now), task_id))
+    conn.commit()
+    if cur.rowcount > 0:
+        return get_task(conn, task_id)
+    return None
+
+
 def drop_parked(conn, task_id: int) -> bool:
     """Remove a parked item. Scoped to parked=1 so this can never delete real
     work - `relay task` verbs own that, and they ask for confirmation."""

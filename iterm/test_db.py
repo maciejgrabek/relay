@@ -218,6 +218,62 @@ def run():
                 "(FIFO: the earliest of the three rows above)",
                 claimed is not None and claimed["id"] == sym_id)
 
+    # --- claim_parked_by_id -------------------------------------------------
+    W2 = "/Work/overlay"
+    p1 = db.park_task(conn, "hand me over", W2, project="ov")
+    got = db.claim_parked_by_id(conn, p1, "bff")
+    ok &= check("claim_parked_by_id returns the row", got is not None)
+    ok &= check("it un-parks", got["parked"] == 0)
+    ok &= check("it sets the owner", got["owner"] == "bff")
+    ok &= check("it sets doing", got["state"] == "doing")
+    ok &= check("claimed row leaves the parked list",
+                p1 not in {r["id"] for r in db.list_parked(conn, W2)})
+    ok &= check("claiming it twice returns None",
+                db.claim_parked_by_id(conn, p1, "api") is None)
+    ok &= check("a second claim does not steal the owner",
+                db.get_task(conn, p1)["owner"] == "bff")
+    ok &= check("an unknown id returns None",
+                db.claim_parked_by_id(conn, 999999, "bff") is None)
+
+    live = db.add_task(conn, "real work", project="ov")
+    ok &= check("a non-parked task cannot be claimed this way",
+                db.claim_parked_by_id(conn, live, "bff") is None)
+    ok &= check("the refused task is untouched",
+                db.get_task(conn, live)["state"] == "todo")
+
+    # An item parked FOR someone else can still be handed out by the operator:
+    # this is the human reassigning, not a session claiming another's work.
+    p2 = db.park_task(conn, "earmarked", W2, owner="api", project="ov")
+    ok &= check("the operator may reassign an owned parked item",
+                db.claim_parked_by_id(conn, p2, "bff")["owner"] == "bff")
+
+    # Atomicity: the row is stolen between this function's SELECT and UPDATE.
+    p3 = db.park_task(conn, "stolen mid-claim", W2, project="ov")
+
+    class _StealAfterSelect:
+        """Claims the row out from under claim_parked_by_id, in the window
+        between its SELECT and its UPDATE - the interleaving two relay
+        processes hit on one DB."""
+        def __init__(self, c, steal_id, thief):
+            self.c, self.steal_id, self.thief, self.fired = c, steal_id, thief, False
+        def execute(self, sql, params=()):
+            cur = self.c.execute(sql, params)
+            if not self.fired and sql.lstrip().upper().startswith("SELECT"):
+                self.fired = True
+                self.c.execute(
+                    "UPDATE tasks SET parked=0, owner=?, state='doing' WHERE id=?",
+                    (self.thief, self.steal_id))
+                self.c.commit()
+            return cur
+        def commit(self):
+            return self.c.commit()
+
+    stolen = db.claim_parked_by_id(_StealAfterSelect(conn, p3, "thief"),
+                                   p3, "bff")
+    ok &= check("a row stolen mid-claim returns None", stolen is None)
+    ok &= check("the thief keeps it",
+                db.get_task(conn, p3)["owner"] == "thief")
+
     # v1 -> v6 migration: old sessions table gains arm_request, mode, and the
     # context/closed_at columns, one step at a time, ending at the current
     # version.
