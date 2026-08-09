@@ -1754,6 +1754,8 @@ class RelayApp(App):
             self.action_swarm_view()      # leave swarm first
         if self._help_visible and not self._settings_visible:
             self.action_help()            # ...and help, same reason
+        if self._parked_visible and not self._settings_visible:
+            self.action_parked()          # ...and parked, same reason
         self._settings_visible = not self._settings_visible
         on = self._settings_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -1922,6 +1924,8 @@ class RelayApp(App):
             self.action_settings()
         if self._help_visible:
             self.action_help()
+        if self._parked_visible:
+            self.action_parked()
         sid = self._selected_sid()
         if sid == self._own_sid:
             self.query_one(Log).write_line(
@@ -2287,6 +2291,8 @@ class RelayApp(App):
             self.action_swarm_view()      # leave the swarm view first
         if self._settings_visible and not self._help_visible:
             self.action_settings()        # ...and settings, same reason
+        if self._parked_visible and not self._help_visible:
+            self.action_parked()          # ...and parked, same reason
         self._help_visible = not self._help_visible
         on = self._help_visible
         self.query_one("#middle").styles.display = "none" if on else "block"

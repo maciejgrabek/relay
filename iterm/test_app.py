@@ -1445,6 +1445,53 @@ async def go():
         chk("a second b re-toggles and closes the parked overlay, "
             "matching every other overlay in relay", not a._parked_visible)
 
+        # --- fix round 2: EVERY opener must close parked first, not just
+        # swarm and timers - narrowing the on_key swallow (round 1) let an
+        # unmatched key fall through to any opener, and t/,/? had no
+        # _parked_visible guard at all. Checked for every opener, not only
+        # the three the finding named.
+        def _n_overlays_open():
+            return sum([a._swarm_visible, a._help_visible,
+                        a._settings_visible, a._timers_visible,
+                        a._parked_visible])
+
+        for key, flag_name in (("t", "_timers_visible"),
+                               ("comma", "_settings_visible"),
+                               ("question_mark", "_help_visible"),
+                               ("tab", "_swarm_visible")):
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press(key)
+            await pilot.pause()
+            chk(f"{key!r} closes parked before opening - exactly one pane "
+                f"visible, parked not left stacked underneath",
+                _n_overlays_open() == 1 and not a._parked_visible
+                and getattr(a, flag_name))
+            await pilot.press("escape")
+            await pilot.pause()
+            chk(f"{key!r}'s pane closes cleanly, nothing left open",
+                _n_overlays_open() == 0)
+
+        # --- the assertion that actually would have caught the finding:
+        # on_key checks _parked_visible FIRST regardless of which pane is
+        # actually on screen - so if an opener fails to close parked before
+        # showing its own pane, 'd' while LOOKING AT TIMERS still reaches
+        # the parked branch and destroys the highlighted parked row, with
+        # nothing on screen showing a parked item.
+        before_parked = {r["id"] for r in _db.list_parked(conn, None)}
+        await pilot.press("b")
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        after_parked = {r["id"] for r in _db.list_parked(conn, None)}
+        chk("t then d while parked was open drops NOTHING - d belongs to "
+            "whichever pane the operator can actually see",
+            after_parked == before_parked)
+        await pilot.press("escape")
+        await pilot.pause()
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch
