@@ -109,11 +109,10 @@ workspaces where you just want the friction gone.
 
 ### Intervene (`!`)
 
-Extreme mode pushes a prompt into an idle tab and [timers](#session-timers) fire
-on a schedule - relay can start work with nobody watching, and until now had no
-way to stop it. `p` doesn't help: it pauses relay's own hands, not the agents
-already running. `!` on the selected row opens a modal with a scope and three
-modes, counts filled in before you commit.
+Extreme mode pushes a prompt into an idle tab with nobody watching, and until
+now relay had no way to reach into a session and stop it. `!` on the selected
+row opens a modal with a scope and three modes, counts filled in before you
+commit.
 
 - **STOP** sends a bare `ESC` right away to every targeted session that is
   still working - interrupts mid-turn. Idle targets are skipped; there's
@@ -131,8 +130,17 @@ wanted it to abandon.
 
 `TAB` cycles mode, `←`/`→` cycles scope through selected / project / all, and
 the counts update on every scope change so the blast radius is visible before
-`ENTER`. Braking also drops any interrupted session out of extreme mode -
-otherwise the next idle push would restart the work you just stopped.
+`ENTER`. Braking (STOP or STOP + TELL) also drops every session **in scope**
+out of extreme mode, not only the ones it interrupted - an idle session left
+armed is exactly the one that would push its own prompt next, so it loses
+extreme too. TELL alone never touches arm state.
+
+**`!` does not touch [timers](#session-timers).** A timer keeps firing on its
+own schedule right through a STOP - a `now`-mode timer can re-inject seconds
+after the `ESC` lands. `p` is what freezes those: it pauses relay's hands
+entirely, including timer fires, until you press it again. `!` is a brake on
+extreme and a channel to talk to sessions; it is not a way to silence a
+timer.
 
 ### Parked work (`i`)
 
