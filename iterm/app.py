@@ -1147,6 +1147,13 @@ class RelayApp(App):
         self._parked_visible = False
         self._parked_cursor = 0
         self._parked_scope = "dir"     # "dir" | "all"
+        # ids in on-screen order, set by the last _render_parked - the source
+        # of truth for "which item is highlighted" for d/ENTER. The overlay
+        # can sit open arbitrarily long while another session claims or drops
+        # a row; acting on a numeric cursor position re-resolved against a
+        # list refetched at keypress time would silently act on whatever
+        # backfilled that slot.
+        self._parked_ids = []
         # Preview (live-feed) pane visibility. Default shown; the real value is
         # read from config in on_mount, toggled live by 'f', and persisted.
         self._preview_visible = True
@@ -2061,21 +2068,48 @@ class RelayApp(App):
                  else (self._parked_workdir() or "this tab has no directory"))
         w = self.query_one("#parkedview").size.width - 4
         self._parked_cursor = min(self._parked_cursor, max(0, len(rows) - 1))
+        # Snapshot of what's ACTUALLY on screen, in order - _parked_assign and
+        # the 'd' handler read from this, not a fresh fetch, so they act on
+        # what the operator is looking at rather than whatever is in the table
+        # at the moment the key lands.
+        self._parked_ids = [r["id"] for r in rows]
         self.query_one("#parkedview", Static).update(
             parked_overlay_text(rows, label, max(40, w), self._parked_cursor))
+
+    def _parked_selected_id(self):
+        """The id of the row highlighted at the last render, or None if
+        nothing is there (an empty list, or the row it pointed at is gone).
+        Deliberately NOT a fresh `_parked_rows()` fetch: the overlay can sit
+        open arbitrarily long while another session claims or drops the
+        highlighted row via `relay next` or the CLI - exactly the window the
+        ALREADY TAKEN refusal exists for. Indexing a list refetched at
+        keypress time would silently resolve "the item" to whatever
+        backfilled that slot instead."""
+        ids = self._parked_ids
+        if not ids or self._parked_cursor >= len(ids):
+            return None
+        return ids[self._parked_cursor]
 
     def _parked_assign(self) -> None:
         """Hand the selected item to the selected session.
 
-        The list cursor picks the item; the roster cursor behind the overlay
-        picks the recipient. Two cursors are live at once - the same shape the
-        timers overlay already has, which acts on the selected session's
-        timers.
+        The list cursor picks the item (by id, from the last render - see
+        _parked_selected_id); the roster cursor behind the overlay picks the
+        recipient. Two cursors are live at once - the same shape the timers
+        overlay already has, which acts on the selected session's timers.
         """
-        rows = self._parked_rows()
-        if not rows:
+        item_id = self._parked_selected_id()
+        if item_id is None:
+            # Nothing at the cursor anymore - either the list was empty, or
+            # the highlighted row was claimed/dropped since the last render.
+            # Say so instead of doing nothing: a silent ENTER leaves the
+            # operator thinking the hand-off happened.
+            self._modal_show("ALREADY TAKEN", [
+                "Nothing is parked there anymore - it was",
+                "claimed or dropped just now.",
+            ])
+            self._render_parked()
             return
-        item = rows[min(self._parked_cursor, len(rows) - 1)]
         sid = self._selected_sid()
         reg = (self.watcher.registry or {}).get(sid) if self.watcher else None
         name = (reg or {}).get("name", "")
@@ -2092,10 +2126,10 @@ class RelayApp(App):
             ])
             return
         conn = self._swarm_db_conn()
-        task = swarmdb.claim_parked_by_id(conn, item["id"], name)
+        task = swarmdb.claim_parked_by_id(conn, item_id, name)
         if task is None:
             self._modal_show("ALREADY TAKEN", [
-                f"#{item['id']} was claimed by another session",
+                f"#{item_id} was claimed by another session",
                 "between opening this list and now.",
             ])
             self._render_parked()
@@ -2199,13 +2233,23 @@ class RelayApp(App):
                 self._render_parked()
                 event.stop()
                 event.prevent_default()
-            elif k == "d" and rows:
-                swarmdb.drop_parked(self._swarm_db_conn(),
-                                    rows[self._parked_cursor]["id"])
+            elif k == "d":
+                # Identity-based, like _parked_assign: the id at the cursor
+                # from the last render, not a fresh fetch re-indexed by a
+                # numeric position that may now point at a different row (or
+                # nothing at all).
+                item_id = self._parked_selected_id()
+                if item_id is not None:
+                    swarmdb.drop_parked(self._swarm_db_conn(), item_id)
                 self._render_parked()
                 event.stop()
                 event.prevent_default()
-            elif k == "enter" and rows:
+            elif k == "enter":
+                # No `and rows` guard: gating on a freshly-refetched list
+                # swallows the case where the highlighted row was just raced
+                # away - ENTER would silently no-op instead of telling the
+                # operator. _parked_assign shows ALREADY TAKEN itself when
+                # there is nothing left at the cursor.
                 self._parked_assign()
                 event.stop()
                 event.prevent_default()

@@ -1546,6 +1546,121 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
+        # --- fix round 1: ENTER/d must target the item IDENTITY that was on
+        # screen, not a numeric cursor position re-resolved against a list
+        # refetched at keypress time. The overlay can sit open arbitrarily
+        # long while another session claims or drops the highlighted row via
+        # `relay next` or the CLI - exactly the window ALREADY TAKEN exists
+        # for - so a stale re-fetch can silently act on whatever backfilled
+        # that slot instead.
+        await pilot.press("escape")
+        await pilot.pause()
+        a._selected_sid = lambda: a.watcher.sessions["s1"].session_id  # taker
+
+        # Two items, cursor on the second, the second raced away underneath
+        # the operator - ENTER must leave the FIRST item alone and say so,
+        # not silently grab it.
+        a.watcher.sessions["s1"].workdir = "/tmp/pk-race"
+        pid_c = _db.park_task(conn, "item C", "/tmp/pk-race", project="pk")
+        pid_d = _db.park_task(conn, "item D", "/tmp/pk-race", project="pk")
+        await pilot.press("b")
+        await pilot.pause()
+        ids_now = [r["id"] for r in a._parked_rows()]
+        chk("both C and D are visible before the race",
+            pid_c in ids_now and pid_d in ids_now)
+        idx_d = ids_now.index(pid_d)
+        for _ in range(idx_d):
+            await pilot.press("down")
+        await pilot.pause()
+        chk("cursor is on D before the race",
+            a._parked_ids[a._parked_cursor] == pid_d)
+        raced = _db.claim_parked_by_id(conn, pid_d, "rival")
+        chk("the simulated race actually claimed D", raced is not None)
+        wakes_before = len(_db.undelivered(conn))
+        await pilot.press("enter")
+        await pilot.pause()
+        row_c = _db.get_task(conn, pid_c)
+        chk("ENTER after a race leaves the untouched on-screen item alone",
+            row_c["parked"] == 1 and not row_c["owner"])
+        chk("ENTER after a race shows a modal instead of grabbing another row",
+            a._modal_open)
+        chk("ENTER after a race queues no wake-up for the wrong item",
+            len(_db.undelivered(conn)) == wakes_before)
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # One item, raced away entirely - ENTER must show a modal rather than
+        # doing nothing (the `and rows` guard used to swallow this case).
+        a.watcher.sessions["s1"].workdir = "/tmp/pk-solo"
+        pid_solo = _db.park_task(conn, "solo item", "/tmp/pk-solo", project="pk")
+        await pilot.press("b")
+        await pilot.pause()
+        chk("solo scope shows exactly the one item",
+            [r["id"] for r in a._parked_rows()] == [pid_solo])
+        _db.claim_parked_by_id(conn, pid_solo, "rival")
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("ENTER on a raced-away sole item shows a modal, not a silent "
+            "no-op", a._modal_open)
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # Same two races for 'd': the surviving item must stay parked.
+        a.watcher.sessions["s1"].workdir = "/tmp/pk-race2"
+        pid_e = _db.park_task(conn, "item E", "/tmp/pk-race2", project="pk")
+        pid_f = _db.park_task(conn, "item F", "/tmp/pk-race2", project="pk")
+        await pilot.press("b")
+        await pilot.pause()
+        ids_now2 = [r["id"] for r in a._parked_rows()]
+        idx_f = ids_now2.index(pid_f)
+        for _ in range(idx_f):
+            await pilot.press("down")
+        await pilot.pause()
+        chk("cursor is on F before the race (d scenario)",
+            a._parked_ids[a._parked_cursor] == pid_f)
+        chk("the simulated race actually dropped F",
+            _db.drop_parked(conn, pid_f))
+        await pilot.press("d")
+        await pilot.pause()
+        # Checked BEFORE the parked-state assertion below: a stale, unclamped
+        # index (rows[self._parked_cursor] on a list that just got shorter)
+        # raises IndexError inside on_key. Textual swallows that into
+        # app._exception and keeps the message loop running rather than
+        # stopping it there, so "E is still parked" would otherwise pass by
+        # accident - the crash happened before drop_parked ever ran, not
+        # because the code correctly identified E. Checking for the swallowed
+        # exception directly is what makes this a real proof rather than a
+        # coincidental one.
+        chk("d after a race raises no unhandled exception",
+            getattr(a, "_exception", None) is None)
+        chk("d after a race leaves the untouched on-screen item parked",
+            _db.get_task(conn, pid_e)["parked"] == 1)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        a.watcher.sessions["s1"].workdir = "/tmp/pk-solo2"
+        pid_g = _db.park_task(conn, "solo drop target", "/tmp/pk-solo2",
+                              project="pk")
+        await pilot.press("b")
+        await pilot.pause()
+        chk("solo scope shows exactly the one item (d scenario)",
+            [r["id"] for r in a._parked_rows()] == [pid_g])
+        chk("the simulated race actually dropped the sole item",
+            _db.drop_parked(conn, pid_g))
+        await pilot.press("d")
+        await pilot.pause()
+        chk("d on a raced-away sole item raises no unhandled exception",
+            getattr(a, "_exception", None) is None)
+        chk("d on a raced-away sole item does not crash the overlay",
+            a._parked_visible)
+        await pilot.press("escape")
+        await pilot.pause()
+        a.watcher.sessions["s1"].workdir = "/tmp/pk"
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch
