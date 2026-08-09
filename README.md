@@ -132,6 +132,11 @@ exists to prevent, not enable. The only nudges toward a parked item are
 visibility: the header count, each tab's status-bar badge, and the modal's own
 list. Full protocol: `relay help parked`.
 
+It runs the other way too: a session that notices a follow-up mid-task can
+shelve it with `relay task add "<line>" --park` instead of drifting into it or
+dropping it silently. Those land unowned in that directory, for whoever runs
+`relay next` there next.
+
 ### Pause and shadow (reversible controls)
 
 - **Pause (`p`)** freezes relay's *hands* - it stops auto-approving and stops
