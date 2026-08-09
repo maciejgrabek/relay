@@ -23,6 +23,17 @@ os.environ["RELAY_CONFIG"] = os.path.join(
 os.environ["RELAY_AUDIT_LOG"] = os.path.join(
     tempfile.mkdtemp(prefix="relay-test-audit-"), "audit.jsonl")
 
+# Same idea again for RELAY_DB - db.py reads it lazily (at call time, not
+# import time - see db.py's _db_path), but swarmdb.connect() is reached from
+# inside run_test() blocks throughout this file, well before the assignment
+# used to land (previously set 400+ lines down, inside go(), after eleven
+# run_test() blocks had already each triggered a connect()). connect() runs
+# _SCHEMA/_INDEXES DDL against whatever path is live, so a late assignment let
+# every one of those blocks touch the operator's real ~/.relay/relay.db - a
+# no-op only by luck, because their schema happened to already be current.
+os.environ["RELAY_DB"] = os.path.join(
+    tempfile.mkdtemp(prefix="relay-test-db-"), "relay.db")
+
 sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
 import audit as auditmod  # noqa: E402
@@ -485,9 +496,9 @@ async def go():
         chk("own panel row not counted as awaiting", "awaiting" not in sub)
 
     # --- quit guard: instant when idle, double-press when something's live ---
-    import tempfile
-    os.environ["RELAY_DB"] = os.path.join(tempfile.mkdtemp(), "relay.db")
-
+    # RELAY_DB is set at module scope now (see top of file) - the eleven
+    # run_test() blocks above this point already call swarmdb.connect(), so
+    # setting it here was always too late to protect them.
     chk("stakes text empty when idle", appmod.quit_stakes_text(0, 0, 0) == "")
     chk("stakes text lists counts",
         appmod.quit_stakes_text(2, 1, 3)
