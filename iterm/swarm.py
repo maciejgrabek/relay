@@ -424,6 +424,65 @@ def prompt_line_empty(lines: List[str]) -> bool:
     return False
 
 
+# --- shell-job detection (relocated from watcher.py) ---------------------------
+
+# Login shells iTerm2 may report as a tab's foreground job. When one of these is
+# in front, no program (Claude) is running in the tab.
+_SHELL_JOBS = frozenset({
+    "zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash", "login",
+})
+
+
+def is_shell_job(job: str) -> bool:
+    """True when iTerm2 reports a plain login shell as the tab's foreground job -
+    i.e. Claude is NOT running in it. A leading '-' marks a login shell (e.g.
+    '-zsh'); strip it before matching. Unknown/empty -> False, so an unreadable
+    job never suppresses a real prompt (fail safe toward escalating)."""
+    j = (job or "").strip().lstrip("-").lower()
+    return j in _SHELL_JOBS
+
+
+# --- intervene: target selection and counts ------------------------------------
+
+def intervene_targets(rows, scope: str, selected_sid: str,
+                      own_sid: str) -> list:
+    """Which sessions an intervention reaches, for one scope.
+
+    Excluded always: relay's own panel (it never acts on itself) and any tab
+    whose foreground job is a shell or an editor - ESC into someone's vim is
+    rude, and the caller resolves that with is_shell_job below.
+
+    Arm level is deliberately NOT a filter. This is a human act, and relay's
+    manual sends already work on un-armed sessions for the same reason: a
+    panic button that stops only the sessions you remembered to arm is a bad
+    panic button.
+
+    PROJECT scope cannot reach an unregistered tab, which has no sessions row
+    and therefore no project at all. That is a fact, not a bug - the caller
+    surfaces it by showing the count, so widening to ALL visibly changes the
+    number.
+    """
+    usable = [r for r in rows
+              if r["sid"] != own_sid and not r["is_shell"]]
+    if scope == "selected":
+        return [r for r in usable if r["sid"] == selected_sid]
+    if scope == "project":
+        sel = next((r for r in rows if r["sid"] == selected_sid), None)
+        project = (sel or {}).get("project") or ""
+        if not project:
+            return []
+        return [r for r in usable if r["project"] == project]
+    return usable
+
+
+def intervene_counts(targets) -> tuple:
+    """(total, working, idle). An idle session has nothing to interrupt, so
+    the modal shows the split before the operator commits."""
+    n = len(targets)
+    working = sum(1 for t in targets if t["working"])
+    return (n, working, n - working)
+
+
 # --- staleness ---------------------------------------------------------------
 
 def stale_reason(now: float, threshold_s: float,

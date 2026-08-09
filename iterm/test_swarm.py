@@ -12,7 +12,8 @@ from swarm import (  # noqa: E402
     wakeup_unblocked_body, delivery_text, claude_prompt_ready, stale_reason,
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
-    wipe_plan_text, parse_pr_ref, resolve_pr_route,
+    wipe_plan_text, parse_pr_ref, resolve_pr_route, intervene_targets,
+    intervene_counts, is_shell_job,
 )
 
 
@@ -852,5 +853,63 @@ def run():
     return ok
 
 
+def _irow(sid, name, project, is_shell=False, working=True):
+    return {"sid": sid, "name": name, "project": project,
+            "is_shell": is_shell, "working": working}
+
+
+def test_intervene_targets():
+    ok = True
+    rows = [
+        _irow("s1", "bff", "relay", working=True),
+        _irow("s2", "api", "relay", working=False),
+        _irow("s3", "web", "other", working=True),
+        _irow("s4", "", "", working=True),          # unregistered: no project
+        _irow("s5", "shellish", "relay", is_shell=True),
+        _irow("own", "panel", "relay"),
+    ]
+    ids = lambda ts: [t["sid"] for t in ts]
+
+    all_t = intervene_targets(rows, "all", "s1", "own")
+    ok &= check("all excludes relay's own panel", "own" not in ids(all_t))
+    ok &= check("all excludes shell jobs", "s5" not in ids(all_t))
+    ok &= check("all includes the unregistered tab", "s4" in ids(all_t))
+    ok &= check("all includes every other project", "s3" in ids(all_t))
+
+    proj = intervene_targets(rows, "project", "s1", "own")
+    ok &= check("project scopes to the selected row's project",
+                ids(proj) == ["s1", "s2"])
+    ok &= check("project MISSES the unregistered tab", "s4" not in ids(proj))
+
+    sel = intervene_targets(rows, "selected", "s1", "own")
+    ok &= check("selected is exactly one row", ids(sel) == ["s1"])
+    ok &= check("selected refuses relay's own panel",
+                intervene_targets(rows, "selected", "own", "own") == [])
+    ok &= check("selected refuses a shell job",
+                intervene_targets(rows, "selected", "s5", "own") == [])
+
+    ok &= check("project of an unregistered selection is empty",
+                intervene_targets(rows, "project", "s4", "own") == [])
+
+    n, w, i = intervene_counts(all_t)
+    ok &= check("counts total", n == 4)
+    ok &= check("counts working", w == 3)
+    ok &= check("counts idle", i == 1)
+    ok &= check("counts of nothing are zeros", intervene_counts([]) == (0, 0, 0))
+
+    # relocated from watcher.py, which never had coverage for it
+    ok &= check("a plain shell is a shell job", is_shell_job("zsh"))
+    ok &= check("a login shell strips its dash", is_shell_job("-zsh"))
+    ok &= check("claude is not a shell job", not is_shell_job("claude"))
+    ok &= check("unknown job is not a shell job", not is_shell_job("node"))
+    ok &= check("empty job is not a shell job", not is_shell_job(""))
+
+    print()
+    print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
-    sys.exit(0 if run() else 1)
+    ok = run()
+    ok = test_intervene_targets() and ok
+    sys.exit(0 if ok else 1)

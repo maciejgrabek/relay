@@ -35,21 +35,6 @@ from gates import (classify, Action, Decision, reconstruct_lines,
 # title from relay's `caffeinate` child - accurate, but not what the panel IS.
 OWN_TAB_NAME = "RELAY CONSOLE"
 
-# Login shells iTerm2 may report as a tab's foreground job. When one of these is
-# in front, no program (Claude) is running in the tab.
-_SHELL_JOBS = frozenset({
-    "zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash", "login",
-})
-
-
-def _is_shell_job(job: str) -> bool:
-    """True when iTerm2 reports a plain login shell as the tab's foreground job -
-    i.e. Claude is NOT running in it. A leading '-' marks a login shell (e.g.
-    '-zsh'); strip it before matching. Unknown/empty -> False, so an unreadable
-    job never suppresses a real prompt (fail safe toward escalating)."""
-    j = (job or "").strip().lstrip("-").lower()
-    return j in _SHELL_JOBS
-
 
 def _own_tab_profile(on: bool):
     """Write-only profile fragment for relay's own tab color: relay-phosphor
@@ -563,7 +548,7 @@ class Watcher:
         # blocked (the "⊘ LOCKED" tag), never inject a stray Enter into the
         # shell. Fail safe: only a positively-identified shell suppresses; an
         # unknown/unreadable job still runs the full classifier.
-        if _is_shell_job(info.job):
+        if swarm.is_shell_job(info.job):
             info.state = detect_state(reconstruct_lines(raw, hard))
             return
 
