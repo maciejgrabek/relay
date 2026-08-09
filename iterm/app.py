@@ -1047,6 +1047,7 @@ class RelayApp(App):
         Binding("W", "wipe", "Wipe", show=True),
         Binding("Z", "zap", "Zap project", show=True),
         Binding("E", "extreme", "Extreme", show=True),
+        Binding("exclamation_mark", "intervene", "Intervene", show=True),
         Binding("question_mark", "help", "Help", show=False),
         Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
@@ -1093,6 +1094,10 @@ class RelayApp(App):
         # None | {"sid": str, "name": str, "workdir": str, "buf": str,
         #         "dir": bool} - the park-an-idea capture modal
         self._park = None
+        # None | {"mode": str, "scope": str, "buf": str} - the operator's
+        # brake-and-broadcast modal
+        self._intervene = None
+        self._intervene_calls = []   # test seam: (mode, scope, targets, body)
         self._modal_open = False   # DOS-style dialog floating over the UI
         # Relay runs inside its own iTerm2 tab; know its bare session UUID so we
         # can tell "just me" from "sessions worth controlling". $ITERM_SESSION_ID
@@ -1105,7 +1110,8 @@ class RelayApp(App):
         keypress acts on a tab you cannot see."""
         return (self._settings_visible or self._swarm_visible
                 or self._help_visible or self._timers_visible
-                or self._modal_open or self._park is not None)
+                or self._modal_open or self._park is not None
+                or self._intervene is not None)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -1754,6 +1760,14 @@ class RelayApp(App):
 
     # --- swarm view (TAB toggles a full-width kanban board) -------------------
     def action_swarm_view(self) -> None:
+        if self._intervene is not None:
+            # Priority bindings bypass on_key's swallow, so TAB has to be
+            # handled here or it flips the view mid-compose. See 5ad1076.
+            cur = INTERVENE_MODES.index(self._intervene["mode"])
+            self._intervene["mode"] = INTERVENE_MODES[
+                (cur + 1) % len(INTERVENE_MODES)]
+            self._intervene_render()
+            return
         if self._park is not None:
             # Priority bindings bypass on_key's swallow entirely, so TAB has
             # to be refused here or it flips the view with a half-typed idea
@@ -1934,6 +1948,33 @@ class RelayApp(App):
             event.stop()
             event.prevent_default()
             return
+        if self._intervene is not None:
+            k = event.key
+            if k == "escape":
+                self._intervene_close()
+            elif k == "enter":
+                self._intervene_commit()
+            elif k == "tab":
+                cur = INTERVENE_MODES.index(self._intervene["mode"])
+                self._intervene["mode"] = INTERVENE_MODES[
+                    (cur + 1) % len(INTERVENE_MODES)]
+                self._intervene_render()
+            elif k in ("left", "right"):
+                sc = self._INTERVENE_SCOPES
+                cur = sc.index(self._intervene["scope"])
+                step = 1 if k == "right" else -1
+                self._intervene["scope"] = sc[(cur + step) % len(sc)]
+                self._intervene_render()
+            elif k == "backspace":
+                self._intervene["buf"] = self._intervene["buf"][:-1]
+                self._intervene_render()
+            elif len(getattr(event, "character", "") or "") == 1 \
+                    and event.character.isprintable():
+                self._intervene["buf"] += event.character
+                self._intervene_render()
+            event.stop()
+            event.prevent_default()
+            return
         if self._park is not None:
             k = event.key
             if k == "escape":
@@ -2047,6 +2088,9 @@ class RelayApp(App):
 
     # --- ESC: universal "take me back" for every overlay ----------------------
     def action_dismiss_view(self) -> None:
+        if self._intervene is not None:
+            self._intervene_close()
+            return
         if self._park is not None:
             self._park_close()
             return
@@ -2545,6 +2589,77 @@ class RelayApp(App):
         if row and row["status_text"]:
             out["status"] = row["status_text"]
         return json.dumps(out)
+
+    # --- intervene (!): the operator's brake-and-broadcast modal ---------------
+    _INTERVENE_SCOPES = ("selected", "project", "all")
+
+    def action_intervene(self) -> None:
+        """The operator's brake. Opens on PROJECT scope because the row under
+        the cursor is the likely intent, and it is the middle of the cycle so
+        one press either way reaches an extreme."""
+        if self._any_overlay_open() or self._extreme_form is not None:
+            return
+        self._intervene = {"mode": "stop_tell", "scope": "project", "buf": ""}
+        self._intervene_render()
+
+    def _intervene_rows(self) -> list:
+        """SessionInfo plus the registry, shaped for swarm.intervene_targets."""
+        out = []
+        for info in (self.watcher.sessions.values() if self.watcher else []):
+            reg = (self.watcher.registry or {}).get(info.session_id) or {}
+            out.append({
+                "sid": info.session_id,
+                "name": reg.get("name", "") if hasattr(reg, "get") else "",
+                "project": reg.get("project", "") if hasattr(reg, "get") else "",
+                "is_shell": swarmlogic.is_shell_job(info.job),
+                "working": info.state == "working",
+            })
+        return out
+
+    def _intervene_scope_label(self, scope: str, rows: list) -> str:
+        sid = self._selected_sid() or ""
+        if scope == "all":
+            return "all sessions"
+        sel = next((r for r in rows if r["sid"] == sid), None)
+        if scope == "selected":
+            return f"selected: {(sel or {}).get('name') or 'this tab'}"
+        return f"project: {(sel or {}).get('project') or 'none'}"
+
+    def _intervene_render(self) -> None:
+        p = self._intervene
+        if p is None:
+            return
+        rows = self._intervene_rows()
+        targets = swarmlogic.intervene_targets(
+            rows, p["scope"], self._selected_sid() or "", self._own_sid or "")
+        n, w, i = swarmlogic.intervene_counts(targets)
+        wgt = self.query_one("#modal", Static)
+        wgt.update(intervene_modal_text(
+            p["buf"], p["mode"], self._intervene_scope_label(p["scope"], rows),
+            n, w, i, self.size.width))
+        wgt.display = True
+
+    def _intervene_close(self) -> None:
+        self._intervene = None
+        self.query_one("#modal", Static).display = False
+
+    def _intervene_commit(self) -> None:
+        p = self._intervene
+        if p is None:
+            return
+        body = p["buf"].strip()
+        if p["mode"] in ("tell", "stop_tell") and not body:
+            return          # a broadcast of nothing is a mistake, not a command
+        rows = self._intervene_rows()
+        targets = swarmlogic.intervene_targets(
+            rows, p["scope"], self._selected_sid() or "", self._own_sid or "")
+        mode, scope = p["mode"], p["scope"]
+        self._intervene_close()
+        self._intervene_execute(mode, scope, targets, body)
+
+    def _intervene_execute(self, mode, scope, targets, body) -> None:
+        """Stub in this task; Task 4 implements it."""
+        self._intervene_calls.append((mode, scope, targets, body))
 
     def _shell_verb(self, verb: str, doing: str, extra=None) -> None:
         here = os.path.dirname(os.path.abspath(__file__))

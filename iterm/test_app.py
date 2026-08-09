@@ -1098,6 +1098,62 @@ async def go():
             "persona, where it used to be an empty '{}'",
             ctx.get("last") == 'grep -rn "TODO" src/')
 
+    # --- intervene (!): the operator's brake-and-broadcast modal --------------
+    a = _TestApp(_one(), dry_run=True)
+    async with a.run_test() as pilot:
+        await pilot.pause()
+        a._refresh()
+        await pilot.pause()
+
+        await pilot.press("exclamation_mark")
+        await pilot.pause()
+        chk("! opens the intervene modal", a._intervene is not None)
+        chk("default mode is stop_tell", a._intervene["mode"] == "stop_tell")
+        chk("default scope is project", a._intervene["scope"] == "project")
+
+        for ch in "stop now":
+            await pilot.press(ch if ch != " " else "space")
+        await pilot.pause()
+        chk("typing fills the buffer", a._intervene["buf"] == "stop now")
+
+        await pilot.press("backspace")
+        await pilot.pause()
+        chk("backspace deletes", a._intervene["buf"] == "stop no")
+
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB cycles mode", a._intervene["mode"] == "stop")
+        chk("TAB did not open the swarm view", a._swarm_visible is False)
+
+        await pilot.press("right")
+        await pilot.pause()
+        chk("right cycles scope", a._intervene["scope"] == "all")
+        await pilot.press("left")
+        await pilot.press("left")
+        await pilot.pause()
+        chk("left cycles back past project", a._intervene["scope"] == "selected")
+
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("ESC closes with nothing executed", a._intervene is None)
+        chk("ESC executed nothing", a._intervene_calls == [])
+
+        await pilot.press("exclamation_mark")
+        for ch in "halt":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("ENTER closes the modal", a._intervene is None)
+        chk("ENTER executed once", len(a._intervene_calls) == 1)
+        chk("ENTER passed the typed body",
+            a._intervene_calls[0][3] == "halt")
+
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB with no modal still opens the swarm view", a._swarm_visible)
+        await pilot.press("tab")
+        await pilot.pause()
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
