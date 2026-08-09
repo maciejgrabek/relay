@@ -709,7 +709,8 @@ _INTERVENE_ROWS = (
 
 def intervene_modal_text(buffer: str, mode: str, scope_label: str,
                          n: int, n_working: int, n_idle: int,
-                         width: int) -> str:
+                         n_tellable: int, width: int,
+                         dry_run: bool = False) -> str:
     """The operator's brake-and-broadcast modal.
 
     The per-mode timing ("ESC now" vs "on idle") is rendered on screen and is
@@ -718,19 +719,37 @@ def intervene_modal_text(buffer: str, mode: str, scope_label: str,
     otherwise watch every agent finish the turn they wanted abandoned.
 
     The count line is scope-dependent and recomputed by the caller on every
-    scope change, so the blast radius is visible before ENTER.
+    scope change, so the blast radius is visible before ENTER. In a
+    TELL-capable mode it also shows `n_tellable` - the subset of `n` that is
+    actually registered and has a mailbox - because TELL's real reach can be
+    far smaller than the session count (an unregistered tab counts toward
+    `n` but is never told).
+
+    `dry_run` marks the box itself, while composing, not only in the report
+    after ENTER: a panic button must never look live when it is inert.
+
+    A refused-empty-buffer state (TELL / STOP + TELL with nothing typed)
+    gets its own hint row here, in the composing modal - the alternative is
+    ENTER silently doing nothing, which is exactly the panic-reflex trap: the
+    natural `!` then `ENTER` hits the refusal with no on-screen explanation.
     """
     body = []
     for key, label, timing in _INTERVENE_ROWS:
         mark = "[·]" if key == mode else "[ ]"
         lead = "MODE " if key == INTERVENE_MODES[0] else "     "
         body.append(f"{lead} {mark} {label:<12} {timing}")
-    body += ["",
-             f"SCOPE ‹ {scope_label} ›",
-             f"      {n} sessions · {n_working} working · {n_idle} idle"]
+    if mode in ("tell", "stop_tell") and not buffer.strip():
+        body.append("      text required for this mode - TAB reaches STOP")
+    count_line = f"      {n} sessions · {n_working} working · {n_idle} idle"
+    if mode in ("tell", "stop_tell"):
+        count_line += f" · {n_tellable} tellable"
+    body += ["", f"SCOPE ‹ {scope_label} ›", count_line]
+    if dry_run:
+        body += ["", "DRY RUN - relay mutates nothing, this is a preview"]
     footer = "TAB mode · ←→ scope · ENTER go · ESC cancel"
     buf_line = _modal_buffer_line(buffer, "INTERVENE", body, footer, width)
-    return dos_modal_text("INTERVENE", [buf_line, ""] + body, width,
+    title = "INTERVENE - DRY RUN" if dry_run else "INTERVENE"
+    return dos_modal_text(title, [buf_line, ""] + body, width,
                           footer=footer)
 
 
@@ -2623,21 +2642,42 @@ class RelayApp(App):
             return "all sessions"
         sel = next((r for r in rows if r["sid"] == sid), None)
         if scope == "selected":
-            return f"selected: {(sel or {}).get('name') or 'this tab'}"
+            if self._own_sid and sid == self._own_sid:
+                # Distinct from the generic "this tab" below: relay's own
+                # panel row and an unregistered worker tab used to render
+                # identically, which reads as "relay's panel" for a tab that
+                # is actually a live worker - the worst moment to be wrong.
+                return "selected: relay's own panel"
+            return f"selected: {(sel or {}).get('name') or '(unregistered tab)'}"
         return f"project: {(sel or {}).get('project') or 'none'}"
 
     def _intervene_render(self) -> None:
         p = self._intervene
         if p is None:
             return
+        sid = self._selected_sid() or ""
+        if p["scope"] == "selected" and self._own_sid and sid == self._own_sid:
+            # Spec: SELECTED on relay's own panel row is refused through the
+            # display-only modal path, not the editable composing modal - a
+            # 0-target compose-then-ENTER would have quietly produced a real
+            # (if empty) report instead of an actual refusal.
+            self._intervene = None
+            self._modal_show("INTERVENE - NOT AVAILABLE", [
+                "Relay's own panel has nothing to",
+                "brake or tell.",
+                "Select a session, or widen scope",
+                "to PROJECT / ALL.",
+            ])
+            return
         rows = self._intervene_rows()
         targets = swarmlogic.intervene_targets(
-            rows, p["scope"], self._selected_sid() or "", self._own_sid or "")
+            rows, p["scope"], sid, self._own_sid or "")
         n, w, i = swarmlogic.intervene_counts(targets)
+        n_tellable = swarmlogic.intervene_tellable_count(targets)
         wgt = self.query_one("#modal", Static)
         wgt.update(intervene_modal_text(
             p["buf"], p["mode"], self._intervene_scope_label(p["scope"], rows),
-            n, w, i, self.size.width))
+            n, w, i, n_tellable, self.size.width, dry_run=self.dry_run))
         wgt.display = True
 
     def _intervene_close(self) -> None:
@@ -2650,7 +2690,11 @@ class RelayApp(App):
             return
         body = p["buf"].strip()
         if p["mode"] in ("tell", "stop_tell") and not body:
-            return          # a broadcast of nothing is a mistake, not a command
+            # A broadcast of nothing is a mistake, not a command - refused.
+            # The composing modal already renders the "message required"
+            # hint (intervene_modal_text), so this is not a silent no-op:
+            # the operator sees why before they ever press ENTER.
+            return
         rows = self._intervene_rows()
         targets = swarmlogic.intervene_targets(
             rows, p["scope"], self._selected_sid() or "", self._own_sid or "")
@@ -2658,12 +2702,30 @@ class RelayApp(App):
         self._intervene_close()
         self._intervene_execute(mode, scope, targets, body)
 
+    def _intervene_audit_session(self, scope: str, targets: list) -> str:
+        """The audit 'session' field for an intervene entry - deliberately
+        NOT a session title. audit_view_text does an exact match of that
+        field against a session's title, so an entry covering many targets
+        must never look like one session's history (it would silently be
+        unreachable AND misleading if it happened to collide)."""
+        return f"*intervene:{scope}* x{len(targets)}"
+
+    def _intervene_audit_targets(self, targets: list) -> str:
+        names = [t["name"] or f"sid:{t['sid'][:8]}" for t in targets]
+        return ",".join(names) if names else "(none)"
+
     def _intervene_execute(self, mode, scope, targets, body) -> None:
-        """Brake and/or broadcast. The interrupt is immediate; the message
-        waits for a ready prompt. Both are reported, because an operator who
-        cannot tell which half landed is worse off than one who was refused."""
+        """Brake and/or broadcast. The interrupt is immediate; a TELL only
+        QUEUES a message - it is delivered when the target next reaches a
+        ready prompt, and not at all while relay is paused. Both halves are
+        reported, because an operator who cannot tell which half landed is
+        worse off than one who was refused."""
         self._intervene_calls.append((mode, scope, targets, body))
         if self.dry_run:
+            audit.record(
+                "would-intervene", self._intervene_audit_session(scope, targets),
+                f"mode={mode} targets={self._intervene_audit_targets(targets)}",
+                f"would_reach={len(targets)}")
             self._modal_show("INTERVENE - DRY RUN", [
                 "Dry run: relay mutates nothing.",
                 f"Would have reached {len(targets)} session(s).",
@@ -2671,24 +2733,36 @@ class RelayApp(App):
             return
 
         interrupted = skipped = told = disarmed = 0
+        queue_failed = False
         if mode in ("stop", "stop_tell"):
             for t in targets:
                 if not t["working"]:
                     skipped += 1
                     continue
                 # A bare ESC. No trailing return - a return would submit an
-                # empty prompt instead of interrupting.
+                # empty prompt instead of interrupting. Fire-and-forget:
+                # `interrupted` counts intent, not confirmed outcome
+                # (run_worker does not await the send) - the feed's MANUAL
+                # send entries are the ground truth for what actually
+                # landed.
                 self.run_worker(self.watcher.send_keys(t["sid"], "\x1b"),
                                 exclusive=False)
                 interrupted += 1
-                # Extreme pushes a prompt into an IDLE tab, and an interrupted
-                # tab is idle - without this relay would restart the work the
-                # operator just stopped, within a minute.
-                info = self.watcher.sessions.get(t["sid"])
-                if info is not None and info.mode == "extreme":
-                    info.mode = "insane"
-                    info.extreme_fires_left = 0
-                    disarmed += 1
+
+            # Extreme's entire job is pushing a prompt into an IDLE tab
+            # after a dwell, so every target IN SCOPE loses it on a brake -
+            # whether or not THIS one was interrupted. An idle session left
+            # armed is exactly the one extreme would push into next; relay
+            # would restart the work the operator just stopped within a
+            # minute. Never in TELL-only mode - a pure broadcast must not
+            # change anyone's arm level. Watcher.clear_extreme does the
+            # full, correct state flip (resets the prompt id, persists,
+            # notes the feed) - no hand-rolled mutation here, so there is
+            # only one place this transition can drift.
+            if self.watcher:
+                for t in targets:
+                    if self.watcher.clear_extreme(t["sid"]):
+                        disarmed += 1
 
         if mode in ("tell", "stop_tell") and body:
             try:
@@ -2701,15 +2775,27 @@ class RelayApp(App):
                     told += 1
             except Exception as e:
                 self.query_one(Log).write_line(f"intervene: queue failed: {e}")
+                queue_failed = True
 
-        audit.record("intervene", f"{scope}:{len(targets)}",
-                     f"mode={mode}", f"interrupted={interrupted} told={told}")
+        audit.record(
+            "intervene", self._intervene_audit_session(scope, targets),
+            f"mode={mode} targets={self._intervene_audit_targets(targets)}",
+            f"interrupted={interrupted} skipped={skipped} told={told} "
+            f"disarmed={disarmed}")
 
         lines = []
         if mode in ("stop", "stop_tell"):
             lines.append(f"interrupted {interrupted} · skipped {skipped} (idle)")
         if mode in ("tell", "stop_tell"):
-            lines.append(f"told {told}")
+            # "queued", never "told": a queue write is not a delivery. It
+            # waits for the target's next ready prompt, and while relay is
+            # paused it cannot be delivered at all until resumed.
+            line = f"queued {told} (delivered on next idle prompt)"
+            if self.watcher and self.watcher.paused:
+                line += " - relay PAUSED, held until resumed"
+            lines.append(line)
+            if queue_failed:
+                lines.append("queue write FAILED - some messages may be missing")
         if disarmed:
             lines.append(f"extreme disarmed on {disarmed}")
         self._modal_show("INTERVENE", lines or ["nothing to do"])

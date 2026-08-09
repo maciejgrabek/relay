@@ -483,6 +483,14 @@ def intervene_counts(targets) -> tuple:
     return (n, working, n - working)
 
 
+def intervene_tellable_count(targets) -> int:
+    """How many targets TELL can actually reach: registered sessions with a
+    mailbox. `n` (intervene_counts) includes unregistered tabs because they
+    are real targets for STOP - but TELL never reaches them, and without
+    this the modal's session count silently overstates TELL's reach."""
+    return sum(1 for t in targets if t.get("name"))
+
+
 # --- staleness ---------------------------------------------------------------
 
 def stale_reason(now: float, threshold_s: float,
