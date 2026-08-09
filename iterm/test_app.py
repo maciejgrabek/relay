@@ -25,6 +25,7 @@ os.environ["RELAY_AUDIT_LOG"] = os.path.join(
 
 sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
+import audit as auditmod  # noqa: E402
 import config as cfgmod  # noqa: E402
 from textual.widgets import Static  # noqa: E402
 from watcher import SessionInfo  # noqa: E402
@@ -78,6 +79,18 @@ class StubWatcher:
 
     async def send_keys(self, sid, t):
         self.sent.append((sid, t))
+        return True
+
+    def clear_extreme(self, sid):
+        """Mirrors the real Watcher.clear_extreme: extreme -> insane, budget
+        zeroed, True only when it actually was extreme. intervene's disarm
+        now goes through this (not a hand-rolled mutation), so the stub has
+        to have it to be pilot-testable."""
+        info = self.sessions.get(sid)
+        if info is None or info.mode != "extreme":
+            return False
+        info.mode = "insane"
+        info.extreme_fires_left = 0
         return True
 
 
@@ -1135,6 +1148,14 @@ async def go():
         chk("default mode is stop_tell", a._intervene["mode"] == "stop_tell")
         chk("default scope is project", a._intervene["scope"] == "project")
 
+        # --- finding 1: the natural panic reflex is '!' then ENTER, and the
+        # default mode (stop_tell) refuses an empty buffer. Without a hint
+        # THIS keeps the operator ignorant of why nothing happened. It must
+        # be visible while composing - before ENTER, not only in a report.
+        chk("empty stop_tell buffer shows the 'message required' hint "
+            "in the COMPOSING modal, before ENTER",
+            "text required" in a.query_one("#modal", Static).content)
+
         for ch in "stop now":
             await pilot.press(ch if ch != " " else "space")
         await pilot.pause()
@@ -1212,23 +1233,56 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
+        # --- Behaviour change A: the disarm is SCOPE-WIDE on a brake, not
+        # only on sessions that were actually interrupted. An idle session
+        # armed to extreme is exactly the one about to push a prompt on its
+        # own - if STOP left it alone just because it was already idle (and
+        # therefore never interrupted), the brake would fail the very job
+        # section 5 of the spec says it exists for, within a minute.
+        a.watcher.sessions["s1"].state = "idle"       # s1 was left "working" above
+        a.watcher.sessions["s2"].mode = "extreme"
+        a.watcher.sessions["s2"].state = "idle"       # NOT working: not interrupted
+        a.watcher.sessions["s2"].extreme_fires_left = 3
+        a.watcher.sent.clear()
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")          # stop_tell -> stop
+        await pilot.press("right")        # project -> all
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("STOP sent nothing - every session in scope is idle",
+            a.watcher.sent == [])
+        chk("an IDLE extreme session is disarmed scope-wide on STOP anyway",
+            a.watcher.sessions["s2"].mode == "insane")
+        await pilot.press("space")
+        await pilot.pause()
+
+        # --- TELL-only must never touch arm state - a pure broadcast is not
+        # a brake, and changing arm levels behind a TELL would be a bigger
+        # promise than this mode makes.
+        a.watcher.sessions["s2"].mode = "extreme"
+        a.watcher.sessions["s2"].extreme_fires_left = 3
         a.watcher.sent.clear()
         await pilot.press("exclamation_mark")
         await pilot.press("tab")
         await pilot.press("tab")          # -> tell
+        await pilot.press("right")        # project -> all
         for ch in "hi":
             await pilot.press(ch)
         await pilot.press("enter")
         await pilot.pause()
         chk("TELL sent no keystrokes", a.watcher.sent == [])
+        chk("TELL-only leaves extreme untouched (never in TELL-only mode)",
+            a.watcher.sessions["s2"].mode == "extreme")
         await pilot.press("space")
         await pilot.pause()
+        a.watcher.sessions["s2"].mode = "insane"      # reset for the blocks below
 
-        # --- TELL reaches unregistered targets but honestly tells none -----
-        # The block above used the default PROJECT scope, which can't reach an
-        # unregistered tab at all (targets == []) - that made "TELL sent no
-        # keystrokes" trivially true regardless of the unregistered-skip logic.
-        # ALL scope gives it real (unregistered) targets to skip instead.
+        # --- TELL reaches unregistered targets but honestly reports none ---
+        # PROJECT scope can't reach an unregistered tab at all (targets ==
+        # []), which would make "TELL sent no keystrokes" trivially true
+        # regardless of the unregistered-skip logic - ALL scope gives it
+        # real (unregistered) targets to skip instead, and this block checks
+        # the report's WORDING, not just that nothing was sent.
         a.watcher.sessions["s2"].state = "working"
         a.watcher.sent.clear()
         await pilot.press("exclamation_mark")
@@ -1241,8 +1295,13 @@ async def go():
         await pilot.pause()
         chk("TELL still sent no keystrokes with real (unregistered) targets",
             a.watcher.sent == [])
-        chk("the report honestly says 'told 0' - unregistered has no mailbox",
-            "told 0" in a.query_one("#modal", Static).content)
+        report = a.query_one("#modal", Static).content
+        chk("the report honestly says 'queued 0' - unregistered has no mailbox",
+            "queued 0" in report)
+        chk("the report never claims delivery with the word 'told'",
+            "told" not in report)
+        chk("the report says queuing is not delivery",
+            "delivered on next idle prompt" in report)
         await pilot.press("space")
         await pilot.pause()
 
@@ -1278,12 +1337,184 @@ async def go():
         for ch in "hi":
             await pilot.press(ch)
         await pilot.press("right")        # project -> all: real targets exist
+        await pilot.pause()
+        # --- finding 2: the COMPOSING modal must say it's inert under
+        # dry-run, not only the report after ENTER - a silent no-op in a
+        # panic button is the worst possible dry-run behaviour.
+        chk("the composing modal (before ENTER) already says DRY RUN",
+            "DRY RUN" in ad.query_one("#modal", Static).content)
         await pilot.press("enter")
         await pilot.pause()
         chk("dry-run sent no keystrokes despite a real working target",
             ad.watcher.sent == [])
         chk("dry-run shows the DRY RUN modal, not the real report",
             "DRY RUN" in ad.query_one("#modal", Static).content)
+        await pilot.press("space")
+        await pilot.pause()
+
+        # --- finding 5 (dry-run half): every other relay action audits
+        # dry-run too - intervene wrote nothing at all before this fix.
+        dry_entries = [e for e in auditmod.read_tail()
+                      if e.get("verdict") == "would-intervene"]
+        chk("dry-run writes a 'would-intervene' audit line",
+            len(dry_entries) == 1)
+        if dry_entries:
+            chk("the dry-run audit line names the mode and a target",
+                "mode=stop_tell" in dry_entries[0]["command"] and "s1" in
+                dry_entries[0]["command"])
+
+    # --- finding 3: the count line must show TELL's REAL reach, not just
+    # the raw session count - a registered/tellable split, at minimum in the
+    # TELL-capable modes.
+    def _mixed_registration_sessions():
+        return {
+            "r1": SessionInfo("r1", title="w1", window_idx=0, tab_idx=0,
+                              last_screen=["x"], state="working"),
+            "u1": SessionInfo("u1", title="scratch", window_idx=0, tab_idx=1,
+                              last_screen=["x"], state="working"),
+            "u2": SessionInfo("u2", title="scratch2", window_idx=0, tab_idx=2,
+                              last_screen=["x"], state="working"),
+        }
+
+    at = _TestApp(_mixed_registration_sessions(), dry_run=False)
+    async with at.run_test() as pilot:
+        await pilot.pause()
+        at.watcher.registry["r1"] = {"name": "w1", "project": "demo", "role": "worker", "task_now": ""}
+        at._refresh()
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.press("right")        # project -> all: reaches every tab
+        await pilot.pause()
+        content = at.query_one("#modal", Static).content
+        chk("ALL scope with 1 registered + 2 unregistered shows 3 sessions",
+            "3 sessions" in content)
+        chk("but only 1 is actually tellable - shown separately, not folded "
+            "into 'sessions'",
+            "1 tellable" in content)
+        await pilot.press("escape")
+        await pilot.pause()
+
+    # --- finding 4: a queue-write failure must not be invisible, and the
+    # report must not overstate a queue write as a delivery.
+    def _queue_fail_sessions():
+        return {
+            "r1": SessionInfo("r1", title="w1", window_idx=0, tab_idx=0,
+                              last_screen=["x"], state="working"),
+        }
+
+    aq = _TestApp(_queue_fail_sessions(), dry_run=False)
+    async with aq.run_test() as pilot:
+        await pilot.pause()
+        aq.watcher.registry["r1"] = {"name": "w1", "project": "demo", "role": "worker", "task_now": ""}
+        aq._refresh()
+        await pilot.pause()
+        real_queue_message = appmod.swarmdb.queue_message
+        appmod.swarmdb.queue_message = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("db is locked"))
+        try:
+            await pilot.press("exclamation_mark")
+            await pilot.press("tab")
+            await pilot.press("tab")      # -> tell
+            await pilot.press("right")    # project -> all
+            for ch in "hi":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+        finally:
+            appmod.swarmdb.queue_message = real_queue_message
+        content = aq.query_one("#modal", Static).content
+        chk("a queue-write failure is surfaced in the report, not only the "
+            "Log", "queue write FAILED" in content)
+        chk("queued count reflects the failure (0, not overstated)",
+            "queued 0" in content)
+        await pilot.press("space")
+        await pilot.pause()
+
+    # --- finding 5: the audit line must carry target names and all four
+    # counts, and its 'session' field must not pretend to be one session's
+    # title (audit_view_text does an exact match on that field).
+    def _audit_sessions():
+        return {
+            "r1": SessionInfo("r1", title="w1", window_idx=0, tab_idx=0,
+                              last_screen=["x"], state="working"),
+            "r2": SessionInfo("r2", title="w2", window_idx=0, tab_idx=1,
+                              last_screen=["x"], state="idle"),
+        }
+
+    aa = _TestApp(_audit_sessions(), dry_run=False)
+    async with aa.run_test() as pilot:
+        await pilot.pause()
+        aa.watcher.registry["r1"] = {"name": "w1", "project": "demo", "role": "worker", "task_now": ""}
+        aa.watcher.registry["r2"] = {"name": "w2", "project": "demo", "role": "worker", "task_now": ""}
+        aa._refresh()
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.press("right")        # project -> all
+        for ch in "hi":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        entries = [e for e in auditmod.read_tail() if e.get("verdict") == "intervene"]
+        chk("a real intervene writes an audit line", len(entries) >= 1)
+        if entries:
+            e = entries[-1]
+            chk("the audit 'session' field is not a real session's title "
+                "('w1'/'w2') - audit_view_text would otherwise never show "
+                "this entry, or worse, mismatch one",
+                e["session"] not in ("w1", "w2"))
+            chk("the audit line names both targets",
+                "w1" in e["command"] and "w2" in e["command"])
+            chk("the audit reason carries all four counts",
+                all(f"{k}=" in e["reason"]
+                    for k in ("interrupted", "skipped", "told", "disarmed")))
+        await pilot.press("space")
+        await pilot.pause()
+
+    # --- findings 7 & 8: SELECTED on relay's own row must look and behave
+    # differently from SELECTED on a real (but unregistered) worker tab.
+    def _own_scope_sessions():
+        return {
+            "panel": SessionInfo("panel", title="relay-panel", window_idx=0,
+                                 tab_idx=0, last_screen=["x"]),
+            "unreg": SessionInfo("unreg", title="scratch", window_idx=0,
+                                 tab_idx=1, last_screen=["x"], state="working"),
+        }
+
+    ao2 = _TestApp(_own_scope_sessions(), dry_run=False)
+    async with ao2.run_test() as pilot:
+        await pilot.pause()
+        ao2._own_sid = "panel"
+        ao2._refresh()
+        await pilot.pause()
+
+        t2 = ao2.query_one(appmod.DataTable)
+        t2.move_cursor(row=ao2._row_sids.index("unreg"))
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.press("left")         # project -> selected
+        await pilot.pause()
+        chk("! opens normally with the cursor on a real unregistered row",
+            ao2._intervene is not None)
+        label_content = ao2.query_one("#modal", Static).content
+        chk("an unregistered SELECTED tab is not labelled as relay's own "
+            "panel (finding 7)",
+            "relay's own panel" not in label_content)
+        chk("an unregistered SELECTED tab gets its own distinct label",
+            "unregistered tab" in label_content)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        t2.move_cursor(row=ao2._row_sids.index("panel"))
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.press("left")         # project -> selected: lands on own row
+        await pilot.pause()
+        chk("SELECTED on relay's own row is refused through the "
+            "display-only modal path (finding 8) - composing state is "
+            "cleared, not left open on a zero-target modal",
+            ao2._intervene is None)
+        chk("a display-only modal appears instead", ao2._modal_open)
+        chk("no intervene call was recorded", ao2._intervene_calls == [])
         await pilot.press("space")
         await pilot.pause()
 

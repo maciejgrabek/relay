@@ -648,7 +648,7 @@ def test_park_modal_text():
 def test_intervene_modal_text():
     import app as appmod
     t = appmod.intervene_modal_text("hey agents - stop", "stop_tell",
-                                    "project: relay", 3, 2, 1, 80)
+                                    "project: relay", 3, 2, 1, 2, 80)
     rows = t.splitlines()
     chk("intervene title row", any("INTERVENE" in r for r in rows))
     chk("buffer inside the box",
@@ -668,29 +668,81 @@ def test_intervene_modal_text():
     chk("counts shown",
         any("3 sessions" in r and "2 working" in r and "1 idle" in r
             for r in rows))
+    chk("tellable count shown in a TELL-capable mode (non-empty buffer)",
+        any("2 tellable" in r for r in rows))
     chk("footer teaches every key",
         any("TAB mode" in r for r in rows)
         and any("scope" in r for r in rows)
         and any("ENTER go" in r for r in rows))
 
-    s = appmod.intervene_modal_text("", "stop", "all", 7, 5, 2, 80)
+    s = appmod.intervene_modal_text("", "stop", "all", 7, 5, 2, 3, 80)
     chk("stop mode marked", any("[·] STOP " in r for r in s.splitlines()))
     chk("empty buffer still shows a cursor inside the box",
         any(r.startswith("║") and "_" in r for r in s.splitlines()))
+    chk("STOP (empty buffer, allowed) shows no 'message required' hint",
+        not any("text required" in r for r in s.splitlines()))
+    chk("STOP mode does not show a tellable count - it's not TELL-capable "
+        "reach information",
+        not any("tellable" in r for r in s.splitlines()))
 
     e = appmod.intervene_modal_text("x", "tell", "selected: bff-worker",
-                                    1, 0, 1, 80)
+                                    1, 0, 1, 1, 80)
     chk("tell mode marked", any("[·] TELL" in r for r in e.splitlines()))
     chk("selected scope label shown",
         any("bff-worker" in r for r in e.splitlines()))
 
-    narrow = appmod.intervene_modal_text("y" * 200, "stop", "all", 1, 1, 0, 40)
+    narrow = appmod.intervene_modal_text("y" * 200, "stop", "all", 1, 1, 0, 1, 40)
     chk("width clamped", all(len(r) <= 40 for r in narrow.splitlines()))
     chk("cursor survives a long buffer",
         any(r.startswith("║") and "_" in r for r in narrow.splitlines()))
 
     chk("mode order is the display order",
         appmod.INTERVENE_MODES == ("stop_tell", "stop", "tell"))
+
+    # --- finding 1: !  then ENTER on an empty TELL/STOP+TELL buffer must not
+    # refuse silently - the composing modal has to say why, before ENTER.
+    hint_stop_tell = appmod.intervene_modal_text(
+        "", "stop_tell", "project: relay", 3, 2, 1, 2, 80)
+    chk("empty STOP+TELL buffer shows the 'message required' hint",
+        any("text required" in r
+            for r in hint_stop_tell.splitlines()))
+    chk("the hint mentions TAB reaches STOP",
+        any("TAB reaches STOP" in r for r in hint_stop_tell.splitlines()))
+    hint_tell = appmod.intervene_modal_text(
+        "", "tell", "project: relay", 3, 2, 1, 2, 80)
+    chk("empty TELL buffer shows the same hint",
+        any("text required" in r for r in hint_tell.splitlines()))
+    non_empty = appmod.intervene_modal_text(
+        "hi", "stop_tell", "project: relay", 3, 2, 1, 2, 80)
+    chk("a non-empty buffer shows no hint",
+        not any("text required" in r for r in non_empty.splitlines()))
+
+    # --- finding 2: dry-run must mark the composing box, not just the report
+    dr = appmod.intervene_modal_text(
+        "hi", "stop_tell", "project: relay", 3, 2, 1, 2, 80, dry_run=True)
+    chk("dry-run composing modal says DRY RUN",
+        any("DRY RUN" in r for r in dr.splitlines()))
+    chk("dry-run composing modal is still inside the box",
+        all(r == "" or r[0] in "╔║╠╚ " for r in dr.splitlines()))
+    live = appmod.intervene_modal_text(
+        "hi", "stop_tell", "project: relay", 3, 2, 1, 2, 80, dry_run=False)
+    chk("a live (non-dry-run) modal never says DRY RUN",
+        not any("DRY RUN" in r for r in live.splitlines()))
+
+
+def test_intervene_wiring():
+    """Finding 6: intervene's extreme-disarm must go through
+    Watcher.clear_extreme, not a hand-rolled `info.mode = "insane"` mutation
+    - two paths for the same state transition is exactly the pair that
+    drifts (clear_extreme also resets _last_prompt_id and persists, which
+    the hand-rolled version never did)."""
+    import app as appmod
+    src = open(appmod.__file__).read()
+    execute_body = src.split("def _intervene_execute")[1].split("\n    def ")[0]
+    chk("_intervene_execute calls watcher.clear_extreme",
+        "clear_extreme" in execute_body)
+    chk("_intervene_execute no longer hand-rolls the disarm mutation",
+        'info.mode = "insane"' not in execute_body)
 
 
 def test_park_wiring():
@@ -732,6 +784,7 @@ if __name__ == "__main__":
     test_dos_modal_text()
     test_park_modal_text()
     test_intervene_modal_text()
+    test_intervene_wiring()
     test_park_wiring()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")
