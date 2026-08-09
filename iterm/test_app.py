@@ -1590,7 +1590,19 @@ async def go():
         chk("the wake-up names the task", str(pid) in wakes[0]["body"])
         chk("the item left the parked list",
             pid not in {r["id"] for r in a._parked_rows()})
-        await pilot.press("escape")
+        # --- finding 5: a successful hand-over used to go silent - the row
+        # vanishes and #log is hidden behind the overlay, so both refusal
+        # paths got a modal while success got nothing. This must fail if that
+        # regresses: naming the recipient in the confirmation is the whole
+        # point, not just showing *a* modal.
+        chk("finding 5: ENTER success confirms with a modal naming the "
+            "recipient and the item",
+            a._modal_open
+            and "taker" in a.query_one("#modal", Static).content
+            and str(pid) in a.query_one("#modal", Static).content)
+        await pilot.press("space")     # dismiss the confirmation modal -
+        await pilot.pause()            # same convention as the refusal
+        await pilot.press("escape")    # modals below, THEN close the overlay
         await pilot.pause()
 
         # An unregistered tab has no swarm name, so there is nothing to own it.

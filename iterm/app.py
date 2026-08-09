@@ -2195,6 +2195,14 @@ class RelayApp(App):
         swarmdb.queue_message(conn, "human", name,
                               swarmlogic.wakeup_assignment_body(task),
                               task["project"], kind="wake")
+        # Both refusal paths above get a modal; a silent success would be the
+        # only one of the three outcomes that says nothing. #log is hidden
+        # behind the overlay and the row just vanished from the list, so this
+        # modal is the only place the operator can confirm who got it.
+        self._modal_show("HANDED OFF", [
+            f"#{item_id} -> @{name}",
+            "Queued a wake-up naming the task.",
+        ])
         self._render_parked()
 
     def on_key(self, event) -> None:
@@ -2429,6 +2437,15 @@ class RelayApp(App):
                 self._timer_form_close()
             else:
                 self.action_timers()
+        elif self._parked_visible:
+            # In practice on_key's own parked branch (escape closes the
+            # overlay, then calls event.prevent_default()) already handles
+            # ESC and suppresses this action from ever firing while the
+            # overlay is up - see _get_dispatch_methods' _no_default_action
+            # short-circuit. This branch exists so action_dismiss_view, which
+            # every overlay's docs call the universal ESC path, is actually
+            # universal rather than parked being the one silent exception.
+            self.action_parked()
 
     # --- help overlay (?) -----------------------------------------------------
     def action_help(self) -> None:
