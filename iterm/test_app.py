@@ -17,6 +17,12 @@ import tempfile
 os.environ["RELAY_CONFIG"] = os.path.join(
     tempfile.mkdtemp(prefix="relay-test-config-"), "config")
 
+# Same idea for the audit log - Task 4's intervene test drives real (non-dry-
+# run) execution, which calls audit.record(). Without this it would append to
+# the developer's real ~/.relay/audit.jsonl (see test_audit.py, same guard).
+os.environ["RELAY_AUDIT_LOG"] = os.path.join(
+    tempfile.mkdtemp(prefix="relay-test-audit-"), "audit.jsonl")
+
 sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
 import config as cfgmod  # noqa: E402
@@ -1099,7 +1105,19 @@ async def go():
             ctx.get("last") == 'grep -rn "TODO" src/')
 
     # --- intervene (!): the operator's brake-and-broadcast modal --------------
-    a = _TestApp(_one(), dry_run=True)
+    def _one():
+        # A second session so STOP has something to skip: every stub session
+        # is idle by default, and STOP correctly ignores idle sessions.
+        return {
+            "s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                              last_screen=["x"]),
+            "s1": SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
+                              last_screen=["x"]),
+        }
+
+    # dry_run=False - this block exercises the real interrupt/broadcast path,
+    # not just the modal's field editing.
+    a = _TestApp(_one(), dry_run=False)
     async with a.run_test() as pilot:
         await pilot.pause()
         a._refresh()
@@ -1138,20 +1156,58 @@ async def go():
         chk("ESC closes with nothing executed", a._intervene is None)
         chk("ESC executed nothing", a._intervene_calls == [])
 
+        # --- intervene executes -----------------------------------------------
+        # StubWatcher.registry is {} so every stub session is UNREGISTERED, and
+        # SessionInfo.state defaults to "idle" - STOP skips idle sessions, so
+        # without this the brake would correctly send nothing and the test would
+        # be asserting against an empty list. Mark one working, and use ALL scope
+        # below because PROJECT cannot reach an unregistered tab.
+        a.watcher.sessions["s1"].state = "working"
+        a.watcher.sent.clear()
         await pilot.press("exclamation_mark")
-        for ch in "halt":
+        await pilot.press("tab")          # stop_tell -> stop
+        await pilot.press("right")        # project -> all
+        await pilot.press("enter")
+        await pilot.pause()
+        esc_sends = [s for s in a.watcher.sent if s[1] == "\x1b"]
+        chk("STOP sent an ESC to the working session", len(esc_sends) == 1)
+        chk("STOP targeted the working session", esc_sends[0][0] == "s1")
+        chk("STOP sent ESC and nothing else",
+            all(s[1] == "\x1b" for s in a.watcher.sent))
+        chk("STOP never appended a return",
+            not any(s[1].endswith("\r") for s in a.watcher.sent))
+        chk("STOP skipped the idle sessions", len(a.watcher.sent) == 1)
+        chk("a report modal is shown", a._modal_open)
+        await pilot.press("space")        # dismiss the report
+        await pilot.pause()
+
+        a.watcher.sent.clear()
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")
+        await pilot.press("tab")          # -> tell
+        for ch in "hi":
             await pilot.press(ch)
         await pilot.press("enter")
         await pilot.pause()
-        chk("ENTER closes the modal", a._intervene is None)
-        chk("ENTER executed once", len(a._intervene_calls) == 1)
-        chk("ENTER passed the typed body",
-            a._intervene_calls[0][3] == "halt")
-
-        await pilot.press("tab")
+        chk("TELL sent no keystrokes", a.watcher.sent == [])
+        await pilot.press("space")
         await pilot.pause()
-        chk("TAB with no modal still opens the swarm view", a._swarm_visible)
+
+        await pilot.press("exclamation_mark")
         await pilot.press("tab")
+        await pilot.press("tab")          # -> tell, empty buffer
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("TELL refuses an empty buffer", a._intervene is not None)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")          # -> stop, empty buffer
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("STOP commits on an empty buffer", a._intervene is None)
+        await pilot.press("space")
         await pilot.pause()
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")

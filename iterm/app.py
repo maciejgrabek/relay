@@ -2658,8 +2658,60 @@ class RelayApp(App):
         self._intervene_execute(mode, scope, targets, body)
 
     def _intervene_execute(self, mode, scope, targets, body) -> None:
-        """Stub in this task; Task 4 implements it."""
+        """Brake and/or broadcast. The interrupt is immediate; the message
+        waits for a ready prompt. Both are reported, because an operator who
+        cannot tell which half landed is worse off than one who was refused."""
         self._intervene_calls.append((mode, scope, targets, body))
+        if self.dry_run:
+            self._modal_show("INTERVENE - DRY RUN", [
+                "Dry run: relay mutates nothing.",
+                f"Would have reached {len(targets)} session(s).",
+            ])
+            return
+
+        interrupted = skipped = told = disarmed = 0
+        if mode in ("stop", "stop_tell"):
+            for t in targets:
+                if not t["working"]:
+                    skipped += 1
+                    continue
+                # A bare ESC. No trailing return - a return would submit an
+                # empty prompt instead of interrupting.
+                self.run_worker(self.watcher.send_keys(t["sid"], "\x1b"),
+                                exclusive=False)
+                interrupted += 1
+                # Extreme pushes a prompt into an IDLE tab, and an interrupted
+                # tab is idle - without this relay would restart the work the
+                # operator just stopped, within a minute.
+                info = self.watcher.sessions.get(t["sid"])
+                if info is not None and info.mode == "extreme":
+                    info.mode = "insane"
+                    info.extreme_fires_left = 0
+                    disarmed += 1
+
+        if mode in ("tell", "stop_tell") and body:
+            try:
+                conn = self._swarm_db_conn()
+                for t in targets:
+                    if not t["name"]:
+                        continue          # unregistered: no mailbox to queue to
+                    swarmdb.queue_message(conn, "human", t["name"], body,
+                                          t["project"], kind="info")
+                    told += 1
+            except Exception as e:
+                self.query_one(Log).write_line(f"intervene: queue failed: {e}")
+
+        audit.record("intervene", f"{scope}:{len(targets)}",
+                     f"mode={mode}", f"interrupted={interrupted} told={told}")
+
+        lines = []
+        if mode in ("stop", "stop_tell"):
+            lines.append(f"interrupted {interrupted} · skipped {skipped} (idle)")
+        if mode in ("tell", "stop_tell"):
+            lines.append(f"told {told}")
+        if disarmed:
+            lines.append(f"extreme disarmed on {disarmed}")
+        self._modal_show("INTERVENE", lines or ["nothing to do"])
 
     def _shell_verb(self, verb: str, doing: str, extra=None) -> None:
         here = os.path.dirname(os.path.abspath(__file__))
