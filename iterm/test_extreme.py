@@ -645,6 +645,54 @@ def test_park_modal_text():
         any(r.startswith("║") and "_" in r for r in empty.splitlines()))
 
 
+def test_intervene_modal_text():
+    import app as appmod
+    t = appmod.intervene_modal_text("hey agents - stop", "stop_tell",
+                                    "project: relay", 3, 2, 1, 80)
+    rows = t.splitlines()
+    chk("intervene title row", any("INTERVENE" in r for r in rows))
+    chk("buffer inside the box",
+        any(r.startswith("║") and "hey agents - stop" in r for r in rows))
+    chk("cursor follows the buffer",
+        any("hey agents - stop_" in r for r in rows))
+    chk("nothing renders outside the box",
+        all(r == "" or r[0] in "╔║╠╚ " for r in rows))
+    chk("all three modes listed",
+        any("STOP + TELL" in r for r in rows)
+        and any(r.count("STOP") == 1 and "TELL" not in r for r in rows)
+        and any("TELL" in r and "STOP" not in r for r in rows))
+    chk("selected mode marked", any("[·] STOP + TELL" in r for r in rows))
+    chk("timing shown per mode",
+        any("ESC now" in r for r in rows) and any("on idle" in r for r in rows))
+    chk("scope label shown", any("project: relay" in r for r in rows))
+    chk("counts shown",
+        any("3 sessions" in r and "2 working" in r and "1 idle" in r
+            for r in rows))
+    chk("footer teaches every key",
+        any("TAB mode" in r for r in rows)
+        and any("scope" in r for r in rows)
+        and any("ENTER go" in r for r in rows))
+
+    s = appmod.intervene_modal_text("", "stop", "all", 7, 5, 2, 80)
+    chk("stop mode marked", any("[·] STOP " in r for r in s.splitlines()))
+    chk("empty buffer still shows a cursor inside the box",
+        any(r.startswith("║") and "_" in r for r in s.splitlines()))
+
+    e = appmod.intervene_modal_text("x", "tell", "selected: bff-worker",
+                                    1, 0, 1, 80)
+    chk("tell mode marked", any("[·] TELL" in r for r in e.splitlines()))
+    chk("selected scope label shown",
+        any("bff-worker" in r for r in e.splitlines()))
+
+    narrow = appmod.intervene_modal_text("y" * 200, "stop", "all", 1, 1, 0, 40)
+    chk("width clamped", all(len(r) <= 40 for r in narrow.splitlines()))
+    chk("cursor survives a long buffer",
+        any(r.startswith("║") and "_" in r for r in narrow.splitlines()))
+
+    chk("mode order is the display order",
+        appmod.INTERVENE_MODES == ("stop_tell", "stop", "tell"))
+
+
 def test_park_wiring():
     import app as appmod
     src = open(appmod.__file__).read()
@@ -683,6 +731,7 @@ if __name__ == "__main__":
     test_push_line()
     test_dos_modal_text()
     test_park_modal_text()
+    test_intervene_modal_text()
     test_park_wiring()
     test_statusbar_label()
     print("ALL PASSED" if ok else "FAILURES")

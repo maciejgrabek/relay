@@ -628,6 +628,25 @@ def dos_modal_text(title: str, lines: list, width: int,
     return "\n".join(shaded)
 
 
+def _modal_buffer_line(buffer: str, title: str, other_lines: list,
+                       footer: str, width: int) -> str:
+    """The input row for a form modal: the TAIL of the buffer plus the cursor,
+    with a '<' marker when characters have scrolled off the left.
+
+    dos_modal_text clips from the left, so a long buffer would lose its
+    trailing cursor - the caret vanishing as you type. Window here against the
+    same inner width dos_modal_text will compute, so its clip has nothing left
+    to remove on this row.
+    """
+    inner = max(len(title), max((len(l) for l in other_lines), default=0),
+                len(footer), 24)
+    inner = min(inner, max(24, width - 6))
+    if len(buffer) > inner - 1:
+        tail = buffer[-(inner - 2):]
+        return f"<{tail}_"
+    return f"{buffer}_"
+
+
 PARK_EXISTING_SHOWN = 5
 
 
@@ -669,28 +688,50 @@ def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
         if extra > 0:
             lines_for_inner.append(f"  +{extra} more")
 
-    # Compute inner width the same way dos_modal_text does, to know how to window
-    # the buffer. This ensures the buffer line won't be truncated by dos_modal_text's clip.
+    # Window the buffer against the same inner width dos_modal_text will
+    # compute, so its left-clip has nothing left to remove from this row.
     title = "PARK AN IDEA"
-    inner_target = max(len(title), max((len(l) for l in lines_for_inner), default=0),
-                       len(footer), 24)
-    inner_target = min(inner_target, max(24, width - 6))
-
-    # Window the buffer to fit within inner_target. Leave room for the cursor.
-    # If scrolled, show a marker on the left.
-    scrolled = len(buffer) > inner_target - 1
-    if scrolled:
-        marker = "<"
-        # Room for marker, tail of buffer, and cursor: marker (1) + tail + cursor (1)
-        buffer_tail_len = inner_target - len(marker) - 1
-        buffer_tail = buffer[-buffer_tail_len:] if buffer_tail_len > 0 else ""
-        buffer_line = f"{marker}{buffer_tail}_"
-    else:
-        buffer_line = f"{buffer}_"
+    buffer_line = _modal_buffer_line(buffer, title, lines_for_inner, footer, width)
 
     # Assemble final lines list
     lines = [buffer_line, ""] + lines_for_inner
     return dos_modal_text(title, lines, width, footer=footer)
+
+
+INTERVENE_MODES = ("stop_tell", "stop", "tell")
+
+_INTERVENE_ROWS = (
+    ("stop_tell", "STOP + TELL", "ESC now · on idle"),
+    ("stop",      "STOP",        "ESC now"),
+    ("tell",      "TELL",        "text on idle"),
+)
+
+
+def intervene_modal_text(buffer: str, mode: str, scope_label: str,
+                         n: int, n_working: int, n_idle: int,
+                         width: int) -> str:
+    """The operator's brake-and-broadcast modal.
+
+    The per-mode timing ("ESC now" vs "on idle") is rendered on screen and is
+    not decoration: an interrupt lands mid-turn while a message waits for a
+    ready prompt, and an operator who types "stop!" in TELL mode would
+    otherwise watch every agent finish the turn they wanted abandoned.
+
+    The count line is scope-dependent and recomputed by the caller on every
+    scope change, so the blast radius is visible before ENTER.
+    """
+    body = []
+    for key, label, timing in _INTERVENE_ROWS:
+        mark = "[·]" if key == mode else "[ ]"
+        lead = "MODE " if key == INTERVENE_MODES[0] else "     "
+        body.append(f"{lead} {mark} {label:<12} {timing}")
+    body += ["",
+             f"SCOPE ‹ {scope_label} ›",
+             f"      {n} sessions · {n_working} working · {n_idle} idle"]
+    footer = "TAB mode · ←→ scope · ENTER go · ESC cancel"
+    buf_line = _modal_buffer_line(buffer, "INTERVENE", body, footer, width)
+    return dos_modal_text("INTERVENE", [buf_line, ""] + body, width,
+                          footer=footer)
 
 
 def getting_started_panel(width: int) -> str:
