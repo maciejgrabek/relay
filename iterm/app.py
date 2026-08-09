@@ -2064,6 +2064,49 @@ class RelayApp(App):
         self.query_one("#parkedview", Static).update(
             parked_overlay_text(rows, label, max(40, w), self._parked_cursor))
 
+    def _parked_assign(self) -> None:
+        """Hand the selected item to the selected session.
+
+        The list cursor picks the item; the roster cursor behind the overlay
+        picks the recipient. Two cursors are live at once - the same shape the
+        timers overlay already has, which acts on the selected session's
+        timers.
+        """
+        rows = self._parked_rows()
+        if not rows:
+            return
+        item = rows[min(self._parked_cursor, len(rows) - 1)]
+        sid = self._selected_sid()
+        reg = (self.watcher.registry or {}).get(sid) if self.watcher else None
+        name = (reg or {}).get("name", "")
+        if not name:
+            # tasks.owner holds a swarm name and an unregistered tab has none.
+            # The item stays parked, and that tab can still take it with
+            # `relay next`, which needs no name.
+            self._modal_show("CANNOT HAND OVER", [
+                "That tab is not registered with relay,",
+                "so there is no name to own the item.",
+                "",
+                "It stays parked - the tab can still take it",
+                "itself with `relay next`.",
+            ])
+            return
+        conn = self._swarm_db_conn()
+        task = swarmdb.claim_parked_by_id(conn, item["id"], name)
+        if task is None:
+            self._modal_show("ALREADY TAKEN", [
+                f"#{item['id']} was claimed by another session",
+                "between opening this list and now.",
+            ])
+            self._render_parked()
+            return
+        # Without the wake-up it becomes a task nobody was told about, which is
+        # worse than leaving it parked.
+        swarmdb.queue_message(conn, "human", name,
+                              swarmlogic.wakeup_assignment_body(task),
+                              task["project"], kind="wake")
+        self._render_parked()
+
     def on_key(self, event) -> None:
         # Swallows the modal for ordinary bindings. Any binding declared
         # priority=True (e.g. action_swarm_view's Tab) is dispatched BEFORE
@@ -2160,6 +2203,10 @@ class RelayApp(App):
                 swarmdb.drop_parked(self._swarm_db_conn(),
                                     rows[self._parked_cursor]["id"])
                 self._render_parked()
+                event.stop()
+                event.prevent_default()
+            elif k == "enter" and rows:
+                self._parked_assign()
                 event.stop()
                 event.prevent_default()
             return

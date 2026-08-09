@@ -1492,6 +1492,60 @@ async def go():
         await pilot.press("escape")
         await pilot.pause()
 
+        # --- parked overlay: ENTER hands an item over --------------------------
+        conn = a._swarm_db_conn()
+        import db as _db
+        _db.register(conn, "taker", a.watcher.sessions["s1"].session_id,
+                     "worker", project="pk")
+        # task_now isn't a sessions column - watcher.py's real refresh adds it
+        # by joining tasks; the periodic 1s repaint (_refresh -> add) reads it
+        # unconditionally, so a hand-built registry entry needs it too or the
+        # app crashes on the next tick.
+        taker_reg = dict(_db.get_session(conn, "taker"))
+        taker_reg["task_now"] = ""
+        a.watcher.registry[a.watcher.sessions["s1"].session_id] = taker_reg
+        pid = _db.park_task(conn, "hand this over", "/tmp/pk", project="pk")
+
+        a._selected_sid = lambda: a.watcher.sessions["s1"].session_id
+        await pilot.press("b")
+        await pilot.press("right")            # all scope, so the row is visible
+        await pilot.pause()
+        idx = [r["id"] for r in a._parked_rows()].index(pid)
+        for _ in range(idx):
+            await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        row = _db.get_task(conn, pid)
+        chk("ENTER assigns the owner", row["owner"] == "taker")
+        chk("ENTER un-parks it", row["parked"] == 0)
+        chk("ENTER sets doing", row["state"] == "doing")
+        wakes = [m for m in _db.undelivered(conn)
+                 if m["to_name"] == "taker" and m["kind"] == "wake"]
+        chk("ENTER queues exactly one wake-up", len(wakes) == 1)
+        chk("the wake-up names the task", str(pid) in wakes[0]["body"])
+        chk("the item left the parked list",
+            pid not in {r["id"] for r in a._parked_rows()})
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # An unregistered tab has no swarm name, so there is nothing to own it.
+        pid2 = _db.park_task(conn, "cannot hand over", "/tmp/pk", project="pk")
+        a._selected_sid = lambda: a.watcher.sessions["s0"].session_id
+        a.watcher.registry.pop(a.watcher.sessions["s0"].session_id, None)
+        await pilot.press("b")
+        await pilot.press("right")
+        await pilot.pause()
+        idx2 = [r["id"] for r in a._parked_rows()].index(pid2)
+        for _ in range(idx2):
+            await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("ENTER on an unregistered tab refuses", a._modal_open)
+        chk("the item stays parked", _db.get_task(conn, pid2)["parked"] == 1)
+        await pilot.press("space")
+        await pilot.pause()
+
     # --- dry-run mutates nothing: no sends, no queueing, DRY RUN report ----
     # A separate dry_run=True app - the block above flipped to dry_run=False
     # to exercise the real paths, which left the `if self.dry_run:` branch
