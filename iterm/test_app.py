@@ -806,6 +806,50 @@ async def go():
         sum(1 for r in _po_clamped.splitlines()
             if r.lstrip().startswith("▸")) == 1)
 
+    # --- finding 1: ENTER's target must be named on screen, not inferred.
+    # The roster (the only other place the selected session is visible) is
+    # hidden behind this overlay, so the key bar is the operator's only
+    # source for who ENTER hands the item to.
+    _po_named = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0,
+                                           recipient="taker")
+    chk("finding 1: a registered recipient is named in the key bar",
+        any("taker" in r for r in _po_named.splitlines()))
+    chk("finding 1: the recipient is marked with @, matching the row owner "
+        "convention", any("@taker" in r for r in _po_named.splitlines()))
+    _po_unreg = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0,
+                                           recipient="")
+    chk("finding 1: an unregistered recipient is called out by name, not "
+        "left blank - ENTER refuses there and the key bar says so before "
+        "the operator finds out by pressing it",
+        any("refuse" in r.lower() for r in _po_unreg.splitlines()))
+    chk("finding 1: no @recipient tag leaks into the key bar when there is "
+        "no recipient", not any("@" in r for r in _po_unreg.splitlines()[:4]))
+
+    # --- finding 3: ←→ scope must be discoverable from inside the overlay
+    # itself, not only the spec and README - a scope toggle nobody knows
+    # exists cannot rescue an item that "reads as lost" in the default scope.
+    chk("finding 3: the overlay's own key bar advertises the scope toggle",
+        any("←→" in r and "scope" in r for r in _po_named.splitlines()))
+
+    # --- finding 6: widened to all directories, rows must show which
+    # directory they came from - otherwise items from different projects are
+    # indistinguishable, which undercuts the reason to widen at all.
+    _prows_wd = [dict(r, workdir="/Work/relay") for r in _prows]
+    _prows_wd[1]["workdir"] = "/Work/other"
+    _po_all = appmod.parked_overlay_text(_prows_wd, "all directories", 80, 0,
+                                         all_scope=True)
+    _po_all_lines = _po_all.splitlines()
+    chk("finding 6: a row's own workdir is shown in all-directories scope",
+        any("#3" in r and "/Work/relay" in r for r in _po_all_lines)
+        and any("#7" in r and "/Work/other" in r for r in _po_all_lines))
+    _po_dir = appmod.parked_overlay_text(_prows_wd, "/Work/relay", 80, 0,
+                                         all_scope=False)
+    chk("finding 6: the per-row workdir tag is absent in the default "
+        "single-directory scope - every row already shares the header's "
+        "directory, so repeating it would be noise",
+        not any("/Work/relay" in r or "/Work/other" in r
+               for r in _po_dir.splitlines()[5:]))
+
     # `b` discoverability: the earlier `i` key shipped without reaching the
     # key bar or help screen and had to be retrofitted - this is the "don't
     # repeat that" check for `b`. A bare "b" is not a safe substring test

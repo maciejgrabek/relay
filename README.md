@@ -164,11 +164,11 @@ it's assigned and that session gets a wake-up naming the task.
 name) vs DIR (owned by nobody, directory-wide) scope; an unregistered tab is
 DIR-only - there's no swarm name to hand it to. The modal also lists what's
 already parked in that directory - the five oldest, not the most recent, so
-it won't catch a duplicate of something you just parked. `b` opens the full
-pile instead: every parked item, oldest first, regardless of the modal's cap.
-`↑↓` moves the cursor, `←→` widens the scope from this directory to all of
-them, `d` drops the highlighted item, and `i` from inside jumps straight to
-capture.
+it won't catch a duplicate of something you just parked. `b` opens the parked
+overlay instead: every item parked in the selected row's directory, oldest
+first, uncapped - `←→` widens the scope to every directory and back, so
+nothing parked elsewhere reads as lost. `↑↓` moves the cursor, `d` drops the
+highlighted item, and `i` from inside jumps straight to capture.
 
 A session picks up its own parked work with `relay next` (claims the oldest
 item it owns, then the oldest unowned one - never another session's) or
@@ -307,7 +307,7 @@ can't silently auto-approve.)
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
 | `!` | **Intervene**: stop running sessions and/or broadcast to them (see [Intervene](#intervene-)) |
 | `i` | **Park an idea** against the selected row (see [Parked work](#parked-work-i)) |
-| `b` | **Parked overlay**: the whole pile, oldest first - move, drop, or hand one to a session (see [Parked work](#parked-work-i)) |
+| `b` | **Parked overlay**: this directory's pile, oldest first, `←→` widens to every directory - move, drop, or hand one to a session (see [Parked work](#parked-work-i)) |
 | `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |

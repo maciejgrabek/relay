@@ -800,7 +800,8 @@ def help_text() -> str:
         row("n", "jump to the selected session's iTerm2 tab"),
         row("x", "hide / show the selected session"),
         row("i", "park an idea against the selected session (zero context cost)"),
-        row("b", "PARKED: the whole pile - drop items, hand one to a session"),
+        row("b", "PARKED: the whole pile - drop items, hand one to a session; "
+                "left/right widens scope to every directory"),
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
@@ -926,7 +927,8 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
 
 
 def parked_overlay_text(rows: list, scope_label: str, width: int,
-                        cursor: int) -> str:
+                        cursor: int, recipient: str = "",
+                        all_scope: bool = False) -> str:
     """The `b` overlay: the whole parked pile, oldest first, with a cursor.
 
     Modeled on timers_view_text: an open box (border bars only - the header
@@ -940,19 +942,36 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
     specific session; an unowned item is free for anyone in that directory
     and stays visually quiet - no suffix at all, not even an empty one.
 
+    `recipient` is the swarm name ENTER will hand the selected item to - the
+    session highlighted in the ROSTER behind this overlay (hidden while the
+    overlay is up, so this is the operator's only view of it). Empty string
+    means that tab is not registered with relay, so ENTER has nothing to
+    assign to; the key bar says so rather than the operator finding out by
+    pressing it (spec s3: "the footer should make the recipient unambiguous
+    rather than leaving it inferred").
+
+    `all_scope` prints each row's own workdir. In the default one-directory
+    scope every row already shares the header's directory, so repeating it
+    would be noise; widened to all directories, rows from different projects
+    are otherwise indistinguishable.
+
     Rendered with markup ON (like timers_view_text), so the scope label,
-    titles and owners - all free text - are escaped. Every line, including
-    the box border, is clamped to `width`: the pane this lands in cannot
-    scroll sideways, so a bare `[:w]` slice (matching timers_view_text's own
-    bare slicing, not an ellipsis marker) runs over the whole render at the
-    end rather than being recomputed per line.
+    titles, owners and workdirs - all free text - are escaped. Every line,
+    including the box border, is clamped to `width`: the pane this lands in
+    cannot scroll sideways, so a bare `[:w]` slice (matching timers_view_text's
+    own bare slicing, not an ellipsis marker) runs over the whole render at
+    the end rather than being recomputed per line. Body text stays free of
+    real markup spans for exactly this reason - a color tag sliced mid-tag by
+    that end clamp would corrupt the render, not just crop it.
     """
     w = max(40, width)
     bar = "═" * (w - 2)
+    enter_hint = (f"enter -> @{escape(recipient)}" if recipient
+                  else "enter refuses (unregistered)")
     head = [
         f"╔{bar}╗",
         f" ▓ PARKED // {escape(scope_label)}",
-        " ↑↓ move · d drop · enter claim · i park new · esc close",
+        f" ↑↓ move · ←→ scope · d drop · {enter_hint} · i park new · esc close",
         f"╚{bar}╝",
         "",
     ]
@@ -970,7 +989,8 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
         mark = "▸" if i == cur else " "
         owner = f"  @{escape(str(r['owner']))}" if r.get("owner") else ""
         title = escape(str(r["title"]))
-        body.append(f" {mark} #{r['id']} {title}{owner}")
+        dirtag = f"{escape(str(r.get('workdir') or '?'))}  " if all_scope else ""
+        body.append(f" {mark} #{r['id']} {dirtag}{title}{owner}")
     return "\n".join(l[:w] for l in head + body)
 
 
@@ -2031,11 +2051,24 @@ class RelayApp(App):
     # --- parked overlay (b): the whole pile, not just the 5-row preview -------
     def _parked_workdir(self) -> str:
         """The selected row's directory - the one `relay next` would claim
-        from. Read off SessionInfo, not the sessions table: an unregistered tab
-        has no row there and is exactly the case parking serves."""
+        from. Delegates to _workdir_for (used by `i` capture) so the two
+        cannot drift; only the lookup of the selected row's SessionInfo
+        differs, because that lookup is what parking is FOR (an unregistered
+        tab has no sessions-table row at all)."""
         sid = self._selected_sid()
         info = self.watcher.sessions.get(sid) if (sid and self.watcher) else None
-        return (getattr(info, "workdir", "") or "").strip()
+        return self._workdir_for(info)
+
+    def _parked_recipient(self) -> str:
+        """The swarm name ENTER would hand the selected item to - the same
+        registry lookup _parked_assign uses to actually do it, and what
+        parked_overlay_text's footer names so the operator is never guessing
+        who ENTER targets. '' means the selected tab is not registered with
+        relay (or nothing is selected), so there is no name to assign to."""
+        sid = self._selected_sid()
+        reg = ((self.watcher.registry or {}).get(sid)
+               if (sid and self.watcher) else None)
+        return (reg or {}).get("name", "")
 
     def _parked_rows(self) -> list:
         try:
@@ -2076,7 +2109,9 @@ class RelayApp(App):
         # at the moment the key lands.
         self._parked_ids = [r["id"] for r in rows]
         self.query_one("#parkedview", Static).update(
-            parked_overlay_text(rows, label, max(40, w), self._parked_cursor))
+            parked_overlay_text(rows, label, max(40, w), self._parked_cursor,
+                                self._parked_recipient(),
+                                self._parked_scope == "all"))
 
     def _parked_selected_id(self):
         """The id of the row highlighted at the last render, or None if
@@ -2112,13 +2147,13 @@ class RelayApp(App):
             ])
             self._render_parked()
             return
-        sid = self._selected_sid()
-        reg = (self.watcher.registry or {}).get(sid) if self.watcher else None
-        name = (reg or {}).get("name", "")
+        name = self._parked_recipient()
         if not name:
             # tasks.owner holds a swarm name and an unregistered tab has none.
             # The item stays parked, and that tab can still take it with
-            # `relay next`, which needs no name.
+            # `relay next`, which needs no name. parked_overlay_text's key
+            # bar already told the operator ENTER refuses here before they
+            # pressed it - this is that promise kept.
             self._modal_show("CANNOT HAND OVER", [
                 "That tab is not registered with relay,",
                 "so there is no name to own the item.",
