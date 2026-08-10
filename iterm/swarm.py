@@ -433,25 +433,31 @@ def _shell_prompt_tail(l: str) -> bool:
     """True when `l` looks like a live shell's prompt line: non-blank, NOT one
     of Claude Code's own output rows (_CLAUDE_ROW_GLYPHS as its first
     non-whitespace character), and its last non-whitespace character is one of
-    _SHELL_PROMPT_TAILS and is not glued to a digit.
+    _SHELL_PROMPT_TAILS, excluding a percentage.
 
-    The digit exclusion: a sigil immediately after a digit is that number's
-    unit, not a prompt. Claude Code's own chrome ends in one routinely -
-    "Context left until auto-compact: 23%" is the case that forced this, and
-    it starts with an ordinary letter, so no growth of _CLAUDE_ROW_GLYPHS
-    could ever have excluded it. Shell prompts put the sigil after a path, a
-    host or a git decoration, effectively never after a bare number; the
-    shapes that do (bash's "sh-5.2$" fallback, a "\\!$" history-number PS1)
-    are missed here and are covered by is_shell_job, which is the
-    authoritative guard. That trade is the same one the rest of this
-    predicate makes: an over-veto stalls a session silently and forever, an
-    under-veto costs nothing while the job guard holds."""
+    The percentage exclusion: "%" glued to a digit is a unit, not a prompt.
+    Claude Code's own chrome ends in one routinely - "Context left until
+    auto-compact: 23%" is the case that forced this, and it starts with an
+    ordinary letter, so no growth of _CLAUDE_ROW_GLYPHS could ever have
+    excluded it.
+
+    It is deliberately narrow. Exempting EVERY sigil glued to a digit was
+    tried and reverted: it let through "bash-3.2$" (macOS's default bash
+    prompt), and, because the default PS1 glues "$" straight to the path,
+    every "user@host:~/work/relay2$" and "user@web01$" as well. Those are
+    ordinary prompts, not exotic ones. The residual is a zsh prompt on a
+    path ending in a digit ("~/work/v2%"), which is rarer and is covered by
+    is_shell_job, the authoritative guard.
+
+    The trade is the same one the rest of this predicate makes: an over-veto
+    stalls a session silently and forever, an under-veto costs nothing while
+    the job guard holds."""
     s = l.strip()
     if not s or s[0] in _CLAUDE_ROW_GLYPHS:
         return False
     if s[-1] not in _SHELL_PROMPT_TAILS:
         return False
-    return not (len(s) >= 2 and s[-2].isdigit())
+    return not (len(s) >= 2 and s[-1] == "%" and s[-2].isdigit())
 
 
 _DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")

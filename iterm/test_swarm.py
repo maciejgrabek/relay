@@ -1427,10 +1427,25 @@ def test_selection_dialog_and_readiness():
         "glyph list could ever have excluded it",
         claude_prompt_ready(idle + ["Context left until auto-compact: 23%"])
         is True)
-    ok &= check("a sigil glued to a digit is a unit, not a prompt",
+    ok &= check("a '%' glued to a digit is a unit, not a prompt",
                 swarm._shell_prompt_tail("Context left: 23%") is False)
     ok &= check("a sigil after a space is still a prompt",
                 swarm._shell_prompt_tail("~/work/relay %") is True)
+
+    # The exclusion covers "%" ONLY. Exempting every sigil glued to a digit
+    # was tried and reverted: bash's default prompt glues "$" straight to the
+    # path, so it let through macOS's own "bash-3.2$" and every host or
+    # directory whose name ends in a digit. Those are ordinary prompts. Each
+    # of these is a real shell prompt shape that must still be refused.
+    for prompt in ("bash-3.2$", "sh-5.2$", "bash-5.1#",
+                   "maciej@mbp:~/work/relay2$", "user@web01$",
+                   "~/work/py3$", "(venv) ~/work/proj2$"):
+        ok &= check(
+            "a digit-glued '$' or '#' is still a shell prompt: %r" % prompt,
+            swarm._shell_prompt_tail(prompt) is True)
+        ok &= check(
+            "a dead Claude box above %r is never ready" % prompt,
+            claude_prompt_ready(_BOX_CHROME + [prompt]) is False)
 
     # The narrowing itself: the suffix test applies to the BOTTOM-MOST line
     # only. Claude Code wraps long tool output, and a wrapped continuation row
