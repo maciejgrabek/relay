@@ -911,6 +911,7 @@ def test_session_working():
         "selection_dialog": False,
         "shell_zsh": False,
         "live_draft": False,
+        "idle_nbsp_row": False,      # idle, so not working
     }
     for name, want in expected.items():
         got = session_working(load_screen(name))
@@ -1014,6 +1015,7 @@ def test_input_row_and_drafts():
         "selection_dialog": False,
         "shell_zsh": False,
         "live_draft": False,
+        "idle_nbsp_row": True,       # the NBSP-padded row IS empty
     }
     for name, want in expected.items():
         got = prompt_line_empty(load_screen(name))
@@ -1183,6 +1185,7 @@ def test_selection_dialog_and_readiness():
         "input_placeholder": False,
         "shell_zsh": False,
         "live_draft": False,
+        "idle_nbsp_row": False,      # not a dialog
     }
     for name, want in dialogs.items():
         ok &= check(f"selection_dialog({name}) is {want}",
@@ -1205,6 +1208,7 @@ def test_selection_dialog_and_readiness():
         "selection_dialog": False,
         "shell_zsh": False,
         "live_draft": True,
+        "idle_nbsp_row": True,       # idle with a free row -> ready
     }
     for name, want in ready.items():
         ok &= check(f"claude_prompt_ready({name}) is {want}",

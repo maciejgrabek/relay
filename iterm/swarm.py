@@ -773,7 +773,12 @@ def prompt_line_empty(lines: List[str]) -> bool:
         l = tail[i]
         found = True
         rest = _INPUT_BOX_RE.sub("", l, count=1)
-        rest = rest.strip("".join(_BOX_GLYPHS) + " \t")
+        # .strip() with no argument first, so U+00A0 goes: Claude Code pads an
+        # EMPTY input row with a non-breaking space, and an explicit " \t" set
+        # leaves it behind and reads the empty row as a draft. Found by running
+        # the predicates against live tabs; every captured fixture had the
+        # NBSP normalised away on write, so no fixture could have caught it.
+        rest = rest.strip().strip("".join(_BOX_GLYPHS)).strip()
         if rest and not any(p in rest for p in _INPUT_PLACEHOLDERS):
             return False  # this bracketed row carries a draft - veto
     return found
