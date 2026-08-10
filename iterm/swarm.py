@@ -424,6 +424,31 @@ def prompt_line_empty(lines: List[str]) -> bool:
     return False
 
 
+_WORKING_MARKER = "esc to interrupt"
+
+
+def session_working(lines) -> bool:
+    """True when Claude Code is mid-turn.
+
+    The discriminator is the literal "esc to interrupt", which Claude Code
+    prints in its footer exactly while a turn is running and omits when idle.
+    The two footers are otherwise identical:
+
+        idle:     ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
+        working:  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents
+
+    This replaces sniffing ⏵⏵ / "? for shortcuts", which are MODE indicators
+    present in both states (hence a false "ready" on a working session) and
+    absent entirely in manual mode (hence a session relay would never deliver
+    to at all).
+
+    Scanned across the recent tail rather than one line, because Claude Code
+    appends agent and task rows BELOW the footer and their number is not
+    bounded.
+    """
+    return any(_WORKING_MARKER in l for l in list(lines)[-8:])
+
+
 # --- shell-job detection (relocated from watcher.py) ---------------------------
 
 # Login shells iTerm2 may report as a tab's foreground job. When one of these is

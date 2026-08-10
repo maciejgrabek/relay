@@ -3,6 +3,7 @@
 Run: python3 iterm/test_swarm.py    or    ./test/run.sh
 """
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -13,8 +14,18 @@ from swarm import (  # noqa: E402
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
     wipe_plan_text, parse_pr_ref, resolve_pr_route, intervene_targets,
-    intervene_counts, is_shell_job,
+    intervene_counts, is_shell_job, session_working,
 )
+
+_SCREEN_DIR = pathlib.Path(__file__).parent / "fixtures" / "screens"
+
+
+def load_screen(name):
+    """A captured screen as relay's watcher would hand it to a predicate:
+    non-blank lines, '#' header stripped."""
+    p = _SCREEN_DIR / f"{name}.txt"
+    return [l for l in p.read_text().splitlines()
+            if l.strip() and not l.startswith("#")]
 
 
 def check(msg, cond):
@@ -853,6 +864,27 @@ def run():
     return ok
 
 
+def test_session_working():
+    ok = True
+    expected = {
+        "idle_accept_edits": False,
+        "working_accept_edits": True,
+        "working_manual_mode": True,
+        "working_with_agent_rows": True,
+        "draft_in_box": True,
+        "input_placeholder": True,
+        "selection_dialog": False,
+        "shell_zsh": False,
+    }
+    for name, want in expected.items():
+        got = session_working(load_screen(name))
+        ok &= check(f"session_working({name}) is {want}", got == want)
+    ok &= check("no fixture is missing",
+                len(list(_SCREEN_DIR.glob('*.txt'))) == len(expected))
+    ok &= check("empty screen is not working", session_working([]) is False)
+    return ok
+
+
 def _irow(sid, name, project, is_shell=False, working=True):
     return {"sid": sid, "name": name, "project": project,
             "is_shell": is_shell, "working": working}
@@ -912,4 +944,5 @@ def test_intervene_targets():
 if __name__ == "__main__":
     ok = run()
     ok = test_intervene_targets() and ok
+    ok = test_session_working() and ok
     sys.exit(0 if ok else 1)
