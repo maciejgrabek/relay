@@ -1010,6 +1010,80 @@ def test_input_row_and_drafts():
         "(no fixed window)",
         prompt_line_empty(swarmed) is True)
 
+    # Fix round 2 (defect review, Important): scanning top-down and
+    # returning on the FIRST rule-bracketed row answers about the row
+    # furthest from the bottom, not the live one. Every bracketed row must
+    # be checked; any one of them carrying a draft vetoes the whole screen.
+    STALE_EMPTY_ABOVE_LIVE_DRAFT = [
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "  some old scrollback content",
+        "─" * 10,
+        "❯ ok - c",
+        "─" * 10,
+        "  ⏵⏵ accept edits on · ← for agents",
+    ]
+    ok &= check(
+        "a stale EMPTY bracketed row above a LIVE bracketed draft vetoes "
+        "(every bracketed row is checked, not just the first one found)",
+        prompt_line_empty(STALE_EMPTY_ABOVE_LIVE_DRAFT) is False)
+
+    # The inverse already worked before this fix (a top-down first-match
+    # scan hits the draft first either way) - kept as a named regression
+    # guard so the fix cannot flip it.
+    STALE_DRAFT_ABOVE_LIVE_EMPTY = [
+        "─" * 10,
+        "❯ an old half-typed thing",
+        "─" * 10,
+        "  some old scrollback content",
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "  ⏵⏵ accept edits on · ← for agents",
+    ]
+    ok &= check(
+        "a stale draft above a live EMPTY row still vetoes",
+        prompt_line_empty(STALE_DRAFT_ABOVE_LIVE_EMPTY) is False)
+
+    TWO_BRACKETED_ROWS_BOTH_FREE = [
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "  some old scrollback content",
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "  ⏵⏵ accept edits on · ← for agents",
+    ]
+    ok &= check(
+        "two bracketed rows, both free, is True",
+        prompt_line_empty(TWO_BRACKETED_ROWS_BOTH_FREE) is True)
+
+    return ok
+
+
+def test_bracket_line():
+    ok = True
+    # A lone box-drawing glyph (no rule character, or too short) must not
+    # read as a bracket - closes the finding that '│', '││', '┼' all read
+    # as brackets under "every character is a box-drawing glyph" alone.
+    ok &= check("a lone vertical bar is not a bracket",
+                swarm._bracket_line("│") is False)
+    ok &= check("two vertical bars is not a bracket",
+                swarm._bracket_line("││") is False)
+    ok &= check("a lone junction glyph is not a bracket",
+                swarm._bracket_line("┼") is False)
+    # The legacy corner-drawn shapes iterm/test_extreme.py models must stay
+    # accepted, or that suite's 9 assertions go red.
+    ok &= check("a legacy top corner is a bracket",
+                swarm._bracket_line("╭──╮") is True)
+    ok &= check("a legacy bottom corner is a bracket",
+                swarm._bracket_line("╰──╯") is True)
+    ok &= check("a bare rule is a bracket",
+                swarm._bracket_line("─────") is True)
+    print()
+    print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
 
 
@@ -1074,4 +1148,5 @@ if __name__ == "__main__":
     ok = test_intervene_targets() and ok
     ok = test_session_working() and ok
     ok = test_input_row_and_drafts() and ok
+    ok = test_bracket_line() and ok
     sys.exit(0 if ok else 1)

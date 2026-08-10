@@ -422,9 +422,14 @@ def _bracket_line(l: str) -> bool:
     the same row before Claude Code switched to bare rules. A bare rule is a
     strict subset of "every character is a box-drawing glyph", so one check
     covers both without needing to special-case either shape.
+
+    Requires at least 2 characters AND at least one '─': a lone junction or
+    side glyph ('│', '││', '┼') is not a border on its own and must not
+    read as one, or a single stray '│' left over from some other UI element
+    would falsely bracket an unrelated _INPUT_BOX_RE match.
     """
     s = l.strip()
-    return bool(s) and all(c in _BOX_GLYPHS for c in s)
+    return len(s) >= 2 and "─" in s and all(c in _BOX_GLYPHS for c in s)
 
 
 def prompt_line_empty(lines: List[str]) -> bool:
@@ -439,10 +444,10 @@ def prompt_line_empty(lines: List[str]) -> bool:
     would trade one version's blind spot for another's.
 
     The live row is found STRUCTURALLY, not by position: among all
-    _INPUT_BOX_RE matches anywhere on screen, only the one BRACKETED by
-    _bracket_line on both sides - the nearest non-blank line above it and
-    the nearest non-blank line below it - is the live row. Every other
-    _INPUT_BOX_RE match is ignored. This does double duty:
+    _INPUT_BOX_RE matches anywhere on screen, only ones BRACKETED by
+    _bracket_line on both sides - the nearest non-blank line above and the
+    nearest non-blank line below - are candidates for the live row. Every
+    unbracketed _INPUT_BOX_RE match is ignored. This does double duty:
 
     - A queued message Claude Code echoes back into scrollback once
       submitted is ALSO a "❯ ..." line (see draft_in_box.txt), sitting
@@ -474,9 +479,26 @@ def prompt_line_empty(lines: List[str]) -> bool:
     message, the cost of a false "row empty" is submitting the operator's
     half-written text.
 
+    Fix round 3 (defect review, Important): a screen can carry more than one
+    bracketed row - e.g. lingering chrome from a prior turn (see the module
+    comment above _INPUT_BOX_RE: input-box chrome lingers on screen above
+    live content) or a frame caught mid-repaint by async_get_screen_contents.
+    Returning on the FIRST bracketed row found answers about whichever one
+    happens to sit closest to the top of the screen, not the live one -
+    concretely, a stale EMPTY bracketed box above a live bracketed box
+    holding a draft must read as False, not True. So every bracketed row on
+    screen is checked, not just one: if ANY of them carries text that is not
+    a known placeholder, the whole screen is vetoed to False immediately.
+    Only once every bracketed row has been checked and none vetoed - and at
+    least one bracketed row was found at all - does this return True. That
+    fails safe in both directions: a stale frame with a draft blocks, and a
+    stale empty frame above a live draft also blocks because the live row
+    vetoes. The cost is only ever a delayed message, never a clobbered one.
+
     No bracketed row found => not a known-live row => False (fail safe: do
     not type)."""
     tail = [l for l in lines if l.strip()]
+    found = False
     for i, l in enumerate(tail):
         if not _INPUT_BOX_RE.match(l):
             continue
@@ -484,12 +506,12 @@ def prompt_line_empty(lines: List[str]) -> bool:
             continue  # nothing on one side to bracket it - not the live row
         if not (_bracket_line(tail[i - 1]) and _bracket_line(tail[i + 1])):
             continue  # unbracketed - scrollback echo, bare shell prompt, etc.
+        found = True
         rest = _INPUT_BOX_RE.sub("", l, count=1)
         rest = rest.strip("".join(_BOX_GLYPHS) + " \t")
-        if not rest:
-            return True
-        return any(p in rest for p in _INPUT_PLACEHOLDERS)
-    return False
+        if rest and not any(p in rest for p in _INPUT_PLACEHOLDERS):
+            return False  # this bracketed row carries a draft - veto
+    return found
 
 
 _WORKING_MARKER = "esc to interrupt"
