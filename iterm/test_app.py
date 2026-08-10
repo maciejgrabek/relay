@@ -2087,7 +2087,89 @@ def lock_tests():
     return ok
 
 
+async def test_parked_badge_per_session():
+    """The roster badges parked work on every session in that DIRECTORY, and
+    the header total is the sum of what the badges show.
+
+    Regression: this was first written to read self._swarm_db before the lazy
+    connect further down _refresh, so the first render passed None, the bare
+    except swallowed it, and both the badge and the header silently read zero.
+    """
+    import db as _db
+
+    ok = True
+
+    def chk(label, cond):
+        nonlocal ok
+        print(f" {'OK  ' if cond else 'FAIL'}  {label}")
+        ok = ok and cond
+
+    wd_a, wd_b = "/tmp/relay-badge-a", "/tmp/relay-badge-b"
+    sessions = {
+        "a1": SessionInfo("a1", title="alpha-one", window_idx=0, tab_idx=0,
+                          last_screen=["x"]),
+        "a2": SessionInfo("a2", title="alpha-two", window_idx=0, tab_idx=1,
+                          last_screen=["x"]),
+        "b1": SessionInfo("b1", title="bravo-one", window_idx=0, tab_idx=2,
+                          last_screen=["x"]),
+    }
+    sessions["a1"].workdir = wd_a
+    sessions["a2"].workdir = wd_a
+    sessions["b1"].workdir = wd_b
+
+    conn = _db.connect()
+    conn.execute("DELETE FROM tasks WHERE workdir IN (?, ?)",
+                 (_db._norm_workdir(wd_a), _db._norm_workdir(wd_b)))
+    conn.commit()
+
+    app = _TestApp(sessions, dry_run=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh()
+        await pilot.pause()
+        table = app.query_one(appmod.DataTable)
+
+        def cell(sid):
+            return str(table.get_row_at(app._row_sids.index(sid))[4])
+
+        chk("no badge when nothing is parked", "⏸" not in cell("a1"))
+
+        _db.park_task(conn, "first thing", workdir=wd_a)
+        app._refresh()
+        await pilot.pause()
+        chk("badge appears on the session in that directory",
+            "1⏸" in cell("a1"))
+        chk("badge appears on the SIBLING tab in the same directory",
+            "1⏸" in cell("a2"))
+        chk("no badge on a session in a different directory",
+            "⏸" not in cell("b1"))
+
+        _db.park_task(conn, "second thing", workdir=wd_a)
+        _db.park_task(conn, "elsewhere", workdir=wd_b)
+        app._refresh()
+        await pilot.pause()
+        chk("badge counts every item in the directory", "2⏸" in cell("a1"))
+        chk("the other directory badges its own item", "1⏸" in cell("b1"))
+
+        # The first render of a fresh panel: _swarm_db is still None here, and
+        # this block runs BEFORE the lazy connect further down _refresh. Read
+        # the handle without connecting it first and the bare except swallows
+        # the failure, so the badge and the header both silently read zero.
+        app._swarm_db = None
+        app._refresh()
+        await pilot.pause()
+        chk("badge survives a refresh with no open swarm handle",
+            "2⏸" in cell("a1"))
+
+    conn.execute("DELETE FROM tasks WHERE workdir IN (?, ?)",
+                 (_db._norm_workdir(wd_a), _db._norm_workdir(wd_b)))
+    conn.commit()
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = lock_tests()
-    sys.exit(0 if (r1 and r2) else 1)
+    print("\n-- parked badge --")
+    r3 = asyncio.run(test_parked_badge_per_session())
+    sys.exit(0 if (r1 and r2 and r3) else 1)

@@ -1336,6 +1336,27 @@ class RelayApp(App):
         table.clear()
         self._row_sids = []           # sid per row; None marks the divider row
         self._fleet_timers = {}       # sid -> (active_count, soonest_secs)
+        # Parked items bucketed by directory, for the per-row badge AND the
+        # header count below - one query, two consumers, so the two can never
+        # disagree. Per DIRECTORY, matching the tab-title badge in
+        # statusbar.py: a parked item belongs to a workdir, not to a session,
+        # and `relay next` claims it for whoever asks first. Two tabs in the
+        # same directory therefore both show the same count, which is the
+        # truth - it is one item either of them can take, not two.
+        parked_all = []
+        parked_by_wd = {}
+        try:
+            # Connect lazily HERE rather than relying on the header block far
+            # below: this now runs first, and passing a None handle would be
+            # swallowed by the except and silently render zero parked.
+            if self._swarm_db is None:
+                self._swarm_db = swarmdb.connect()
+            parked_all = swarmdb.list_parked(self._swarm_db)
+            for _r in parked_all:
+                _w = swarmdb._norm_workdir(_r["workdir"] or "")
+                parked_by_wd[_w] = parked_by_wd.get(_w, 0) + 1
+        except Exception:
+            pass
         by_pos = lambda i: (i.window_idx, i.tab_idx)
         shown = sorted((i for i in self.watcher.sessions.values() if not i.hidden), key=by_pos)
         hidden = sorted((i for i in self.watcher.sessions.values() if i.hidden), key=by_pos)
@@ -1389,6 +1410,17 @@ class RelayApp(App):
             if attention:
                 # The duplicate strip row: same data, unmissable name.
                 title = f"[bold {DANGER}]‼ {title}[/]"
+            # Parked badge, on every session in a directory that has parked
+            # work. Relay never pushes parked items into a session, so a
+            # visible count next to the tab that could claim it is the entire
+            # nudge - the header total alone tells you work exists somewhere
+            # without telling you where. `b` opens the pile, ENTER hands one
+            # over. Same rule as the iTerm tab-title badge.
+            n_wd = parked_by_wd.get(
+                swarmdb._norm_workdir(getattr(info, "workdir", "") or ""), 0)
+            if n_wd:
+                title += (f" [{DIMMER}]{n_wd}⏸[/]" if dim
+                          else f" [{CYAN}]{n_wd}⏸[/]")
             # '⏲ TIMERS' column: count of active timers, or ? when pending.
             # Also feed the fleet tally (keyed by sid, so the attention-strip
             # duplicate can't double-count) that drives the clock mascot.
@@ -1502,11 +1534,9 @@ class RelayApp(App):
                 swarmdb.undelivered(self._swarm_db), self._live_names())
         except Exception:
             pass
-        parked_n = 0
-        try:
-            parked_n = len(swarmdb.list_parked(self._swarm_db))
-        except Exception:
-            pass
+        # Reuses the rows already fetched for the per-session badges, so the
+        # header total and the sum of the badges cannot drift apart.
+        parked_n = len(parked_all)
         attn = ""
         if awaiting:
             attn += f" [{DIM}]·[/] [{WARN}]{awaiting} awaiting[/]"
