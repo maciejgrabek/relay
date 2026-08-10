@@ -15,7 +15,7 @@ from swarm import (  # noqa: E402
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
     wipe_plan_text, parse_pr_ref, resolve_pr_route, intervene_targets,
     intervene_counts, is_shell_job, session_working, prompt_line_empty,
-    _INPUT_BOX_RE,
+    selection_dialog, _INPUT_BOX_RE,
 )
 
 _SCREEN_DIR = pathlib.Path(__file__).parent / "fixtures" / "screens"
@@ -1087,6 +1087,63 @@ def test_bracket_line():
     return ok
 
 
+def test_selection_dialog_and_readiness():
+    ok = True
+    dialogs = {
+        "selection_dialog": True,
+        "idle_accept_edits": False,
+        "working_accept_edits": False,
+        "working_manual_mode": False,
+        "working_with_agent_rows": False,
+        "draft_in_box": False,
+        "input_placeholder": False,
+        "shell_zsh": False,
+    }
+    for name, want in dialogs.items():
+        ok &= check(f"selection_dialog({name}) is {want}",
+                    selection_dialog(load_screen(name)) == want)
+
+    ready = {
+        "idle_accept_edits": True,
+        "working_accept_edits": False,
+        "working_manual_mode": False,
+        "working_with_agent_rows": False,
+        "draft_in_box": False,
+        "input_placeholder": False,
+        "selection_dialog": False,
+        "shell_zsh": False,
+    }
+    for name, want in ready.items():
+        ok &= check(f"claude_prompt_ready({name}) is {want}",
+                    claude_prompt_ready(load_screen(name)) == want)
+
+    ok &= check("a shell prompt alone is never ready",
+                claude_prompt_ready(["~/Work/relay", "❯ "]) is False
+                or not session_working(["~/Work/relay", "❯ "]))
+    ok &= check("empty screen is not ready", claude_prompt_ready([]) is False)
+
+    # Carried-forward defect (Task 2 review): widening _INPUT_BOX_RE to match
+    # a bare "❯" means a zsh prompt using that glyph now matches the same
+    # regex as Claude's own live input row. shell_zsh is already pinned
+    # False above via the fixture dict; this is the harder half of the same
+    # defect - Claude's box/footer chrome lingers on screen for a line or
+    # two after quitting, ABOVE a now-live shell prompt, so "a matching row
+    # exists somewhere on screen" is not enough of a test. A real capture of
+    # Claude's own idle chrome (idle_accept_edits.txt), with a live shell
+    # prompt appended below it exactly as it lingers in practice, must still
+    # read as not ready - relay must not type into that shell.
+    lingering_box_above_shell = load_screen("idle_accept_edits") + [
+        "~/Work/relay $",
+    ]
+    ok &= check(
+        "a lingering Claude box above a live shell prompt is never ready",
+        claude_prompt_ready(lingering_box_above_shell) is False)
+
+    print()
+    print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
 def _irow(sid, name, project, is_shell=False, working=True):
     return {"sid": sid, "name": name, "project": project,
             "is_shell": is_shell, "working": working}
@@ -1149,4 +1206,5 @@ if __name__ == "__main__":
     ok = test_session_working() and ok
     ok = test_input_row_and_drafts() and ok
     ok = test_bracket_line() and ok
+    ok = test_selection_dialog_and_readiness() and ok
     sys.exit(0 if ok else 1)

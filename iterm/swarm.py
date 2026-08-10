@@ -359,17 +359,22 @@ def live_doing_count(tasks, names) -> int:
 
 # --- injection safety: is this Claude's idle input box? -----------------------
 
-# Claude Code idle screens end with a bordered input box ("│ > ") and/or the
-# shortcuts footer. A bare shell prompt has neither - and injecting a message
-# into a SHELL would execute it as a command, so default to NOT ready.
+# Claude Code idle screens end with a bracketed input row (a bare "❯"
+# between two rules, or the legacy bordered "│ > " box) and a shortcuts/mode
+# footer beneath it. A bare shell prompt has neither - and injecting a
+# message into a SHELL would execute it as a command, so default to NOT
+# ready.
 #
 # Anchoring matters: after you quit claude, the input box / footer chrome
-# lingers on screen a line or three ABOVE a live shell prompt. Scanning a
-# 15-line tail would still see that chrome and wrongly report "ready", so we
-# require the VERY LAST non-empty line to itself be Claude chrome. A shell
-# prompt (or any other non-chrome line) at the bottom vetoes delivery.
+# lingers on screen a line or three ABOVE a live shell prompt. claude_prompt_
+# ready (below) walks the screen from the BOTTOM up instead of scanning a
+# fixed-size tail, so lingering chrome higher up the screen cannot make it
+# report "ready" once something else - a shell prompt, ordinary scrollback -
+# has taken over the bottom of the screen: the walk stops for good the
+# instant it meets a line that is neither the input row nor recognized
+# trailing chrome.
 _INPUT_BOX_RE = re.compile(r"^\s*(?:│\s*>|❯)")
-_READY_MARKERS = ("? for shortcuts", "⏵⏵")
+_READY_MARKERS = ("? for shortcuts", "⏵⏵", "for agents")
 _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
 
 # Text Claude Code renders INSIDE the input row that is not the operator's.
@@ -378,36 +383,93 @@ _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
 _INPUT_PLACEHOLDERS = ("Press up to edit queued messages",)
 
 
-def _is_marker_line(l: str) -> bool:
-    """A footer marker or the input-box row - the 'ready' signal itself."""
-    return bool(_INPUT_BOX_RE.match(l)) or any(m in l for m in _READY_MARKERS)
+def _trailing_chrome(l: str) -> bool:
+    """A line safe to sit beside Claude's input row without vetoing
+    readiness: a box-drawing border/rule (_bracket_line), or the footer bar
+    itself. Every captured footer - idle, working, manual mode, and the
+    two-line-wrapped shape test_extreme.py models - carries one of these
+    substrings regardless of which mode glyph precedes it (⏵⏵/⏸/...), so
+    this does not need to enumerate the mode glyphs themselves."""
+    return _bracket_line(l) or any(m in l for m in _READY_MARKERS)
 
 
-def _is_chrome_line(l: str) -> bool:
-    """True when this line is unmistakably Claude UI chrome (never a shell
-    prompt): the input-box row, a box border, or a footer marker line."""
-    s = l.strip()
-    if not s:
-        return False
-    if _is_marker_line(l):
-        return True
-    if s[0] in "╰╭":                      # box top/bottom corner
-        return True
-    if all(c in _BOX_GLYPHS for c in s):  # a pure border line
-        return True
-    return False
+_DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")
+
+
+def selection_dialog(lines) -> bool:
+    """True when Claude Code is showing a chooser rather than a prompt.
+
+    Typing here does not enter text - the keystrokes NAVIGATE the menu and
+    select an entry. Detected from the navigation footer rather than from a
+    missing input row, because a dialog may render one.
+
+    Two markers must appear, not one: "to navigate" alone is weak enough to
+    show up in ordinary output.
+    """
+    tail = [l for l in lines if l.strip()][-6:]
+    hits = sum(1 for m in _DIALOG_MARKERS if any(m in l for l in tail))
+    return hits >= 2
 
 
 def claude_prompt_ready(lines: List[str]) -> bool:
+    """True when relay may type into this session.
+
+    Three conditions, all required:
+      1. an input row exists - a shell or a bare pane never qualifies,
+      2. the session is not mid-turn (session_working),
+      3. the screen is not a selection dialog.
+
+    The old implementation required a marker line to be within the last 3
+    lines of the tail. That is why a session showing a task list or agent
+    rows below its footer read as not-ready: modern Claude Code appends an
+    unbounded number of those, which can push the real footer out of any
+    fixed-size window. Condition 1 here walks the WHOLE screen instead,
+    anchored on the bottom rather than a line count.
+
+    That walk is also where the carried-forward shell defect (Task 2's
+    review) is closed. Widening _INPUT_BOX_RE to also match a bare "❯" means
+    a zsh prompt using that glyph now matches the same regex as Claude's
+    live input row - and worse, Claude's box/footer chrome lingers on screen
+    for a line or two after quitting, sitting ABOVE a now-live shell prompt.
+    "a matching row is present somewhere on screen" would read both as
+    ready. So the walk starts at the LAST non-blank line and climbs upward
+    only through lines that are recognized Claude chrome (_trailing_chrome:
+    a box border/rule, or footer text); the first line that is neither
+    chrome nor the input row itself - a shell prompt, ordinary scrollback,
+    anything unrecognized - stops the walk for good, with no input row
+    found. That also means the row, once reached, only counts if genuine
+    chrome sits beside it on at least one side (above or below) - the
+    property a bare shell "❯" never has, because nothing about its
+    neighbours is Claude's UI (see shell_zsh.txt).
+
+    The trade-off this accepts: an idle screen whose footer is itself
+    followed by further UNRECOGNIZED content (rather than only chrome or
+    markers) now reads as not-ready too, even in the hypothetical case that
+    content is benign. That is the direction every uncertain case in this
+    predicate is meant to fail: a false "not ready" costs a delayed message;
+    a false "ready" costs relay typing into a live shell or a session
+    mid-turn - the one property this whole predicate exists to protect.
+    """
     tail = [l for l in lines if l.strip()]
     if not tail:
         return False
-    # (a) the ready signal must appear near the bottom, AND
-    if not any(_is_marker_line(l) for l in tail[-3:]):
+
+    found = False
+    for i in range(len(tail) - 1, -1, -1):
+        l = tail[i]
+        if _INPUT_BOX_RE.match(l):
+            above = tail[i - 1] if i > 0 else ""
+            below = tail[i + 1] if i + 1 < len(tail) else ""
+            found = _trailing_chrome(above) or _trailing_chrome(below)
+            break
+        if not _trailing_chrome(l):
+            break
+    if not found:
         return False
-    # (b) the bottom line itself must be chrome - a shell prompt below the
-    #     lingering box (ends with $, %, ❯, or anything non-chrome) vetoes.
-    return _is_chrome_line(tail[-1])
+
+    if session_working(tail):
+        return False
+    return not selection_dialog(tail)
 
 
 def _bracket_line(l: str) -> bool:
