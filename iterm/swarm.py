@@ -365,32 +365,25 @@ def live_doing_count(tasks, names) -> int:
 # message into a SHELL would execute it as a command, so default to NOT
 # ready.
 #
-# Anchoring matters: after you quit claude, the input box / footer chrome
-# lingers on screen a line or three ABOVE a live shell prompt. claude_prompt_
-# ready (below) walks the screen from the BOTTOM up instead of scanning a
-# fixed-size tail, so lingering chrome higher up the screen cannot make it
-# report "ready" once something else - a shell prompt, ordinary scrollback -
-# has taken over the bottom of the screen: the walk stops for good the
-# instant it meets a line that is neither the input row nor recognized
-# trailing chrome.
+# claude_prompt_ready's condition 1 (below) is answered STRUCTURALLY, not by
+# walking every trailing line: does a genuinely bracketed input row exist
+# anywhere on screen (_bracketed_input_rows, shared with prompt_line_empty)?
+# Claude Code appends an unbounded number of agent/task rows below the
+# footer after any turn that used subagents - that is the NORMAL idle
+# shape, not a hazard, so nothing about what trails the footer is examined.
+# The shell defect is closed separately, by condition 2: no unbracketed
+# _INPUT_BOX_RE match may appear below the last bracketed row. That is what
+# a live shell prompt reusing Claude's own "❯" glyph looks like when it is
+# sitting under Claude's lingering, now-dead box/footer chrome - the exact
+# shape ordinary task/agent rows never take, since none of them match
+# _INPUT_BOX_RE.
 _INPUT_BOX_RE = re.compile(r"^\s*(?:│\s*>|❯)")
-_READY_MARKERS = ("? for shortcuts", "⏵⏵", "for agents")
 _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
 
 # Text Claude Code renders INSIDE the input row that is not the operator's.
 # Best-effort and will go stale like any UI string; unknown text is treated as
 # a draft, so staleness costs a delayed message rather than a clobbered one.
 _INPUT_PLACEHOLDERS = ("Press up to edit queued messages",)
-
-
-def _trailing_chrome(l: str) -> bool:
-    """A line safe to sit beside Claude's input row without vetoing
-    readiness: a box-drawing border/rule (_bracket_line), or the footer bar
-    itself. Every captured footer - idle, working, manual mode, and the
-    two-line-wrapped shape test_extreme.py models - carries one of these
-    substrings regardless of which mode glyph precedes it (⏵⏵/⏸/...), so
-    this does not need to enumerate the mode glyphs themselves."""
-    return _bracket_line(l) or any(m in l for m in _READY_MARKERS)
 
 
 _DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")
@@ -414,57 +407,62 @@ def selection_dialog(lines) -> bool:
 def claude_prompt_ready(lines: List[str]) -> bool:
     """True when relay may type into this session.
 
-    Three conditions, all required:
-      1. an input row exists - a shell or a bare pane never qualifies,
-      2. the session is not mid-turn (session_working),
-      3. the screen is not a selection dialog.
+    Four conditions, all required:
+      1. a genuinely bracketed input row exists somewhere on screen
+         (_bracketed_input_rows - same structural test prompt_line_empty
+         uses, see below),
+      2. no unbracketed _INPUT_BOX_RE match sits below the LAST such row,
+      3. the session is not mid-turn (session_working),
+      4. the screen is not a selection dialog.
 
-    The old implementation required a marker line to be within the last 3
-    lines of the tail. That is why a session showing a task list or agent
-    rows below its footer read as not-ready: modern Claude Code appends an
-    unbounded number of those, which can push the real footer out of any
-    fixed-size window. Condition 1 here walks the WHOLE screen instead,
-    anchored on the bottom rather than a line count.
+    Fix round 1 walked the screen bottom-up and required every trailing line,
+    all the way down, to be recognized chrome (a border/rule or footer text).
+    That reopened spec Finding 4: Claude Code appends an unbounded number of
+    agent/task rows below the footer after any turn that used subagents -
+    the NORMAL idle shape, not a hazard - and none of those rows were
+    "recognized chrome", so the walk broke on the first one and the whole
+    screen read not-ready. A session in that state would never receive a
+    message, a timer, or a push again.
 
-    That walk is also where the carried-forward shell defect (Task 2's
-    review) is closed. Widening _INPUT_BOX_RE to also match a bare "❯" means
-    a zsh prompt using that glyph now matches the same regex as Claude's
-    live input row - and worse, Claude's box/footer chrome lingers on screen
-    for a line or two after quitting, sitting ABOVE a now-live shell prompt.
-    "a matching row is present somewhere on screen" would read both as
-    ready. So the walk starts at the LAST non-blank line and climbs upward
-    only through lines that are recognized Claude chrome (_trailing_chrome:
-    a box border/rule, or footer text); the first line that is neither
-    chrome nor the input row itself - a shell prompt, ordinary scrollback,
-    anything unrecognized - stops the walk for good, with no input row
-    found. That also means the row, once reached, only counts if genuine
-    chrome sits beside it on at least one side (above or below) - the
-    property a bare shell "❯" never has, because nothing about its
-    neighbours is Claude's UI (see shell_zsh.txt).
+    Condition 1 here does not care what trails the footer at all. It only
+    asks whether a bracketed input row - an _INPUT_BOX_RE match with
+    _bracket_line chrome on BOTH the nearest non-blank line above and the
+    nearest non-blank line below - exists ANYWHERE on screen. This is the
+    exact same structural test Task 2 built for prompt_line_empty (see
+    _bracketed_input_rows), reused rather than duplicated. A bare shell "❯"
+    never has that chrome on either side (nothing about its neighbours is
+    Claude's UI - see shell_zsh.txt), so a shell fails condition 1 on its
+    own: this is what closes the carried-forward shell defect (Task 2's
+    review) for the common case, and it does not depend on what happens to
+    be sitting below the footer.
 
-    The trade-off this accepts: an idle screen whose footer is itself
-    followed by further UNRECOGNIZED content (rather than only chrome or
-    markers) now reads as not-ready too, even in the hypothetical case that
-    content is benign. That is the direction every uncertain case in this
-    predicate is meant to fail: a false "not ready" costs a delayed message;
-    a false "ready" costs relay typing into a live shell or a session
-    mid-turn - the one property this whole predicate exists to protect.
+    Condition 1 alone is not enough for the harder half of that defect:
+    Claude's own box/footer chrome lingers on screen for a line or two after
+    quitting, sitting ABOVE a now-live shell prompt that can reuse the exact
+    same "❯" glyph _INPUT_BOX_RE matches. That lingering (dead) box is itself
+    a genuine bracketed row, so condition 1 alone would read it ready.
+    Condition 2 closes it: if any line below the LAST bracketed row matches
+    _INPUT_BOX_RE without itself being bracketed, the screen is a live shell
+    prompt sitting under a dead Claude box, and readiness is refused. This
+    guard is narrow on purpose - it fires only on a fresh _INPUT_BOX_RE
+    match, never on ordinary task/agent-row text, which never matches that
+    regex at all.
+
+    No fixed window, no requirement that trailing content be recognized:
+    a false "not ready" costs a delayed message; a false "ready" costs relay
+    typing into a live shell or a session mid-turn - the one property this
+    whole predicate exists to protect, and conditions 1+2 protect it without
+    also penalizing ordinary idle chatter below the footer.
     """
     tail = [l for l in lines if l.strip()]
     if not tail:
         return False
 
-    found = False
-    for i in range(len(tail) - 1, -1, -1):
-        l = tail[i]
-        if _INPUT_BOX_RE.match(l):
-            above = tail[i - 1] if i > 0 else ""
-            below = tail[i + 1] if i + 1 < len(tail) else ""
-            found = _trailing_chrome(above) or _trailing_chrome(below)
-            break
-        if not _trailing_chrome(l):
-            break
-    if not found:
+    rows = _bracketed_input_rows(tail)
+    if not rows:
+        return False
+    last = rows[-1]
+    if any(_INPUT_BOX_RE.match(l) for l in tail[last + 1:]):
         return False
 
     if session_working(tail):
@@ -492,6 +490,33 @@ def _bracket_line(l: str) -> bool:
     """
     s = l.strip()
     return len(s) >= 2 and "─" in s and all(c in _BOX_GLYPHS for c in s)
+
+
+def _bracketed_input_rows(tail: List[str]) -> List[int]:
+    """Indices in `tail` (already blank-line-stripped) holding a genuinely
+    live input row: an _INPUT_BOX_RE match whose nearest non-blank neighbour
+    on BOTH sides satisfies _bracket_line.
+
+    A match at either edge of `tail` - nothing on one side to bracket it -
+    is never a candidate. Every real capture in this codebase's fixtures
+    shows the input row framed by chrome on both sides (a box border or a
+    bare rule); an edge match is scrollback cut off mid-frame, a queued
+    message's echo, or a bare shell prompt, not a live row.
+
+    Shared by prompt_line_empty (which needs the live row to check for a
+    draft) and claude_prompt_ready (which only needs to know one exists at
+    all) so "which rows are candidates for the live input row" is one fact
+    about a screen, decided once, rather than two independently-tuned scans
+    that could drift apart."""
+    out = []
+    for i, l in enumerate(tail):
+        if not _INPUT_BOX_RE.match(l):
+            continue
+        if i == 0 or i == len(tail) - 1:
+            continue  # nothing on one side to bracket it - not the live row
+        if _bracket_line(tail[i - 1]) and _bracket_line(tail[i + 1]):
+            out.append(i)
+    return out
 
 
 def prompt_line_empty(lines: List[str]) -> bool:
@@ -558,16 +583,15 @@ def prompt_line_empty(lines: List[str]) -> bool:
     vetoes. The cost is only ever a delayed message, never a clobbered one.
 
     No bracketed row found => not a known-live row => False (fail safe: do
-    not type)."""
+    not type).
+
+    The bracketed-row scan itself is _bracketed_input_rows, shared with
+    claude_prompt_ready - this function still does its own pass over those
+    rows (draft/placeholder text) that claude_prompt_ready has no need for."""
     tail = [l for l in lines if l.strip()]
     found = False
-    for i, l in enumerate(tail):
-        if not _INPUT_BOX_RE.match(l):
-            continue
-        if i == 0 or i == len(tail) - 1:
-            continue  # nothing on one side to bracket it - not the live row
-        if not (_bracket_line(tail[i - 1]) and _bracket_line(tail[i + 1])):
-            continue  # unbracketed - scrollback echo, bare shell prompt, etc.
+    for i in _bracketed_input_rows(tail):
+        l = tail[i]
         found = True
         rest = _INPUT_BOX_RE.sub("", l, count=1)
         rest = rest.strip("".join(_BOX_GLYPHS) + " \t")

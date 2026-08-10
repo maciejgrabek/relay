@@ -274,9 +274,12 @@ async def go():
     return ok
 
 
-# A minimal idle Claude tail that satisfies swarm.claude_prompt_ready:
-# a ready marker in the last 3 lines and a chrome bottom line.
+# A minimal idle Claude tail that satisfies swarm.claude_prompt_ready: a
+# bracketed input row (box border above AND below - claude_prompt_ready's
+# condition 1, shared with prompt_line_empty, requires chrome on both sides)
+# with a shortcuts footer beneath it.
 _READY_SCREEN = [
+    "╭──────────────────────────────────────────╮",
     "│ >                                        │",
     "╰──────────────────────────────────────────╯",
     "  ? for shortcuts",
@@ -1490,7 +1493,9 @@ async def timer_tests():
         chk("idle-mode-waits returns False (not this tick's injection)",
             fired2a is False)
         info2.state = "idle"
-        info2.last_screen = ["│ > ", "? for shortcuts"]
+        # Bracketed on both sides (see _READY_SCREEN above for why).
+        info2.last_screen = ["╭─────╮", "│ >   │", "╰─────╯",
+                             "? for shortcuts"]
         fired2b = await w2._fire_timers(info2)
         chk("idle-mode fires at a ready prompt",
             any("check PRs" in s for s in fs2.sent))

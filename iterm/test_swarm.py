@@ -57,15 +57,32 @@ SHELL_TAIL = [
 # After the user quits claude, the input box + footer chrome lingers ABOVE a
 # live shell prompt. Delivering here would type a message into the SHELL and
 # press Enter = command execution. Must be treated as NOT ready.
+#
+# Fix round 2: the shell prompt below must reuse the SAME glyph Claude's own
+# input row can match ("❯", widened onto _INPUT_BOX_RE by Task 2) - that is
+# the actual danger this fixture demonstrates (a live shell whose prompt is
+# indistinguishable from Claude's own chrome by regex alone), and it is what
+# claude_prompt_ready's structural guard (condition 2: no unbracketed
+# _INPUT_BOX_RE match below the last bracketed row) is built to catch. An
+# arbitrary shell prompt shape that does not match _INPUT_BOX_RE at all was
+# never the risk here - such a prompt can't be mistaken for Claude's input
+# row in the first place.
 SHELL_AFTER_CLAUDE_TAIL = [
     "╭──────────────────────────────────────────╮",
     "│ >                                        │",
     "╰──────────────────────────────────────────╯",
     "  ? for shortcuts",
-    "~/work/relay $",
+    "~/work/relay",
+    "❯",
 ]
-# An idle screen whose bottom line is the box's closing border is still ready.
+# An idle screen that ends right at the box's closing border, with no footer
+# captured below it, is still ready - the footer is not required for
+# condition 1, only a genuinely bracketed input row. The row still needs
+# chrome on BOTH sides (Task 2's own bracketing rule, reused here) - every
+# real capture always shows the opening border too, so that side is included
+# rather than modeling a truncation that reality never produces.
 BOX_BOTTOM_TAIL = [
+    "╭──────────────────────────────────────────╮",
     "│ >                                        │",
     "╰──────────────────────────────────────────╯",
 ]
@@ -1122,22 +1139,73 @@ def test_selection_dialog_and_readiness():
                 or not session_working(["~/Work/relay", "❯ "]))
     ok &= check("empty screen is not ready", claude_prompt_ready([]) is False)
 
-    # Carried-forward defect (Task 2 review): widening _INPUT_BOX_RE to match
-    # a bare "❯" means a zsh prompt using that glyph now matches the same
-    # regex as Claude's own live input row. shell_zsh is already pinned
-    # False above via the fixture dict; this is the harder half of the same
-    # defect - Claude's box/footer chrome lingers on screen for a line or
-    # two after quitting, ABOVE a now-live shell prompt, so "a matching row
-    # exists somewhere on screen" is not enough of a test. A real capture of
-    # Claude's own idle chrome (idle_accept_edits.txt), with a live shell
-    # prompt appended below it exactly as it lingers in practice, must still
-    # read as not ready - relay must not type into that shell.
-    lingering_box_above_shell = load_screen("idle_accept_edits") + [
-        "~/Work/relay $",
+    # Fix round 2 (defect review, Important): round 1's bottom-up chrome walk
+    # required EVERY trailing line, all the way to the bottom of the screen,
+    # to be recognized chrome - so a task list or agent rows below the
+    # footer (the NORMAL idle state after any turn that used subagents) made
+    # the whole screen read not-ready. That reintroduced spec Finding 4, the
+    # exact bug this plan exists to close. Condition 1 no longer cares what
+    # trails the footer at all: it only asks whether a genuinely bracketed
+    # input row exists ANYWHERE on screen (_bracketed_input_rows, shared
+    # with Task 2's prompt_line_empty) - a separate, narrower structural
+    # guard (condition 2, exercised further below) closes the shell defect
+    # without that side effect.
+    idle_plus_agent_rows = load_screen("idle_accept_edits") + [
+        "  ⏺ main",
+        "  ◯ general-purpose  Task 4 implementer",
+        "  ◯ general-purpose  Task 5 implementer",
+    ]
+    ok &= check(
+        "idle screen plus a task-list/agent-row tail is ready - Finding 4 "
+        "must not reopen",
+        claude_prompt_ready(idle_plus_agent_rows) is True)
+
+    idle_plus_many_agent_rows = load_screen("idle_accept_edits") + [
+        f"  ◯ general-purpose  Task {i} implementer" for i in range(20)
+    ]
+    ok &= check(
+        "idle screen plus 20 trailing agent rows is still ready - no fixed "
+        "window, no requirement that every trailing row be recognized chrome",
+        claude_prompt_ready(idle_plus_many_agent_rows) is True)
+
+    # Carried-forward defect (Task 2 review), closed structurally instead of
+    # by walking every trailing line. shell_zsh is already pinned False above
+    # via the fixture dict - it has no bracketed row at all (a bare zsh "❯"
+    # has no chrome on either side). The harder half of the same defect is
+    # Claude's own box/footer chrome LINGERING on screen for a line or two
+    # after quitting, sitting ABOVE a now-live shell prompt that reuses the
+    # same "❯" glyph: condition 1 alone would still find the (dead) bracketed
+    # row above and read ready. Condition 2 closes it - any unbracketed
+    # _INPUT_BOX_RE match below the last bracketed row, which is exactly the
+    # shape of a live shell prompt sitting under a dead Claude box, vetoes.
+    lingering_box_above_live_shell = [
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+        "~/Work/relay",
+        "❯",
     ]
     ok &= check(
         "a lingering Claude box above a live shell prompt is never ready",
-        claude_prompt_ready(lingering_box_above_shell) is False)
+        claude_prompt_ready(lingering_box_above_live_shell) is False)
+
+    # None of the fixtures pair a real bracketed input row with dialog
+    # markers (selection_dialog.txt has no input row at all, so condition 1
+    # alone already fails it) - condition 4 is otherwise never exercised.
+    # selection_dialog's own docstring says a dialog MAY render an input row,
+    # so build a screen that does, to prove the dialog check is load-bearing
+    # on its own rather than redundant with condition 1.
+    dialog_with_bracketed_row = [
+        "─" * 10,
+        "❯",
+        "─" * 10,
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]
+    ok &= check(
+        "a selection dialog is never ready even when it renders a bracketed "
+        "input row",
+        claude_prompt_ready(dialog_with_bracketed_row) is False)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
