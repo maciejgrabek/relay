@@ -121,8 +121,8 @@ commit.
   Enter, right away - the same mechanism `STOP`'s `ESC` uses, and the same
   one behind relay's manual `1`/`2`/`3`/`ENTER` sends. It works on any tab,
   registered or not: it's keyed on the session, not a swarm name. It does
-  not interrupt - a working session just gets the text queued at its own
-  input, same as if you'd typed it yourself.
+  not interrupt - a working session just gets the text sitting in its input
+  box, same as if you'd typed it yourself.
 - **STOP + TELL** does both, in the same pass: the `ESC` first (on working
   targets), then the message and its return.
 

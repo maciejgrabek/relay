@@ -3081,13 +3081,23 @@ class RelayApp(App):
             # STOP uses for its ESC, and the same one behind the manual
             # 1/2/3/ENTER sends. send_keys(sid, ...) takes a session id, not
             # a swarm name, so this reaches every target whether or not it
-            # ever ran `relay join`. delivery_text sanitises the body
-            # (flattens newlines, strips non-printable bytes, bounds the
-            # length, labels it) - typing the raw operator text unsanitised
-            # would let a stray ESC in the body be interpreted by the
-            # terminal instead of typed. Unlike STOP's bare ESC, a message
-            # needs submitting, so a return follows as a separate send.
-            text = swarmlogic.delivery_text("human", body, kind="info")
+            # ever ran `relay join`. delivery_text sanitises the body -
+            # flattens newlines, strips non-printable bytes, labels it -
+            # typing the raw operator text unsanitised would let a stray ESC
+            # in the body be interpreted by the terminal instead of typed.
+            # It does NOT bound length, so the slice below is required, not
+            # decoration: the queued path this replaces bounded every
+            # delivered message at swarm._DELIVERY_MAX via _flatten before
+            # it became keystrokes, and this immediate path has no other
+            # length check anywhere upstream - the modal buffer appends one
+            # printable character at a time with no cap, so a large
+            # accidental paste would otherwise become an unbounded literal
+            # keystroke send into a live pane. Reuses the existing constant
+            # rather than a second number that could drift from it. Unlike
+            # STOP's bare ESC, a message needs submitting, so a return
+            # follows as a separate send.
+            text = swarmlogic.delivery_text(
+                "human", body, kind="info")[:swarmlogic._DELIVERY_MAX]
             for t in targets:
                 self.run_worker(self.watcher.send_keys(t["sid"], text),
                                 exclusive=False)

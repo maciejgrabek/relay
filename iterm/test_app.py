@@ -1416,6 +1416,35 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
+        # --- TELL bounds the sent text at swarm._DELIVERY_MAX - the modal
+        # buffer has no cap of its own (it appends one printable character
+        # at a time with no length check), and delivery_text() does not
+        # bound length either (only _flatten, used by batch_delivery_text on
+        # the old queued path, ever did). Without an explicit bound on this
+        # immediate path, a large accidental paste becomes an unbounded
+        # literal keystroke send into a live pane. The buffer is set
+        # directly rather than typed key-by-key - the commit path reads
+        # p["buf"] either way, so this exercises the real send with a body
+        # too large to type a character at a time in a test.
+        a.watcher.sent.clear()
+        await pilot.press("exclamation_mark")
+        await pilot.press("tab")
+        await pilot.press("tab")          # -> tell
+        await pilot.press("right")        # project -> all
+        a._intervene["buf"] = "A" * 5000
+        await pilot.press("enter")
+        await pilot.pause()
+        big_sends = [s for s in a.watcher.sent
+                    if s[0] == "s2" and s[1] != "\r"]
+        chk("exactly one text send reaches the target",
+            len(big_sends) == 1)
+        if big_sends:
+            chk("TELL bounds the sent text at swarm._DELIVERY_MAX, not the "
+                "raw 5000-char buffer",
+                len(big_sends[0][1]) == appmod.swarmlogic._DELIVERY_MAX)
+        await pilot.press("space")
+        await pilot.pause()
+
         await pilot.press("exclamation_mark")
         await pilot.press("tab")
         await pilot.press("tab")          # -> tell, empty buffer

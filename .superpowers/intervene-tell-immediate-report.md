@@ -271,3 +271,129 @@ neither referenced the queue.
 - I did not touch `watcher.py`'s `_deliver` or the swarm message queue used
   by `relay send`/`relay ask`/discussions - confirmed by grep that
   `queue_message` no longer appears anywhere in `iterm/app.py`.
+
+## Fix round 1: unbounded TELL length
+
+### The finding
+
+The coordinator verified the core change (unregistered targets reached, ESC
+not stripped from the body, STOP's bare ESC untouched, `watcher.py` byte-
+identical, `n_tellable` cleanly removed), then caught a real regression: my
+comment and the task brief both claimed `swarm.delivery_text` "bounds the
+length." It does not. `delivery_text` (`iterm/swarm.py:154-165`) only
+flattens newlines and strips non-printable characters. The 700-character cap
+lives in `_flatten`/`_DELIVERY_MAX` (`swarm.py:168-178`), which only
+`batch_delivery_text` calls - the old queued path, not `delivery_text`
+itself. Verified independently: `swarm.delivery_text('human', 'A'*5000)`
+returns a 5023-character string, confirming no bound.
+
+Net effect: the old queue-based TELL indirectly capped the operator's
+message at 700 characters (via `batch_delivery_text`'s `_flatten` call on
+the watcher's delivery path) before it ever became keystrokes. The new
+immediate path called `delivery_text` directly and skipped that cap
+entirely, and nothing else upstream bounds it - the modal buffer
+(`intervene_modal_text`'s buffer field) appends one printable character at a
+time with no length check. A large accidental paste could have driven an
+unbounded literal keystroke send into a live pane. Not an escape-sequence
+risk (stripping still holds) - a length regression.
+
+### The fix
+
+`iterm/app.py`, TELL send block (now line 3079-3103): added
+`[:swarmlogic._DELIVERY_MAX]` to the `delivery_text(...)` call, reusing the
+existing module constant from `iterm/swarm.py:168` rather than introducing a
+second number that could drift from it:
+
+```python
+text = swarmlogic.delivery_text(
+    "human", body, kind="info")[:swarmlogic._DELIVERY_MAX]
+```
+
+Rewrote the surrounding comment to state what the code actually does:
+`delivery_text` flattens and strips but does not bound length; the slice
+is what bounds it, reusing `_DELIVERY_MAX` because the queued path this
+replaces already enforced that same cap before delivery, and a second,
+independently-chosen number here would be exactly the two-caps-that-can-
+drift trap the codebase already avoids elsewhere.
+
+### The new assertion
+
+`iterm/test_app.py`, new block after the "TELL against an unregistered
+target" block (around line 1418-1441): sets `a._intervene["buf"]` directly
+to `"A" * 5000` (bypassing per-character `pilot.press` calls, which would be
+impractical at this length, while still exercising the real commit path -
+`_intervene_commit` reads `p["buf"]` regardless of how it was populated),
+commits with `ENTER`, and asserts:
+
+- exactly one text send reaches the target (`s2`, the ALL-scope
+  unregistered session already in play in this test), and
+- that send's length equals `appmod.swarmlogic._DELIVERY_MAX` (700), not
+  the raw 5000-character buffer.
+
+### Revert evidence
+
+Removed only the `[:swarmlogic._DELIVERY_MAX]` slice (restored
+`text = swarmlogic.delivery_text("human", body, kind="info")` with no
+bound, everything else unchanged) and re-ran `iterm/test_app.py`:
+
+```
+PASS exactly one text send reaches the target
+FAIL TELL bounds the sent text at swarm._DELIVERY_MAX, not the raw 5000-char buffer
+```
+
+The "exactly one send" check still passes unbounded (there is still only
+one `send_keys` call for the text, it is just 5000 characters long instead
+of 700) - the length assertion is the one that catches the regression, and
+it does, cleanly, with no crash needed to prove it this time. Restored the
+slice and re-ran: both pass. Full suite: `RELAY_DB=<tmp>/relay.db
+./test/run.sh` -> `ALL SUITES PASSED`.
+
+### The corrected comment (verbatim, `iterm/app.py`)
+
+```python
+        if mode in ("tell", "stop_tell") and body:
+            # Typed straight into the tab, immediately - the same mechanism
+            # STOP uses for its ESC, and the same one behind the manual
+            # 1/2/3/ENTER sends. send_keys(sid, ...) takes a session id, not
+            # a swarm name, so this reaches every target whether or not it
+            # ever ran `relay join`. delivery_text sanitises the body -
+            # flattens newlines, strips non-printable bytes, labels it -
+            # typing the raw operator text unsanitised would let a stray ESC
+            # in the body be interpreted by the terminal instead of typed.
+            # It does NOT bound length, so the slice below is required, not
+            # decoration: the queued path this replaces bounded every
+            # delivered message at swarm._DELIVERY_MAX via _flatten before
+            # it became keystrokes, and this immediate path has no other
+            # length check anywhere upstream - the modal buffer appends one
+            # printable character at a time with no cap, so a large
+            # accidental paste would otherwise become an unbounded literal
+            # keystroke send into a live pane. Reuses the existing constant
+            # rather than a second number that could drift from it. Unlike
+            # STOP's bare ESC, a message needs submitting, so a return
+            # follows as a separate send.
+            text = swarmlogic.delivery_text(
+                "human", body, kind="info")[:swarmlogic._DELIVERY_MAX]
+```
+
+### The corrected README line
+
+Was (introduced two adjacent senses of "queued" that undercut the
+distinction the rewrite exists to make):
+
+> It does not interrupt - a working session just gets the text queued at
+> its own input, same as if you'd typed it yourself.
+
+Now:
+
+> It does not interrupt - a working session just gets the text sitting in
+> its input box, same as if you'd typed it yourself.
+
+(Two lines below, the closing line - "Nothing here is queued, and nothing
+waits for a session to go idle" - is unchanged and no longer echoes the word
+"queued" from the bullet above it.)
+
+### Test suite output (fix round 1)
+
+`RELAY_DB=<tmp>/relay.db ./test/run.sh` -> `ALL SUITES PASSED`, including
+the two new checks (`exactly one text send reaches the target`, `TELL
+bounds the sent text at swarm._DELIVERY_MAX, not the raw 5000-char buffer`).
