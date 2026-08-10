@@ -242,8 +242,23 @@ def test_extreme_gates():
     asyncio.run(w._fire_extreme(i9))
     chk("shell job never fires the extreme push", fs9.sent == [])
     chk("shell job: budget not spent", i9.extreme_fires_left == 2)
+
+    # Task 3 fix round 4: the anchor assertion used to live on i9 above, where
+    # it was NOT load-bearing - i9's dwell has elapsed, so with the shell
+    # guard removed the push fires and the fire path zeroes _idle_since on its
+    # way out. The assertion passed either way. Assert it on a session whose
+    # dwell has NOT elapsed instead: without the guard, _fire_extreme returns
+    # at the dwell check with the anchor still set, so only the guard can zero
+    # it here. This is the property the guard exists for - time spent sitting
+    # at a shell must not count as dwell, or the push fires the instant Claude
+    # comes back.
+    fs9b = FakeSession()
+    i9b = _extreme_info(W, fs9b, dwell_ok=False)
+    i9b.job = "-zsh"
+    anchor_before = i9b._idle_since
+    asyncio.run(w._fire_extreme(i9b))
     chk("shell job: idle anchor cleared (time at a shell is not dwell)",
-        i9._idle_since == 0.0)
+        anchor_before != 0.0 and i9b._idle_since == 0.0)
 
     fs10 = FakeSession()
     i10 = _extreme_info(W, fs10)

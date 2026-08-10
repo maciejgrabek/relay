@@ -1279,6 +1279,77 @@ def test_selection_dialog_and_readiness():
         "rows is never ready",
         claude_prompt_ready(dialog_with_bracketed_row + trailing) is False)
 
+    # Fix round 4 (defect review, promoted Minor -> silent permanent stall):
+    # round 3's sigil test looked at the last glyph of EVERY line below the
+    # last bracketed row, and Claude's OWN todo/task/tool rows are exactly
+    # what renders there. A todo item that happens to end in "%", "#" or ">"
+    # was read as a live shell prompt, so the session stopped receiving
+    # messages, timers and pushes - with no message, no timer, no push and
+    # nothing at all to tell the operator. A line that STARTS with a Claude
+    # Code row glyph is Claude's rendering and can never be a shell prompt,
+    # so it is not eligible for the sigil test at all.
+    idle = load_screen("idle_accept_edits")
+    for row, why in (
+        ("  ⎿  ☐ Raise coverage to 90%", "a todo row ending in '%'"),
+        ("  ⎿  ☐ Fix issue #", "a todo row ending in '#'"),
+        ("  ⏺ Wrote <html>", "a tool row ending in '>'"),
+        ("  ◯ general-purpose  merge main >", "an agent row ending in '>'"),
+        ("  ⏺ cost: $", "a tool row ending in '$'"),
+    ):
+        ok &= check(f"{why} below the footer stays ready",
+                    claude_prompt_ready(idle + [row]) is True)
+
+    # The sigil rule itself is NOT narrowed: only which lines are eligible
+    # changed. A shell prompt line never starts with a Claude row glyph, so
+    # all four prompt shapes below still veto (also pinned as full screens
+    # further down in this suite).
+    for prompt, why in (
+        ("~/work/relay $", "bash '$'"),
+        ("~/work/relay %", "zsh '%'"),
+        ("› ", "starship '›'"),
+        ("❯", "pure '❯'"),
+        ("~/work/relay #", "root '#'"),
+        ("~/work/relay ➜", "oh-my-zsh '➜'"),
+    ):
+        ok &= check(f"{why} below the footer still vetoes readiness",
+                    claude_prompt_ready(idle + [prompt]) is False)
+
+    # Fix round 4 (defect review, promoted Minor -> silent permanent stall):
+    # round 3's whole-screen marker scan false-positived on ordinary content.
+    # info.last_screen carries ~40 non-blank lines of scrollback, so a session
+    # merely DISPLAYING relay's own source - the line below is copied verbatim
+    # out of swarm.py - had two markers on screen and vetoed its own
+    # readiness forever. The scan is now anchored at the last bracketed input
+    # row, the same structural anchor session_working uses: a real dialog has
+    # no bracketed input row at all, so when there are none the whole screen
+    # is scanned exactly as before.
+    src = ['_DIALOG_MARKERS = ("Enter to select", "to navigate", '
+           '"Esc to cancel")']
+    ok &= check(
+        "relay's own source in scrollback above a live input box is not a "
+        "dialog",
+        selection_dialog(src + idle) is False)
+    ok &= check(
+        "...and that session is still ready - scrollback above the input box "
+        "can never veto readiness",
+        claude_prompt_ready(src + idle) is True)
+
+    # The anchor must not weaken dialog detection: selection_dialog.txt has
+    # ZERO bracketed input rows, so it keeps the whole-screen scan and stays
+    # True no matter how many rows Claude renders below its footer.
+    real_dialog = load_screen("selection_dialog")
+    for n in (0, 5, 6, 50):
+        ok &= check(
+            f"the real selection_dialog fixture with {n} trailing rows is "
+            "still a dialog",
+            selection_dialog(
+                real_dialog + [f"  ◯ agent {i}" for i in range(n)]) is True)
+        ok &= check(
+            f"the real selection_dialog fixture with {n} trailing rows is "
+            "never ready",
+            claude_prompt_ready(
+                real_dialog + [f"  ◯ agent {i}" for i in range(n)]) is False)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

@@ -399,12 +399,32 @@ _INPUT_PLACEHOLDERS = ("Press up to edit queued messages",)
 # not-ready screen into a ready one.
 _SHELL_PROMPT_TAILS = frozenset("$%#>❯›➜")
 
+# Glyphs Claude Code STARTS its own output rows with: the turn/tool bullet
+# (⏺), an agent row (◯), a tree continuation (⎿), todo checkboxes (☒ ☐), the
+# thinking mark (✻) and the mode-footer arrows (⏵ ⏸). These rows are Claude's
+# own rendering below the input box and can never be a shell prompt - a shell
+# prompt line never STARTS with one of them - so they are not eligible for the
+# _SHELL_PROMPT_TAILS suffix test at all.
+#
+# Without this exclusion the suffix test read a todo item like
+# "⎿ ☐ Raise coverage to 90%", "⎿ ☐ Fix issue #" or a tool row "⏺ Wrote
+# <html>" as a live shell prompt, and the session then received no message,
+# no timer and no push ever again, with nothing to tell the operator. Todo
+# and task rows are exactly what renders below the input box, so this was not
+# a corner case. Eligibility is what narrows here; _SHELL_PROMPT_TAILS itself
+# is unchanged (a real prompt still vetoes whatever sigil it ends in).
+_CLAUDE_ROW_GLYPHS = frozenset("⏺◯⎿☒☐✻⏵⏸")
+
 
 def _shell_prompt_tail(l: str) -> bool:
-    """True when `l` looks like a live shell's prompt line: non-blank, and its
-    last non-whitespace character is one of _SHELL_PROMPT_TAILS."""
-    s = l.rstrip()
-    return bool(s) and s[-1] in _SHELL_PROMPT_TAILS
+    """True when `l` looks like a live shell's prompt line: non-blank, NOT one
+    of Claude Code's own output rows (_CLAUDE_ROW_GLYPHS as its first
+    non-whitespace character), and its last non-whitespace character is one of
+    _SHELL_PROMPT_TAILS."""
+    s = l.strip()
+    if not s or s[0] in _CLAUDE_ROW_GLYPHS:
+        return False
+    return s[-1] in _SHELL_PROMPT_TAILS
 
 
 _DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")
@@ -431,9 +451,27 @@ def selection_dialog(lines) -> bool:
     prompt_line_empty already follow. The cost of scanning everything is a
     stale dialog footer left in scrollback reading as a live dialog - a
     delayed message, the safe direction.
+
+    Fix round 4 (defect review, promoted Minor): scanning the WHOLE screen
+    unconditionally was too much. info.last_screen carries roughly 40
+    non-blank lines, so any two markers anywhere in that scrollback vetoed
+    readiness - and a session merely DISPLAYING this very file (or a diff, or
+    a doc quoting Claude's dialog footer) stopped receiving messages, timers
+    and pushes permanently, with nothing to tell the operator.
+
+    So the scan is anchored STRUCTURALLY rather than by a row count: markers
+    count only at and below the LAST bracketed input row
+    (_bracketed_input_rows). A real selection dialog has no bracketed input
+    row at all - selection_dialog.txt has zero - so when there are none the
+    whole screen is scanned exactly as before, and unbounded rows below a
+    dialog's footer still read as a dialog. What changes is only scrollback
+    ABOVE a live input box, which by definition is not the live UI. This is
+    the same anchor session_working uses, and for the same reason.
     """
     tail = [l for l in lines if l.strip()]
-    hits = sum(1 for m in _DIALOG_MARKERS if any(m in l for l in tail))
+    rows = _bracketed_input_rows(tail)
+    scan = tail[rows[-1]:] if rows else tail
+    hits = sum(1 for m in _DIALOG_MARKERS if any(m in l for l in scan))
     return hits >= 2
 
 
@@ -494,6 +532,31 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     BELOW the live input row, where Claude renders only task/agent rows and
     footers - none of which end in a prompt sigil, so ordinary idle chatter
     is unaffected (there are fixture-backed assertions for exactly that).
+    Fix round 4 narrows it once more: a line that STARTS with one of
+    _CLAUDE_ROW_GLYPHS is Claude's own output row, never a prompt, and is not
+    eligible for the suffix test at all (a todo item ending in "90%" used to
+    stall a session forever).
+
+    KNOWN SCREEN-LEVEL LIMITS, accepted, not bugs to fix here. The suffix
+    test only ever inspects a line's LAST non-whitespace character, so two
+    real prompt shapes slip past and this function returns True:
+
+      "~/work/relay $ ls -la"  - a sigil MID-line, with a typed but not yet
+                                 executed command after it.
+      "➜  relay git:(main) ✗"  - an oh-my-zsh style SUFFIX (a git-status
+                                 mark) printed after the sigil.
+
+    Both are left uncovered on purpose. Closing them means either matching
+    sigils anywhere in a line (every prose line containing "$" or ">" becomes
+    a shell prompt, and a session goes permanently unreachable the moment it
+    prints one - the exact failure mode fix round 4 exists to end) or growing
+    a suffix-glyph list that is unbounded by construction. Neither trade is
+    worth it, because neither hole is load-bearing: the AUTHORITATIVE guard
+    against typing into a shell is the tab's foreground job, swarm.is_shell_job
+    applied by watcher's _deliver/_fire_timers/_fire_extreme, and in both
+    shapes above the job IS a shell, so all three injection paths refuse
+    before this predicate is consulted. This screen test covers only the
+    narrow window where the job cannot be read.
 
     Neither this nor any screen test is the authoritative guard against
     typing into a shell - the foreground job is (swarm.is_shell_job, applied
@@ -745,7 +808,28 @@ def is_shell_job(job: str) -> bool:
     """True when iTerm2 reports a plain login shell as the tab's foreground job -
     i.e. Claude is NOT running in it. A leading '-' marks a login shell (e.g.
     '-zsh'); strip it before matching. Unknown/empty -> False, so an unreadable
-    job never suppresses a real prompt (fail safe toward escalating)."""
+    job never suppresses a real prompt (fail safe toward escalating).
+
+    Recorded, not fixed: the two caller families want OPPOSITE defaults for an
+    unknown job, and this one answer serves both.
+
+      - watcher's _handle (and app.py's is_shell column) read it as "is this
+        tab NOT running Claude" and want unknown -> not a shell, so a real
+        prompt from a program iTerm2 reports oddly is still surfaced. Being
+        wrong here costs a missed notification.
+      - the three INJECTION paths (_deliver, _fire_timers, _fire_extreme)
+        read it as "may relay type here" and would prefer the opposite: an
+        unknown job treated as a shell, refusing until it can prove Claude is
+        in front. Being wrong there costs a message executed as a shell
+        command.
+
+    Flipping the default would trade the cheap failure for the expensive one
+    on every tab whose job is momentarily unreadable, which is common during
+    startup. So the default stays as-is, and what backstops an unknown job on
+    the injection paths is the screen-level guard: claude_prompt_ready runs on
+    all three of them and requires a genuinely bracketed Claude input row with
+    no shell prompt below it, which an arbitrary non-Claude program does not
+    paint."""
     j = (job or "").strip().lstrip("-").lower()
     return j in _SHELL_JOBS
 
