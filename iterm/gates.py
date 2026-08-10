@@ -28,7 +28,7 @@ from typing import List, Optional
 # The one definition of "a horizontal rule line", borrowed rather than
 # re-declared so detect_state's anchor and swarm.session_working's anchor
 # cannot drift apart. swarm imports only os/re/typing, so there is no cycle.
-from swarm import _RULE_RE
+from swarm import _bracket_line
 
 # The iTerm2 API renders blank cells as NUL (\x00) and uses non-breaking spaces
 # (\xa0) inside Claude's UI. Normalize both to plain spaces before matching, or
@@ -86,7 +86,7 @@ def detect_state(lines: List[str]) -> str:
     """Best-effort working vs idle from screen content. Only called when there
     is no actionable prompt.
 
-    Scans from the FIRST horizontal rule on screen (swarm._RULE_RE - the line
+    Scans from the FIRST box-drawing line on screen (swarm._bracket_line - the
     of nothing but "─" that Claude Code draws above its input row) to the
     bottom, for an active-spinner / interrupt signal. No rule -> "idle".
     Deliberately conservative: unknown -> idle, so we never claim 'working'
@@ -124,7 +124,7 @@ def detect_state(lines: List[str]) -> str:
     """
     anchor = None
     for i, l in enumerate(lines):
-        if _RULE_RE.match(l.strip()):
+        if _bracket_line(l.strip()):
             anchor = i
             break
     if anchor is None:

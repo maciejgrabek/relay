@@ -933,6 +933,27 @@ def test_session_working():
     ok &= check("footer stays visible behind 12+ trailing agent rows",
                 session_working(swarmed) is True)
 
+    # The anchor is _bracket_line, not a bare "^-+$" rule. Older Claude Code
+    # draws the box with corners, which a bare-rule anchor never matches - so
+    # every legacy screen was unanchored and could never read working, while
+    # _INPUT_BOX_RE still matched its "| >" row. A legacy session mid-turn
+    # therefore read as READY and relay would have typed into a live turn.
+    # Keeping the old input shape is only worth doing if this keeps up with it.
+    _legacy_box = ["╭" + "─" * 20 + "╮",
+                   "│ >                  │",
+                   "╰" + "─" * 20 + "╯"]
+    _legacy_working = _legacy_box + [
+        "  ⏵⏵ accept edits on · esc to interrupt · ← for agents"]
+    _legacy_idle = _legacy_box + ["  ⏵⏵ accept edits on · ← for agents"]
+    ok &= check("a legacy corner-drawn box mid-turn reads working",
+                session_working(_legacy_working) is True)
+    ok &= check("a legacy corner-drawn box at rest reads idle",
+                session_working(_legacy_idle) is False)
+    ok &= check("a working legacy session is never ready to type into",
+                claude_prompt_ready(_legacy_working) is False)
+    ok &= check("an idle legacy session is still ready",
+                claude_prompt_ready(_legacy_idle) is True)
+
     # Fix round 2: anchoring on the LAST rule line (fix round 1's approach)
     # reopens the exact same bug class it closed - just with the trigger
     # moved from row COUNT to row CONTENT. Claude Code's trailing agent/task

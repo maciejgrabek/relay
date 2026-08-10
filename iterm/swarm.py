@@ -850,11 +850,19 @@ def session_working(lines) -> bool:
 
     Deliberately independent of _INPUT_BOX_RE: coupling the two would let a
     single stale regex break both predicates at once.
+
+    The anchor is any box-drawing line (_bracket_line), not only a bare rule.
+    Older Claude Code draws the box with corners - "╭────╮" - which "^─+$"
+    never matches, so anchoring on the rule alone left EVERY legacy screen
+    unanchored and therefore never working. Combined with _INPUT_BOX_RE still
+    matching "│ >", that made a legacy session mid-turn read as ready and
+    relay would have typed into a live turn. Keeping the old input shape is
+    only worth doing if the working check keeps up with it.
     """
     lines = list(lines)
     anchor = None
     for i, l in enumerate(lines):
-        if _RULE_RE.match(l.strip()):
+        if _bracket_line(l.strip()):
             anchor = i
             break
     if anchor is None:
