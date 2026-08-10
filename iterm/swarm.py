@@ -454,23 +454,49 @@ def session_working(lines) -> bool:
     So this is anchored on the screen's own structure instead of a line
     count: every captured footer sits directly below a horizontal rule (a
     line of nothing but "─", the same glyph the input box's border uses).
-    That rule's position moves with however many agent rows trail below it,
-    so scanning from the LAST such rule to the end of the screen always
-    reaches the footer regardless of how much is appended after it. It also
-    means a stray "esc to interrupt" sitting in ordinary scrollback ABOVE the
-    input box - left over from a previous turn - no longer counts, since
-    that text falls before the anchor.
+    But anchoring on the LAST such rule (fix round 1's approach) reopens the
+    same bug class it closed, just moving the trigger from row COUNT to row
+    CONTENT: those same unbounded trailing agent/task rows are free to
+    render as a bare "─" run of their own (e.g. a sub-agent's box border),
+    and if one lands below the footer, "last rule" jumps past the footer and
+    silently returns False for a session that is genuinely working.
+
+    Anchoring on the FIRST rule instead of the last fixes this, and the two
+    failure directions it can produce are not equally bad:
+
+    - Anchoring too LATE (below the footer, as "last rule" can do) yields a
+      false False: relay concludes a working session is idle and types into
+      a live turn. This is the exact failure this predicate exists to
+      prevent, and first-rule anchoring cannot produce it - nothing appended
+      after the footer can move an anchor that is pinned to the first rule
+      on screen.
+    - Anchoring too EARLY (a "─" rule sitting up in ordinary scrollback,
+      e.g. an old box border from a previous turn) yields a false True:
+      relay concludes an idle session is still busy and simply waits. A
+      delayed message is cheap and self-corrects as the screen scrolls.
+
+    So first-rule anchoring can only fail in the safe direction. The
+    accepted cost: if a "─" rule is visible in scrollback above the real
+    input box, the scan region widens to include everything from that rule
+    down - so a stale "esc to interrupt" left over in that same scrollback
+    (from the turn that rule belonged to) can also be picked up, producing a
+    false True even though the CURRENT footer is idle. That is intentional,
+    not an oversight - see the accepted-cost test in test_swarm.py.
 
     No rule line found -> False. That is safe here too: claude_prompt_ready
     independently requires visible input-box chrome before it will call a
     screen ready, so this predicate's return value is not load-bearing when
     there is no rule-bracketed input box at all (e.g. a bare shell prompt).
+
+    Deliberately independent of _INPUT_BOX_RE: coupling the two would let a
+    single stale regex break both predicates at once.
     """
     lines = list(lines)
     anchor = None
     for i, l in enumerate(lines):
         if _RULE_RE.match(l.strip()):
             anchor = i
+            break
     if anchor is None:
         return False
     return any(_WORKING_MARKER in l for l in lines[anchor:])

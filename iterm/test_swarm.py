@@ -895,6 +895,68 @@ def test_session_working():
     ]
     ok &= check("footer stays visible behind 12+ trailing agent rows",
                 session_working(swarmed) is True)
+
+    # Fix round 2: anchoring on the LAST rule line (fix round 1's approach)
+    # reopens the exact same bug class it closed - just with the trigger
+    # moved from row COUNT to row CONTENT. Claude Code's trailing agent/task
+    # rows are unbounded in both number and shape, and nothing stops one of
+    # them from rendering as a bare run of "─" (e.g. a sub-agent's own box
+    # border scrolling into view). If that happens below the real footer,
+    # a last-rule anchor jumps PAST the footer and reports a working session
+    # as idle - the unsafe direction. Anchoring on the FIRST rule instead
+    # cannot be pushed past the footer by anything appended after it.
+    base = load_screen("working_with_agent_rows")
+    ok &= check(
+        "a bare trailing rule line below the footer does not hide it",
+        session_working(base + ["─" * 15]) is True)
+    ok &= check(
+        "a 200-char trailing rule line below the footer does not hide it",
+        session_working(base + ["─" * 200]) is True)
+    interleaved = list(base)
+    for i in range(5):
+        interleaved.append(f"  ◯ worker-{i}  doing things")
+        interleaved.append("─" * (10 + i))
+    ok &= check(
+        "several trailing rules interleaved among agent rows do not hide the footer",
+        session_working(interleaved) is True)
+
+    # The accepted cost, named explicitly: first-rule anchoring can only
+    # fail SAFE. If a "─" rule happens to sit up in ordinary scrollback
+    # (e.g. an old box border from a prior turn, still visible above the
+    # current input box) and a stale "esc to interrupt" from that same old
+    # turn is still on screen between that old rule and the real footer,
+    # the scan region now starts too EARLY and picks up the stale marker -
+    # a false True on a session that is actually idle. This is deliberate,
+    # not a bug: a delayed message is cheap and self-corrects as the screen
+    # scrolls, unlike the false False that motivated this fix.
+    fail_safe_not_precise = [
+        "─" * 10,  # a rule up in scrollback, e.g. an old box border
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents",  # stale, from a prior turn
+        "  some other old scrollback content",
+        "─" * 10,  # rule directly above the real (current) input box
+        "❯",
+        "─" * 10,  # rule directly above the real footer
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",  # real footer: idle, no marker
+    ]
+    ok &= check(
+        "ACCEPTED COST (fail-safe, not desired precision): a rule + stale "
+        "marker in scrollback above the real idle footer reads as working",
+        session_working(fail_safe_not_precise) is True)
+
+    # Contrast case: a stale marker with NO rule line preceding it anywhere
+    # is excluded, because the anchor (the first rule) sits after it.
+    no_rule_above_stray_marker = [
+        "  some old scrollback content",
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents",  # stale, no rule above it
+        "  more old scrollback content",
+        "─" * 10,  # first rule: directly above the real input box
+        "❯",
+        "─" * 10,  # rule directly above the real footer
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",  # real footer: idle, no marker
+    ]
+    ok &= check(
+        "a stale marker with no rule line above it still reads as idle",
+        session_working(no_rule_above_stray_marker) is False)
     return ok
 
 
