@@ -368,9 +368,14 @@ def live_doing_count(tasks, names) -> int:
 # 15-line tail would still see that chrome and wrongly report "ready", so we
 # require the VERY LAST non-empty line to itself be Claude chrome. A shell
 # prompt (or any other non-chrome line) at the bottom vetoes delivery.
-_INPUT_BOX_RE = re.compile(r"^\s*│\s*>")
+_INPUT_BOX_RE = re.compile(r"^\s*(?:│\s*>|❯)")
 _READY_MARKERS = ("? for shortcuts", "⏵⏵")
 _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
+
+# Text Claude Code renders INSIDE the input row that is not the operator's.
+# Best-effort and will go stale like any UI string; unknown text is treated as
+# a draft, so staleness costs a delayed message rather than a clobbered one.
+_INPUT_PLACEHOLDERS = ("Press up to edit queued messages",)
 
 
 def _is_marker_line(l: str) -> bool:
@@ -406,22 +411,42 @@ def claude_prompt_ready(lines: List[str]) -> bool:
 
 
 def prompt_line_empty(lines: List[str]) -> bool:
-    """True when Claude's input box row is visibly EMPTY - no operator draft.
+    """True when Claude's input row carries no operator draft.
 
     An extreme push types text and presses Enter; landing on a half-typed
-    message would append to it and SUBMIT it. So the input row ("│ > ...")
-    must exist in the ready tail and carry nothing after the '>'. Scanned
-    tail is wider than claude_prompt_ready's (6 lines, not 3): a two-line
-    footer (both "? for shortcuts" and a "⏵⏵ accept edits" line, per
-    _READY_MARKERS) pushes the input row further from the bottom, and a
-    narrower scan would never find it - silently vetoing every push. No
-    input row found => not a known-empty box => False (fail safe: no push)."""
-    tail = [l for l in lines if l.strip()][-6:]
-    for l in reversed(tail):
-        if _INPUT_BOX_RE.match(l):
-            rest = _INPUT_BOX_RE.sub("", l, count=1)
-            return rest.strip("".join(_BOX_GLYPHS) + " \t") == ""
-    return False
+    message would append to it and SUBMIT it. So the row must exist and be
+    free.
+
+    Modern Claude Code renders the row as `❯` between two rules; older builds
+    used `│ > `. Both are matched - dropping the old shape would trade one
+    version's blind spot for another's.
+
+    Claude Code also puts its own hints in that row (see _INPUT_PLACEHOLDERS),
+    which are not drafts. Anything else found there IS treated as a draft:
+    the cost of a false "draft present" is a delayed message, the cost of a
+    false "row empty" is submitting the operator's half-written text.
+
+    The whole tail is scanned rather than stopping at the closest match to
+    the bottom: a queued message that Claude echoes back into scrollback is
+    ALSO a "❯ ..." line, sitting above the real (now-cleared) input row, and
+    a bare shell prompt glyph can coincidentally match the same regex with
+    nothing around it. Either one, if present anywhere in the scanned tail
+    with unrecognised text after it, must veto the push - so any match is
+    checked, not just the nearest one. This is more conservative than
+    checking only the last match, which is the direction that is safe to
+    err in.
+
+    No row found => not a known-free row => False (fail safe: do not type)."""
+    found = False
+    for l in [l for l in lines if l.strip()][-8:]:
+        if not _INPUT_BOX_RE.match(l):
+            continue
+        found = True
+        rest = _INPUT_BOX_RE.sub("", l, count=1)
+        rest = rest.strip("".join(_BOX_GLYPHS) + " \t")
+        if rest and not any(p in rest for p in _INPUT_PLACEHOLDERS):
+            return False
+    return found
 
 
 _WORKING_MARKER = "esc to interrupt"

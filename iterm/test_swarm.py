@@ -14,7 +14,8 @@ from swarm import (  # noqa: E402
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
     wipe_plan_text, parse_pr_ref, resolve_pr_route, intervene_targets,
-    intervene_counts, is_shell_job, session_working,
+    intervene_counts, is_shell_job, session_working, prompt_line_empty,
+    _INPUT_BOX_RE,
 )
 
 _SCREEN_DIR = pathlib.Path(__file__).parent / "fixtures" / "screens"
@@ -960,6 +961,33 @@ def test_session_working():
     return ok
 
 
+def test_input_row_and_drafts():
+    ok = True
+    expected = {
+        "idle_accept_edits": True,
+        "working_accept_edits": True,
+        "working_manual_mode": True,
+        "working_with_agent_rows": True,
+        "draft_in_box": False,
+        "input_placeholder": True,
+        "selection_dialog": False,
+        "shell_zsh": False,
+    }
+    for name, want in expected.items():
+        got = prompt_line_empty(load_screen(name))
+        ok &= check(f"prompt_line_empty({name}) is {want}", got == want)
+
+    ok &= check("finds a modern input row",
+                any(_INPUT_BOX_RE.match(l) for l in load_screen("idle_accept_edits")))
+    ok &= check("still finds a legacy row",
+                bool(_INPUT_BOX_RE.match("  │ > ")))
+    ok &= check("unknown text in the row reads as a draft, not empty",
+                prompt_line_empty(["────", "❯ some unrecognised hint", "────",
+                                   "  ⏵⏵ accept edits on · ← for agents"]) is False)
+    ok &= check("no input row at all is not empty", prompt_line_empty([]) is False)
+    return ok
+
+
 def _irow(sid, name, project, is_shell=False, working=True):
     return {"sid": sid, "name": name, "project": project,
             "is_shell": is_shell, "working": working}
@@ -1020,4 +1048,5 @@ if __name__ == "__main__":
     ok = run()
     ok = test_intervene_targets() and ok
     ok = test_session_working() and ok
+    ok = test_input_row_and_drafts() and ok
     sys.exit(0 if ok else 1)
