@@ -410,6 +410,23 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     return _is_chrome_line(tail[-1])
 
 
+def _bracket_line(l: str) -> bool:
+    """True for a line that can frame the live input row on either side.
+
+    Covers both shapes _INPUT_BOX_RE matches: a bare horizontal rule
+    (what modern Claude Code renders directly above and below the row - the
+    same "^-+$" shape as _RULE_RE, just checked independently here so this
+    module's two screen-scanning predicates stay decoupled, see
+    session_working's docstring), and a full box-drawing border line
+    (corners plus rule glyphs), which is how the legacy `│ > ` box framed
+    the same row before Claude Code switched to bare rules. A bare rule is a
+    strict subset of "every character is a box-drawing glyph", so one check
+    covers both without needing to special-case either shape.
+    """
+    s = l.strip()
+    return bool(s) and all(c in _BOX_GLYPHS for c in s)
+
+
 def prompt_line_empty(lines: List[str]) -> bool:
     """True when Claude's input row carries no operator draft.
 
@@ -418,35 +435,61 @@ def prompt_line_empty(lines: List[str]) -> bool:
     free.
 
     Modern Claude Code renders the row as `❯` between two rules; older builds
-    used `│ > `. Both are matched - dropping the old shape would trade one
-    version's blind spot for another's.
+    used `│ > `. Both are matched by _INPUT_BOX_RE - dropping the old shape
+    would trade one version's blind spot for another's.
 
-    Claude Code also puts its own hints in that row (see _INPUT_PLACEHOLDERS),
-    which are not drafts. Anything else found there IS treated as a draft:
-    the cost of a false "draft present" is a delayed message, the cost of a
-    false "row empty" is submitting the operator's half-written text.
+    The live row is found STRUCTURALLY, not by position: among all
+    _INPUT_BOX_RE matches anywhere on screen, only the one BRACKETED by
+    _bracket_line on both sides - the nearest non-blank line above it and
+    the nearest non-blank line below it - is the live row. Every other
+    _INPUT_BOX_RE match is ignored. This does double duty:
 
-    The whole tail is scanned rather than stopping at the closest match to
-    the bottom: a queued message that Claude echoes back into scrollback is
-    ALSO a "❯ ..." line, sitting above the real (now-cleared) input row, and
-    a bare shell prompt glyph can coincidentally match the same regex with
-    nothing around it. Either one, if present anywhere in the scanned tail
-    with unrecognised text after it, must veto the push - so any match is
-    checked, not just the nearest one. This is more conservative than
-    checking only the last match, which is the direction that is safe to
-    err in.
+    - A queued message Claude Code echoes back into scrollback once
+      submitted is ALSO a "❯ ..." line (see draft_in_box.txt), sitting
+      above the real, now-cleared input row. It is not bracketed - ordinary
+      scrollback text, not a rule, sits above it - so it is skipped instead
+      of being misread as a live draft.
+    - A bare shell prompt glyph (some zsh themes render `❯` as the prompt
+      itself) can coincidentally match _INPUT_BOX_RE too, but has ordinary
+      shell output around it, never a bracketing rule on both sides. A
+      shell can therefore never present as a live Claude input row under
+      this check - solving the shell-injection risk structurally rather
+      than by chasing whichever shell theme happens to be in the fixtures.
+      Later code that needs "is this really Claude's input row" can lean on
+      that property.
 
-    No row found => not a known-free row => False (fail safe: do not type)."""
-    found = False
-    for l in [l for l in lines if l.strip()][-8:]:
+    No fixed window: the whole screen is scanned, not a fixed-size tail.
+    Claude Code appends an unbounded number of agent/task rows below the
+    footer - and hence below the input row too - so a fixed window
+    eventually scrolls the real input row out of range and returns a
+    permanent False once enough rows accumulate. That is the same bug class
+    session_working's fix round 2 already closed for the footer, and here
+    it is worse: _maybe_extreme_push gates the extreme-mode push on this
+    predicate, so a permanent False would leave the push permanently dead -
+    the exact liveness bug this whole plan exists to fix.
+
+    Claude Code also puts its own hints in the live row (see
+    _INPUT_PLACEHOLDERS), which are not drafts. Anything else found there
+    IS treated as a draft: the cost of a false "draft present" is a delayed
+    message, the cost of a false "row empty" is submitting the operator's
+    half-written text.
+
+    No bracketed row found => not a known-live row => False (fail safe: do
+    not type)."""
+    tail = [l for l in lines if l.strip()]
+    for i, l in enumerate(tail):
         if not _INPUT_BOX_RE.match(l):
             continue
-        found = True
+        if i == 0 or i == len(tail) - 1:
+            continue  # nothing on one side to bracket it - not the live row
+        if not (_bracket_line(tail[i - 1]) and _bracket_line(tail[i + 1])):
+            continue  # unbracketed - scrollback echo, bare shell prompt, etc.
         rest = _INPUT_BOX_RE.sub("", l, count=1)
         rest = rest.strip("".join(_BOX_GLYPHS) + " \t")
-        if rest and not any(p in rest for p in _INPUT_PLACEHOLDERS):
-            return False
-    return found
+        if not rest:
+            return True
+        return any(p in rest for p in _INPUT_PLACEHOLDERS)
+    return False
 
 
 _WORKING_MARKER = "esc to interrupt"

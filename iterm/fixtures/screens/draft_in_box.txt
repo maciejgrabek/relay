@@ -1,7 +1,14 @@
 # Captured from a live Claude Code session on 2026-08-10 through relay's
 # own read path (_extract_lines + reconstruct_lines). Lines below the
 # header are the screen tail verbatim. Refresh when the UI changes.
-# state: a real half-typed draft in the box
+# state: a queued-message echo in scrollback, ABOVE a live input row that
+# is showing the placeholder, not a draft. The half-typed-looking sentence
+# on the "❯ and when spec is done ..." line is Claude Code's echo of a
+# message the operator already submitted while a prior turn was running -
+# it sits in scrollback, not in the live (bracketed) input row. The live
+# row is the "❯ Press up to edit queued messages" line near the bottom,
+# bracketed by rule lines above and below. See live_draft.txt for a fixture
+# that actually has draft text in the live row.
 ✻ Fluttering… (17s · ↓ 750 tokens)
   ⎿  Tip: For a fast, cheap code review, try /code-review low. It runs the built-in skill at its lightest effort level.
   ❯ and when spec is done - please proceed with implementation

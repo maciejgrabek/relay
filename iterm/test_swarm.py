@@ -876,6 +876,7 @@ def test_session_working():
         "input_placeholder": True,
         "selection_dialog": False,
         "shell_zsh": False,
+        "live_draft": False,
     }
     for name, want in expected.items():
         got = session_working(load_screen(name))
@@ -963,19 +964,28 @@ def test_session_working():
 
 def test_input_row_and_drafts():
     ok = True
+    # Fix round 2: draft_in_box and input_placeholder both carry the exact
+    # same live (rule-bracketed) row - "❯ Press up to edit queued messages" -
+    # so both must read as empty. The half-typed sentence in draft_in_box.txt
+    # is a scrollback echo of an ALREADY-SUBMITTED queued message, not text
+    # sitting in the live row; see that fixture's header. live_draft.txt is
+    # what now carries a real draft in its live row.
     expected = {
         "idle_accept_edits": True,
         "working_accept_edits": True,
         "working_manual_mode": True,
         "working_with_agent_rows": True,
-        "draft_in_box": False,
+        "draft_in_box": True,
         "input_placeholder": True,
         "selection_dialog": False,
         "shell_zsh": False,
+        "live_draft": False,
     }
     for name, want in expected.items():
         got = prompt_line_empty(load_screen(name))
         ok &= check(f"prompt_line_empty({name}) is {want}", got == want)
+    ok &= check("no fixture is missing",
+                len(list(_SCREEN_DIR.glob('*.txt'))) == len(expected))
 
     ok &= check("finds a modern input row",
                 any(_INPUT_BOX_RE.match(l) for l in load_screen("idle_accept_edits")))
@@ -985,6 +995,21 @@ def test_input_row_and_drafts():
                 prompt_line_empty(["────", "❯ some unrecognised hint", "────",
                                    "  ⏵⏵ accept edits on · ← for agents"]) is False)
     ok &= check("no input row at all is not empty", prompt_line_empty([]) is False)
+
+    # Fix round 2: a fixed window is the same bug class session_working's
+    # fix round 2 already closed - Claude Code appends an unbounded number of
+    # agent/task rows below the footer, and the input row is above the
+    # footer, so any fixed-size tail eventually scrolls the input row out of
+    # range. That's a permanent False once enough rows accumulate, which
+    # means extreme mode's push (gated on this predicate) goes permanently
+    # dead - the exact liveness bug this whole plan exists to fix.
+    base = load_screen("working_with_agent_rows")
+    swarmed = base + [f"  ◯ agent {i}" for i in range(30)]
+    ok &= check(
+        "an idle empty row stays found behind 30 trailing agent rows "
+        "(no fixed window)",
+        prompt_line_empty(swarmed) is True)
+
     return ok
 
 

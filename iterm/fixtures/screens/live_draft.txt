@@ -1,0 +1,13 @@
+# RECONSTRUCTED, not captured - the only other fixture here that is not
+# verbatim (see input_placeholder.txt). Modeled on idle_accept_edits.txt with
+# the bracketed input row edited to carry operator draft text instead of
+# being empty. Needed because draft_in_box.txt no longer demonstrates a live
+# draft: its bracketed row is the placeholder, and the half-typed sentence in
+# it is scrollback, not the live row (see draft_in_box.txt's header). This
+# fixture is what keeps genuine draft protection under test.
+# state: idle, accept-edits mode, operator draft in the box
+✻ Worked for 56s
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ok - c
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
