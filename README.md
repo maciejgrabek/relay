@@ -1096,6 +1096,14 @@ spawn_arm       = off  ; arm level for spawned workers: off | safe | wild | insa
                        ; honored only at FIRST sight of a session (spawn's boot
                        ; window); a request appearing later for a known session
                        ; is refused and escalated (self-escalation guard)
+respect_draft   = true ; default. Never type into a session whose input box
+                       ; already holds a half-written message of yours: a
+                       ; queued swarm message and a due timer both wait
+                       ; instead (nothing is consumed - they retry the moment
+                       ; the box is clear). false restores the old behaviour,
+                       ; where the delivery appends to your sentence and
+                       ; presses Enter. The extreme push refuses a draft
+                       ; either way, whatever this is set to
 
 [statusbar]
 enabled = true         ; register a per-tab arm badge in iTerm2's status bar

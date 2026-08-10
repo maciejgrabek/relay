@@ -13,6 +13,7 @@
     [swarm]
     stale_minutes   = 10   ; mirrors RELAY_STALE_MINUTES
     notify_cooldown = 30   ; mirrors RELAY_NOTIFY_COOLDOWN
+    respect_draft   = true ; never type over a half-written operator message
 
     [mascot]
     name = crt             ; crt | invader | owl | cat | core | ... (see MASCOT_NAMES)
@@ -63,6 +64,12 @@ class Config:
     spawn_arm: str = "off"
     extreme_fires: int = 5       # pushes per E E arming (TUI extreme mode)
     extreme_dwell: float = 45.0  # seconds idle before an extreme push
+    # ON by default, because it is the protective answer: with it on, a queued
+    # swarm message and a due timer both refuse to type into a session whose
+    # input box already holds an operator draft (the extreme push has always
+    # refused). Off restores the old behaviour - relay appends to the draft and
+    # presses Enter, submitting whatever the operator had half-written.
+    respect_draft: bool = True
     statusbar_enabled: bool = False
     danger_preset: str = "default"
     theme: str = "phosphor"
@@ -134,6 +141,14 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                                     float(d.extreme_fires), warns)))
     e_dwell = max(0.0, _get_float(cp, "swarm", "extreme_dwell",
                                   d.extreme_dwell, warns))
+
+    try:
+        respect_draft = cp.getboolean("swarm", "respect_draft",
+                                      fallback=d.respect_draft)
+    except ValueError:
+        warns.append("config: [swarm] respect_draft must be true/false - "
+                     "using true")
+        respect_draft = True
 
     try:
         sounds_on = cp.getboolean("sounds", "enabled",
@@ -232,6 +247,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         spawn_arm=arm,
         extreme_fires=e_fires,
         extreme_dwell=e_dwell,
+        respect_draft=respect_draft,
         statusbar_enabled=statusbar,
         danger_preset=preset,
         theme=theme,
@@ -262,7 +278,8 @@ def dump(cfg: Config) -> str:
         f"notify_cooldown = {cfg.notify_cooldown:g}\n"
         f"spawn_arm       = {cfg.spawn_arm}\n"
         f"extreme_fires   = {cfg.extreme_fires}\n"
-        f"extreme_dwell   = {cfg.extreme_dwell:g}\n\n"
+        f"extreme_dwell   = {cfg.extreme_dwell:g}\n"
+        f"respect_draft   = {'true' if cfg.respect_draft else 'false'}\n\n"
         "[statusbar]\n"
         f"enabled = {'true' if cfg.statusbar_enabled else 'false'}\n\n"
         "[danger]\n"

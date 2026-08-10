@@ -98,6 +98,15 @@ def run():
                 and settings.change(c, "timers_reconfirm_days", +1).timers_reconfirm_days
                 == c.timers_reconfirm_days + 1.0)
 
+    # respect_draft is editable in the overlay like the other [swarm] keys the
+    # editor manages, defaults on, and is NOT live (the watcher reads it off
+    # cfg at delivery time, so the running process keeps its startup value).
+    ok &= check("respect_draft toggles and is not live",
+                c.respect_draft is True
+                and settings.change(c, "respect_draft", +1).respect_draft
+                is False
+                and not settings.is_live("respect_draft"))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

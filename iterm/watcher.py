@@ -855,6 +855,24 @@ class Watcher:
             return
         if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
             return
+        if getattr(self.cfg, "respect_draft", True) and \
+                not swarm.prompt_line_empty(info.last_screen):
+            # The operator is half-way through typing something. Delivery sends
+            # the body and then a bare "\r", which would append to their
+            # sentence and SUBMIT it - their text destroyed, a turn spent. Same
+            # refusal _fire_extreme has always made (unconditionally, and it
+            # stays that way whatever this option says).
+            #
+            # prompt_line_empty is False for EITHER of two screens: a draft in
+            # the input row, OR no input row found at all. A refusal here is
+            # therefore not proof that a draft exists - it only means the row
+            # is not known to be free. That is the direction we want (the cost
+            # is a delayed message, not a clobbered one), but do not read this
+            # branch as "there is a draft".
+            #
+            # Nothing is consumed: the batch stays queued and retries next
+            # tick, exactly as the is_shell_job refusal above leaves it.
+            return
         try:
             msgs = swarmdb.undelivered(self._swarm_conn(), reg["name"])
         except Exception as e:
@@ -929,6 +947,22 @@ class Watcher:
             # command. "now" mode ignores readiness entirely, so the screen
             # gate below cannot save this case; refuse on the job, before
             # touching the DB, so the timer is not consumed either.
+            return False
+        if getattr(self.cfg, "respect_draft", True) and \
+                not swarm.prompt_line_empty(info.last_screen):
+            # An operator draft sits in the input box. The payload plus its
+            # "\r" would append to that half-written message and submit it.
+            # Refused here, before the DB, so the timer's clock is NOT
+            # advanced and it is still due the moment the box is clear -
+            # exactly like the shell-job refusal above. "now" mode ignores
+            # readiness entirely, so this has to sit outside the `ready`
+            # computation to cover it.
+            #
+            # prompt_line_empty is False for EITHER a draft in the input row
+            # OR no input row found at all, so this refusal is not proof that
+            # a draft exists - only that the row is not known to be free. The
+            # cost of being wrong is a delayed timer, which is the direction
+            # we want; do not read this branch as "there is a draft".
             return False
         s = info._iterm_session
         if s is None:
@@ -1013,7 +1047,12 @@ class Watcher:
         if info.extreme_fires_left <= 0:
             return
         if not swarm.prompt_line_empty(info.last_screen):
-            return   # operator draft on the input line - hands off
+            # Operator draft on the input line - hands off. UNCONDITIONAL on
+            # purpose: [swarm] respect_draft gates the same check on _deliver
+            # and _fire_timers, but the extreme push is relay talking to
+            # itself, so opting out of protecting a queued message must never
+            # also opt out of protecting the operator here.
+            return
         if now - info._idle_since < self.extreme_dwell:
             return
         reg = self.registry.get(info.session_id)

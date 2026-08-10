@@ -32,6 +32,7 @@ SETTINGS = [
     ("BEHAVIOR", "stale_minutes", "number", (1.0, 1.0)),
     ("BEHAVIOR", "notify_cooldown", "number", (0.0, 5.0)),
     ("BEHAVIOR", "danger_preset", "enum", _config.DANGER_PRESETS),
+    ("BEHAVIOR", "respect_draft", "toggle", None),
     ("TIMERS", "timers_require_armed", "toggle", None),
     ("TIMERS", "timers_autostart", "toggle", None),
     ("TIMERS", "timers_reconfirm_days", "number", (0.0, 1.0)),

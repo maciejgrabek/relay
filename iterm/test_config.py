@@ -216,6 +216,25 @@ def run():
                 cfg.timers_reconfirm_days == 7.0
                 and any("reconfirm_days" in w for w in warns))
 
+    # [swarm] respect_draft: protective, so it defaults ON when the key is
+    # absent from the file (and when the section exists without it - the shape
+    # every already-installed ~/.relay/config has today).
+    ok &= check("respect_draft defaults on (key absent)",
+                config.Config().respect_draft is True
+                and config.load("/nonexistent/relay-config")[0]
+                .respect_draft is True
+                and config.load(_write("[swarm]\nstale_minutes = 5\n"))[0]
+                .respect_draft is True)
+    p = _write("[swarm]\nrespect_draft = false\n")
+    cfg, warns = config.load(p)
+    ok &= check("respect_draft = false parsed",
+                cfg.respect_draft is False and warns == [])
+    p = _write("[swarm]\nrespect_draft = sometimes\n")
+    cfg, warns = config.load(p)
+    ok &= check("bad respect_draft -> on + warning",
+                cfg.respect_draft is True
+                and any("respect_draft" in w for w in warns))
+
     import dataclasses
     # dump -> load round-trips every managed field (non-default values).
     custom = dataclasses.replace(
@@ -225,6 +244,7 @@ def run():
         stale_minutes=7.0, notify_cooldown=15.0, spawn_arm="wild",
         statusbar_enabled=True, danger_preset="paranoid",
         theme="amber", mascot="invader", preview_panel=False,
+        respect_draft=False,
         timers_require_armed=True, timers_autostart=True,
         timers_reconfirm_days=3.0)
     p = _write(config.dump(custom))

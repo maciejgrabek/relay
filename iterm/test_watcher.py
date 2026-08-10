@@ -308,6 +308,18 @@ _DIALOG_SCREEN = [
     "  Enter to select · ↑/↓ to navigate · Esc to cancel",
 ]
 
+# The same ready screen with the operator half-way through typing a message.
+# claude_prompt_ready says YES to this (it is an idle, live, non-dialog Claude
+# prompt - the box just has text in it), so nothing except the draft check can
+# refuse it: typing a body plus a bare "\r" here appends to the operator's
+# sentence and SUBMITS it.
+_DRAFT_SCREEN = [
+    "╭──────────────────────────────────────────╮",
+    "│ > fix the login bug before               │",
+    "╰──────────────────────────────────────────╯",
+    "  ? for shortcuts",
+]
+
 
 async def deliver_tests():
     """Drive Watcher._deliver directly against a fake session + monkeypatched
@@ -509,6 +521,59 @@ async def deliver_tests():
     infoR.last_screen = list(_READY_SCREEN)
     await w._deliver(infoR)
     chk("ready screen, same job and queue: still delivers", len(fsR.sent) == 2)
+
+    # DRAFT PROTECTION ([swarm] respect_draft, default ON). _fire_extreme has
+    # always refused to type over a half-written message; _deliver did not, so
+    # a queued swarm message landing in that window appended to the operator's
+    # sentence and pressed Enter - text destroyed, turn spent. The screen below
+    # is READY by every other measure, so the draft check is the only thing
+    # that can refuse it (proved first, so this cannot pass vacuously).
+    import config as C
+    chk("draft screen is ready but not empty (not a vacuous fixture)",
+        S.claude_prompt_ready(_DRAFT_SCREEN) is True
+        and S.prompt_line_empty(_DRAFT_SCREEN) is False)
+
+    qd = {"n": 0}
+
+    def _counting_draft(conn, name=None):
+        qd["n"] += 1
+        return [{"id": 41, "from_name": "coord", "body": "do the thing"}]
+    W.swarmdb.undelivered = _counting_draft
+    wD = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    wD._db = object()
+    infoD, fsD = _mk(wD, "sid11", "worker-draft")
+    infoD.job = "node"
+    infoD.last_screen = list(_DRAFT_SCREEN)
+    await wD._deliver(infoD)
+    chk("respect_draft on: nothing typed over an operator draft",
+        fsD.sent == [])
+    chk("respect_draft on: the message stays queued (no DB query, not marked)",
+        qd["n"] == 0 and 41 not in delivered)
+
+    # Control: the SAME watcher (respect_draft still on), same job, same queue
+    # - only the input box is empty - and it delivers. Without this a blanket
+    # refusal would pass the case above for free.
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 42, "from_name": "coord", "body": "do the thing"}]
+    infoDC, fsDC = _mk(wD, "sid12", "worker-draft-control")
+    infoDC.job = "node"
+    infoDC.last_screen = list(_READY_SCREEN)
+    await wD._deliver(infoDC)
+    chk("respect_draft on: an empty input box still delivers",
+        len(fsDC.sent) == 2)
+
+    # OFF -> exactly today's behaviour: it types over the draft.
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 43, "from_name": "coord", "body": "do the thing"}]
+    wOff = Watcher(connection=None, dry_run=False,
+                   cfg=C.Config(respect_draft=False))
+    wOff._db = object()
+    infoOff, fsOff = _mk(wOff, "sid13", "worker-draft-off")
+    infoOff.job = "node"
+    infoOff.last_screen = list(_DRAFT_SCREEN)
+    await wOff._deliver(infoOff)
+    chk("respect_draft off: delivers over the draft (opted-out behaviour)",
+        len(fsOff.sent) == 2)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
@@ -1577,6 +1642,14 @@ async def timer_tests():
         fs = FakeSession()
         info = SessionInfo("s1", title="api", _iterm_session=fs, mode="safe",
                            state="working")
+        # Every SessionInfo below carries a screen, not the empty default: with
+        # [swarm] respect_draft on (the default), _fire_timers consults
+        # prompt_line_empty, which reads a screen with no input row at all as
+        # "not free". An empty last_screen is not a state a live session is
+        # ever in when _fire_timers runs (the poll loop captures the screen
+        # first), so this is a fixture completing itself, not a relaxed
+        # assertion - each case still tests exactly what it tested before.
+        info.last_screen = list(_READY_SCREEN)
         w.sessions["s1"] = info
         fired1 = await w._fire_timers(info)
         chk("now-mode fires immediately (busy ok)",
@@ -1590,6 +1663,7 @@ async def timer_tests():
         fs2 = FakeSession()
         info2 = SessionInfo("s2", title="w", _iterm_session=fs2, mode="safe",
                             state="working")
+        info2.last_screen = list(_READY_SCREEN)
         w2.sessions["s2"] = info2
         fired2a = await w2._fire_timers(info2)
         chk("idle-mode waits while busy", fs2.sent == [])
@@ -1611,6 +1685,7 @@ async def timer_tests():
         w3.paused = True
         fs3 = FakeSession()
         info3 = SessionInfo("s3", title="w", _iterm_session=fs3, mode="safe")
+        info3.last_screen = list(_READY_SCREEN)
         w3.sessions["s3"] = info3
         fired3 = await w3._fire_timers(info3)
         chk("pause freezes timers", fs3.sent == [])
@@ -1622,6 +1697,7 @@ async def timer_tests():
                      cfg=C.Config(timers_require_armed=True))
         fs4 = FakeSession()
         info4 = SessionInfo("s4", title="w", _iterm_session=fs4, mode="off")
+        info4.last_screen = list(_READY_SCREEN)
         w4.sessions["s4"] = info4
         await w4._fire_timers(info4)
         chk("require_armed blocks an unarmed session", fs4.sent == [])
@@ -1634,6 +1710,7 @@ async def timer_tests():
                      cfg=C.Config(timers_reconfirm_days=7))
         fs5 = FakeSession()
         info5 = SessionInfo("s5", title="w", _iterm_session=fs5, mode="safe")
+        info5.last_screen = list(_READY_SCREEN)
         w5.sessions["s5"] = info5
         await w5._fire_timers(info5)     # now() >> 7 days after bound_at=0
         chk("past-reconfirm timer does not fire",
@@ -1650,6 +1727,7 @@ async def timer_tests():
         w6 = Watcher(connection=None, dry_run=True, cfg=C.Config())
         fs6 = FakeSession()
         info6 = SessionInfo("s6", title="w", _iterm_session=fs6, mode="safe")
+        info6.last_screen = list(_READY_SCREEN)
         w6.sessions["s6"] = info6
         fired6 = await w6._fire_timers(info6)
         chk("dry-run: never injects", fs6.sent == [])
@@ -1736,6 +1814,58 @@ async def timer_tests():
             await w13._fire_timers(info13) is True
             and any("ship it" in s for s in fs13.sent))
 
+        # DRAFT PROTECTION ([swarm] respect_draft, default ON). A timer payload
+        # typed into a half-written message appends to it and submits it. The
+        # screen is otherwise fully ready, and the timer is `now` mode (which
+        # ignores readiness entirely), so ONLY the draft check can refuse this.
+        chk("draft screen is ready but not empty (not a vacuous fixture)",
+            S.claude_prompt_ready(_DRAFT_SCREEN) is True
+            and S.prompt_line_empty(_DRAFT_SCREEN) is False)
+        D.add_timer(conn, iterm_session_id="s14", label="w", interval_min=1,
+                    payload="ship it", mode="now", now=fresh)
+        w14 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs14 = FakeSession()
+        info14 = SessionInfo("s14", title="w", _iterm_session=fs14,
+                             mode="safe", state="idle", job="node")
+        info14.last_screen = list(_DRAFT_SCREEN)
+        w14.sessions["s14"] = info14
+        fired14 = await w14._fire_timers(info14)
+        chk("respect_draft on: timer never types over an operator draft",
+            fs14.sent == [] and fired14 is False)
+        chk("respect_draft on: the timer clock is not advanced (still due the "
+            "moment the box is clear)",
+            D.list_timers(conn, "s14")[0]["last_fired_at"] == fresh
+            and D.list_timers(conn, "s14")[0]["fire_count"] == 0)
+
+        # Control: same timer shape, same watcher config - only the input box
+        # is empty - and it fires.
+        D.add_timer(conn, iterm_session_id="s15", label="w", interval_min=1,
+                    payload="ship it", mode="now", now=fresh)
+        w15 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs15 = FakeSession()
+        info15 = SessionInfo("s15", title="w", _iterm_session=fs15,
+                             mode="safe", state="idle", job="node")
+        info15.last_screen = list(_READY_SCREEN)
+        w15.sessions["s15"] = info15
+        chk("respect_draft on: an empty input box still fires",
+            await w15._fire_timers(info15) is True
+            and any("ship it" in s for s in fs15.sent))
+
+        # OFF -> exactly today's behaviour: it fires over the draft.
+        D.add_timer(conn, iterm_session_id="s16", label="w", interval_min=1,
+                    payload="ship it", mode="now", now=fresh)
+        w16 = Watcher(connection=None, dry_run=False,
+                      cfg=C.Config(respect_draft=False))
+        fs16 = FakeSession()
+        info16 = SessionInfo("s16", title="w", _iterm_session=fs16,
+                             mode="safe", state="idle", job="node")
+        info16.last_screen = list(_DRAFT_SCREEN)
+        w16.sessions["s16"] = info16
+        chk("respect_draft off: timer fires over the draft (opted-out "
+            "behaviour)",
+            await w16._fire_timers(info16) is True
+            and any("ship it" in s for s in fs16.sent))
+
         # _load_timers_on_start: the restore gate. Default config
         # (autostart=false) deactivates every saved timer and flags present
         # sessions' sids as pending a restore/re-confirm decision.
@@ -1744,6 +1874,7 @@ async def timer_tests():
         w7 = Watcher(connection=None, dry_run=False, cfg=C.Config())
         fs7 = FakeSession()
         info7 = SessionInfo("s7", title="w", _iterm_session=fs7, mode="safe")
+        info7.last_screen = list(_READY_SCREEN)
         w7.sessions["s7"] = info7
         w7._load_timers_on_start()
         chk("restore gate (autostart=false): saved timer deactivated",

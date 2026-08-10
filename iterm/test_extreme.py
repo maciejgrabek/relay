@@ -191,6 +191,32 @@ def test_extreme_gates():
     asyncio.run(w._fire_extreme(info))
     chk("draft on the input line blocks the push", fs.sent == [])
 
+    # ...and it stays refused with [swarm] respect_draft turned OFF. That
+    # option gates the NEW draft checks on _deliver/_fire_timers only;
+    # _fire_extreme has always checked prompt_line_empty unconditionally and
+    # must keep doing so, or opting out of protecting a queued message would
+    # silently also opt out of protecting the extreme push.
+    import config as C
+    W2, _ = _mk_watcher()
+    wOff = W2.Watcher(connection=None, dry_run=False,
+                      cfg=C.Config(respect_draft=False))
+    fsOff = FakeSession()
+    iOff = _extreme_info(W2, fsOff)
+    iOff.last_screen = list(DRAFT)
+    wOff.sessions["x1"] = iOff
+    asyncio.run(wOff._fire_extreme(iOff))
+    chk("respect_draft off: the extreme push STILL refuses a draft",
+        fsOff.sent == [] and iOff.extreme_fires_left == 2)
+    # Control: same watcher, same opted-out config, empty box -> it fires. So
+    # the assertion above is the draft check, not respect_draft=False having
+    # broken the push outright.
+    fsOffC = FakeSession()
+    iOffC = _extreme_info(W2, fsOffC)
+    wOff.sessions["x1"] = iOffC
+    asyncio.run(wOff._fire_extreme(iOffC))
+    chk("respect_draft off: an empty input box still pushes",
+        fsOffC.sent == ["keep going", "\r"])
+
     fs2 = FakeSession()
     i2 = _extreme_info(W, fs2)
     i2._idle_since = time.time()  # just went idle: dwell not elapsed
