@@ -407,6 +407,35 @@ async def deliver_tests():
     chk("reserved name: nothing sent", fs5.sent == [])
     chk("reserved name: not marked delivered", 13 not in delivered)
 
+    # SHELL JOB (Task 3 fix round 3, CRITICAL): the operator quit Claude in a
+    # registered swarm tab. iTerm2 now reports a login shell as the foreground
+    # job, but Claude's box+footer chrome is still painted on the visible
+    # screen - so claude_prompt_ready alone can read that dead frame as ready
+    # and _deliver would type the message body, then a bare "\r", straight
+    # into a live shell: the body executes as a command. _handle already
+    # returns early for shells, but the poll loop calls _deliver regardless,
+    # so the refusal has to live here too. The screen is deliberately the
+    # fully-ready one - the job is the ONLY thing saying no.
+    q6 = {"n": 0}
+
+    def _counting_undelivered6(conn, name=None):
+        q6["n"] += 1
+        return [{"id": 17, "from_name": "coord", "body": "rm -rf ~/work"}]
+    W.swarmdb.undelivered = _counting_undelivered6
+    info6, fs6 = _mk(w, "sid6", "worker-6")
+    info6.job = "-zsh"
+    await w._deliver(info6)
+    chk("shell job: no DB query", q6["n"] == 0)
+    chk("shell job: nothing typed into the shell", fs6.sent == [])
+    chk("shell job: not marked delivered", 17 not in delivered)
+
+    # Control: the identical session with a live Claude foreground job still
+    # delivers - the guard must key on the job, not have broken delivery.
+    info7, fs7 = _mk(w, "sid7", "worker-7")
+    info7.job = "node"
+    await w._deliver(info7)
+    chk("live claude job: still delivers", len(fs7.sent) == 2)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
@@ -1557,6 +1586,40 @@ async def timer_tests():
         chk("dry-run: still marked fired (no immediate re-fire)",
             D.list_timers(conn, "s6")[0]["last_fired_at"] > 0)
         W.audit.record = lambda *a, **k: True
+
+        # SHELL JOB (Task 3 fix round 3, CRITICAL): a tab whose foreground job
+        # is a login shell has no Claude in it, whatever chrome is still
+        # painted on screen. "now" mode deliberately ignores readiness, so
+        # without a job-level refusal a timer payload would be typed straight
+        # into the shell and executed. Nothing about the screen is what saves
+        # this one - only the job.
+        D.add_timer(conn, iterm_session_id="s9", label="w", interval_min=1,
+                    payload="deploy prod", mode="now", now=fresh)
+        w9 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs9 = FakeSession()
+        info9 = SessionInfo("s9", title="w", _iterm_session=fs9, mode="safe",
+                            state="idle", job="-zsh")
+        info9.last_screen = list(_READY_SCREEN)
+        w9.sessions["s9"] = info9
+        fired9 = await w9._fire_timers(info9)
+        chk("shell job: timer never types into the shell", fs9.sent == [])
+        chk("shell job: timer fire returns False", fired9 is False)
+        chk("shell job: the timer is not consumed (clock not advanced, so it "
+            "is still due the moment Claude comes back)",
+            D.list_timers(conn, "s9")[0]["last_fired_at"] == fresh
+            and D.list_timers(conn, "s9")[0]["fire_count"] == 0)
+
+        # Control: same timer shape, live Claude foreground job -> still fires.
+        D.add_timer(conn, iterm_session_id="s10", label="w", interval_min=1,
+                    payload="deploy prod", mode="now", now=fresh)
+        w10 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs10 = FakeSession()
+        info10 = SessionInfo("s10", title="w", _iterm_session=fs10,
+                             mode="safe", state="idle", job="node")
+        info10.last_screen = list(_READY_SCREEN)
+        w10.sessions["s10"] = info10
+        chk("live claude job: timer still fires",
+            await w10._fire_timers(info10) is True)
 
         # _load_timers_on_start: the restore gate. Default config
         # (autostart=false) deactivates every saved timer and flags present

@@ -824,9 +824,10 @@ class Watcher:
 
     async def _deliver(self, info: SessionInfo) -> Optional[bool]:
         """Deliver AT MOST ONE queued message into a registered session, only
-        when it is idle at Claude's input box. Audit before act, like
-        approvals. One per tick keeps the injected turns observable. Returns
-        True only when a batch was injected."""
+        when Claude is actually the foreground job (is_shell_job) and it is
+        idle at Claude's input box. Audit before act, like approvals. One per
+        tick keeps the injected turns observable. Returns True only when a
+        batch was injected."""
         if info.session_id == self.own_sid:
             return  # never type a swarm message into relay's own panel tab
         if self.paused:
@@ -842,6 +843,15 @@ class Watcher:
             # but this is the leg that actually injects text into a tab, so it
             # must refuse on its own, unconditionally, regardless of what the
             # sessions table currently contains.
+            return
+        if swarm.is_shell_job(info.job):
+            # Claude was quit in this tab: the foreground job is a login
+            # shell, so the body would be typed at a shell prompt and the
+            # trailing "\r" would EXECUTE it. _handle already returns early
+            # for shells, but the poll loop calls _deliver regardless, and
+            # claude_prompt_ready reads the screen - which still shows the
+            # dead Claude frame. The job is the authoritative answer; the
+            # screen only corroborates.
             return
         if info.state != "idle" or not swarm.claude_prompt_ready(info.last_screen):
             return
@@ -903,15 +913,22 @@ class Watcher:
         return True
 
     async def _fire_timers(self, info: SessionInfo) -> bool:
-        """Fire at most one due, firable timer for this session per tick. now
-        mode injects immediately; idle waits for a ready Claude prompt. Pause
-        freezes; require_armed gates on arm level; dry-run would-fire. A binding
+        """Fire at most one due, firable timer for this session per tick. A tab
+        whose foreground job is a shell is refused outright (no Claude to
+        type into). now mode injects immediately; idle waits for a ready
+        Claude prompt. Pause freezes; require_armed gates on arm level; dry-run would-fire. A binding
         older than reconfirm_days is deactivated (back to pending) instead of
         firing - the stale-session-id guard. Audit BEFORE the send. Best-effort:
         DB/iTerm2 errors are logged, never break the loop. Returns True when a
         timer actually fired (or would-fire, in dry-run) this call - the poll
         loop uses that to gate the extreme push (one injection per tick)."""
         if info.session_id == self.own_sid:
+            return False
+        if swarm.is_shell_job(info.job):
+            # No Claude in this tab - the payload would run as a shell
+            # command. "now" mode ignores readiness entirely, so the screen
+            # gate below cannot save this case; refuse on the job, before
+            # touching the DB, so the timer is not consumed either.
             return False
         s = info._iterm_session
         if s is None:
@@ -968,11 +985,21 @@ class Watcher:
         """EXTREME push: keep an idle extreme-mode session moving by typing
         its configured prompt. Fires ONLY on `idle` - a blocked session (a
         genuine question) or a permission prompt is never touched here; the
-        _handle gates own those. Additional gates: ready AND EMPTY input
-        box (never append to an operator draft), empty inbox (queued mail
+        _handle gates own those. Additional gates: Claude is the foreground
+        job (is_shell_job), ready AND EMPTY input box (never append to an
+        operator draft), empty inbox (queued mail
         wins the idle window), dwell elapsed, budget left, not paused, not
         relay's own tab. Audit BEFORE the send, like every injection."""
         if info.mode != "extreme" or info.session_id == self.own_sid:
+            return
+        if swarm.is_shell_job(info.job):
+            # Claude was quit: both screen gates below (claude_prompt_ready
+            # and prompt_line_empty) read the lingering dead frame and say
+            # yes, so the job is the only thing that can refuse. Do not spend
+            # budget - nothing was pushed. Clear the idle anchor too, exactly
+            # as the not-ready branch does: time spent at a shell is not
+            # dwell, or the push would fire the instant Claude came back.
+            info._idle_since = 0.0
             return
         if info.state != "idle" or \
                 not swarm.claude_prompt_ready(info.last_screen):

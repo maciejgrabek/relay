@@ -230,6 +230,28 @@ def test_extreme_gates():
     chk("own tab never fires", fs7.sent == [])
     w.own_sid = None
 
+    # Task 3 fix round 3 (CRITICAL): the operator quit Claude, so iTerm2
+    # reports a login shell as the foreground job - but READY is still painted
+    # on the visible screen and prompt_line_empty reads that dead box as free.
+    # Both screen gates therefore say yes; only the job says no. Without a
+    # job-level refusal the extreme prompt is typed into a live shell and
+    # executed as a command.
+    fs9 = FakeSession()
+    i9 = _extreme_info(W, fs9)
+    i9.job = "-zsh"
+    asyncio.run(w._fire_extreme(i9))
+    chk("shell job never fires the extreme push", fs9.sent == [])
+    chk("shell job: budget not spent", i9.extreme_fires_left == 2)
+    chk("shell job: idle anchor cleared (time at a shell is not dwell)",
+        i9._idle_since == 0.0)
+
+    fs10 = FakeSession()
+    i10 = _extreme_info(W, fs10)
+    i10.job = "node"
+    asyncio.run(w._fire_extreme(i10))
+    chk("live claude job still fires the extreme push",
+        fs10.sent == ["keep going", "\r"])
+
     fs8 = FakeSession()
     i8 = _extreme_info(W, fs8)
     w.registry["x1"] = {"name": "wx"}
