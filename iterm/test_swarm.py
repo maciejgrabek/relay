@@ -58,20 +58,31 @@ SHELL_TAIL = [
 # live shell prompt. Delivering here would type a message into the SHELL and
 # press Enter = command execution. Must be treated as NOT ready.
 #
-# Fix round 2: the shell prompt below must reuse the SAME glyph Claude's own
-# input row can match ("❯", widened onto _INPUT_BOX_RE by Task 2) - that is
-# the actual danger this fixture demonstrates (a live shell whose prompt is
-# indistinguishable from Claude's own chrome by regex alone), and it is what
-# claude_prompt_ready's structural guard (condition 2: no unbracketed
-# _INPUT_BOX_RE match below the last bracketed row) is built to catch. An
-# arbitrary shell prompt shape that does not match _INPUT_BOX_RE at all was
-# never the risk here - such a prompt can't be mistaken for Claude's input
-# row in the first place.
-SHELL_AFTER_CLAUDE_TAIL = [
+# Fix round 3 (defect review, CRITICAL): round 2 rewrote this fixture's
+# trailing "~/work/relay $" into "~/work/relay" + "❯", on the theory that
+# only a prompt reusing Claude's own glyph is dangerous. It is not: the
+# danger is a LIVE SHELL under dead chrome, whatever glyph it prints. Bash's
+# "$", zsh's "%" and starship's "›" execute a delivered message exactly as
+# readily as "❯" does. The original "$" form is restored, and the three
+# other prompt shapes are pinned alongside it - the "❯" variant is now just
+# one sibling among four, not the only case the guard understands.
+_BOX_CHROME = [
     "╭──────────────────────────────────────────╮",
     "│ >                                        │",
     "╰──────────────────────────────────────────╯",
     "  ? for shortcuts",
+]
+SHELL_AFTER_CLAUDE_TAIL = _BOX_CHROME + [
+    "~/work/relay $",
+]
+SHELL_AFTER_CLAUDE_TAIL_ZSH_PCT = _BOX_CHROME + [
+    "~/work/relay %",
+]
+SHELL_AFTER_CLAUDE_TAIL_STARSHIP = _BOX_CHROME + [
+    "~/work/relay on main",
+    "› ",
+]
+SHELL_AFTER_CLAUDE_TAIL_CARET = _BOX_CHROME + [
     "~/work/relay",
     "❯",
 ]
@@ -136,6 +147,12 @@ def run():
     ok &= check("empty screen -> not ready", not claude_prompt_ready([]))
     ok &= check("shell prompt below lingering chrome -> not ready",
                 not claude_prompt_ready(SHELL_AFTER_CLAUDE_TAIL))
+    ok &= check("zsh '%' prompt below lingering chrome -> not ready",
+                not claude_prompt_ready(SHELL_AFTER_CLAUDE_TAIL_ZSH_PCT))
+    ok &= check("starship '›' prompt below lingering chrome -> not ready",
+                not claude_prompt_ready(SHELL_AFTER_CLAUDE_TAIL_STARSHIP))
+    ok &= check("'❯' prompt below lingering chrome -> not ready",
+                not claude_prompt_ready(SHELL_AFTER_CLAUDE_TAIL_CARET))
     ok &= check("box-bottom last line -> ready",
                 claude_prompt_ready(BOX_BOTTOM_TAIL))
 
@@ -1115,11 +1132,19 @@ def test_selection_dialog_and_readiness():
         "draft_in_box": False,
         "input_placeholder": False,
         "shell_zsh": False,
+        "live_draft": False,
     }
     for name, want in dialogs.items():
         ok &= check(f"selection_dialog({name}) is {want}",
                     selection_dialog(load_screen(name)) == want)
+    ok &= check("no fixture is missing from the dialog table",
+                len(list(_SCREEN_DIR.glob('*.txt'))) == len(dialogs))
 
+    # live_draft is READY: readiness answers "can relay type into this session
+    # at all", not "is it safe to overwrite what is already typed". The draft
+    # is a separate gate (prompt_line_empty), which _fire_extreme applies on
+    # its own; a queued message delivery deliberately appends to a draft
+    # rather than being blocked by one.
     ready = {
         "idle_accept_edits": True,
         "working_accept_edits": False,
@@ -1129,10 +1154,13 @@ def test_selection_dialog_and_readiness():
         "input_placeholder": False,
         "selection_dialog": False,
         "shell_zsh": False,
+        "live_draft": True,
     }
     for name, want in ready.items():
         ok &= check(f"claude_prompt_ready({name}) is {want}",
                     claude_prompt_ready(load_screen(name)) == want)
+    ok &= check("no fixture is missing from the readiness table",
+                len(list(_SCREEN_DIR.glob('*.txt'))) == len(ready))
 
     ok &= check("a shell prompt alone is never ready",
                 claude_prompt_ready(["~/Work/relay", "❯ "]) is False
@@ -1167,6 +1195,22 @@ def test_selection_dialog_and_readiness():
         "idle screen plus 20 trailing agent rows is still ready - no fixed "
         "window, no requirement that every trailing row be recognized chrome",
         claude_prompt_ready(idle_plus_many_agent_rows) is True)
+
+    # Fix round 3: the widened shell-prompt guard (condition 2 now also vetoes
+    # a trailing line whose last glyph is a shell prompt sigil) must not start
+    # eating the ordinary idle tail. Task lists and agent rows end in ordinary
+    # words, never in a prompt sigil, so pin the exact shapes.
+    idle_plus_todo_list = load_screen("idle_accept_edits") + [
+        "  ⏺ main",
+        "  ⎿ ☒ Restore the shell fixtures",
+        "  ⎿ ☒ Widen the trailing-prompt guard",
+        "  ⎿ ☐ Anchor selection_dialog structurally",
+        "  ◯ general-purpose  Task 4 implementer",
+    ]
+    ok &= check(
+        "a todo list and agent rows below the footer stay ready under the "
+        "widened shell-prompt guard",
+        claude_prompt_ready(idle_plus_todo_list) is True)
 
     # Carried-forward defect (Task 2 review), closed structurally instead of
     # by walking every trailing line. shell_zsh is already pinned False above
@@ -1206,6 +1250,34 @@ def test_selection_dialog_and_readiness():
         "a selection dialog is never ready even when it renders a bracketed "
         "input row",
         claude_prompt_ready(dialog_with_bracketed_row) is False)
+
+    # Fix round 3 (defect review, Important): selection_dialog scanned a fixed
+    # `tail[-6:]` window. A dialog's navigation footer is CONTENT, not chrome,
+    # and Claude Code is free to render rows below it (or wrap the dialog body
+    # past six non-blank lines) - six trailing rows were enough to disarm this
+    # plan's only safety fix entirely and let relay type into a live menu. The
+    # markers are now looked for across the whole screen, so no row count can
+    # push them out of range.
+    dialog_rows = [
+        "  1. [ ] Option one",
+        "  2. [ ] Option two",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]
+    trailing = [f"  ◯ general-purpose  Task {i}" for i in range(6)]
+    ok &= check("a dialog with 5 rows below its footer is still a dialog",
+                selection_dialog(dialog_rows + trailing[:5]) is True)
+    ok &= check(
+        "a dialog with 6 rows below its footer is STILL a dialog (no fixed "
+        "window - the 6th row used to push the markers out of range)",
+        selection_dialog(dialog_rows + trailing) is True)
+    ok &= check(
+        "a dialog with 30 rows below its footer is still a dialog",
+        selection_dialog(dialog_rows
+                         + [f"  ◯ agent {i}" for i in range(30)]) is True)
+    ok &= check(
+        "readiness follows: a bracketed row under a dialog with 6 trailing "
+        "rows is never ready",
+        claude_prompt_ready(dialog_with_bracketed_row + trailing) is False)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

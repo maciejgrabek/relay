@@ -371,12 +371,15 @@ def live_doing_count(tasks, names) -> int:
 # Claude Code appends an unbounded number of agent/task rows below the
 # footer after any turn that used subagents - that is the NORMAL idle
 # shape, not a hazard, so nothing about what trails the footer is examined.
-# The shell defect is closed separately, by condition 2: no unbracketed
-# _INPUT_BOX_RE match may appear below the last bracketed row. That is what
-# a live shell prompt reusing Claude's own "❯" glyph looks like when it is
-# sitting under Claude's lingering, now-dead box/footer chrome - the exact
-# shape ordinary task/agent rows never take, since none of them match
-# _INPUT_BOX_RE.
+# The shell defect is closed separately, by condition 2: below the last
+# bracketed row, nothing may match _INPUT_BOX_RE or end in a shell prompt
+# sigil (_SHELL_PROMPT_TAILS). That is what a live shell prompt looks like
+# sitting under Claude's lingering, now-dead box/footer chrome, whether the
+# theme reuses Claude's own "❯" or prints bash's "$", zsh's "%" or
+# starship's "›" - the exact shape ordinary task/agent rows never take.
+# The AUTHORITATIVE shell guard is not on this screen at all: it is the
+# tab's foreground job (is_shell_job, below), applied by watcher's three
+# injection paths. This one covers the case where the job cannot be read.
 _INPUT_BOX_RE = re.compile(r"^\s*(?:│\s*>|❯)")
 _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
 
@@ -384,6 +387,24 @@ _BOX_GLYPHS = set("─│╯╮╰╭┌┐└┘├┤┬┴┼")
 # Best-effort and will go stale like any UI string; unknown text is treated as
 # a draft, so staleness costs a delayed message rather than a clobbered one.
 _INPUT_PLACEHOLDERS = ("Press up to edit queued messages",)
+
+
+# Characters a live shell prompt commonly ENDS with: bash's "$", root's "#",
+# zsh's "%", the "❯"/"›"/"➜" of the popular zsh/starship themes, and a plain
+# ">" . Best-effort and it WILL be incomplete - prompts are operator-themed
+# and unbounded, so no list can be exhaustive. That is acceptable because
+# this set only ever ADDS vetoes (see claude_prompt_ready condition 2): a
+# glyph missing from it costs nothing beyond the guard not firing there, and
+# a glyph that over-matches costs only a delayed message. It never turns a
+# not-ready screen into a ready one.
+_SHELL_PROMPT_TAILS = frozenset("$%#>❯›➜")
+
+
+def _shell_prompt_tail(l: str) -> bool:
+    """True when `l` looks like a live shell's prompt line: non-blank, and its
+    last non-whitespace character is one of _SHELL_PROMPT_TAILS."""
+    s = l.rstrip()
+    return bool(s) and s[-1] in _SHELL_PROMPT_TAILS
 
 
 _DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")
@@ -398,8 +419,20 @@ def selection_dialog(lines) -> bool:
 
     Two markers must appear, not one: "to navigate" alone is weak enough to
     show up in ordinary output.
+
+    Fix round 3 (defect review, Important): the whole screen is scanned, not
+    a fixed `tail[-6:]` window. A dialog's navigation footer is CONTENT, not
+    chrome - nothing stops Claude Code from rendering rows below it, and a
+    long dialog body can wrap past six non-blank lines on its own. Six such
+    rows were enough to push every marker out of a six-line window, silently
+    disarming this plan's only safety fix and letting relay type into a live
+    menu. The markers are anchored structurally (they exist on screen or they
+    do not) rather than positionally, the same rule session_working and
+    prompt_line_empty already follow. The cost of scanning everything is a
+    stale dialog footer left in scrollback reading as a live dialog - a
+    delayed message, the safe direction.
     """
-    tail = [l for l in lines if l.strip()][-6:]
+    tail = [l for l in lines if l.strip()]
     hits = sum(1 for m in _DIALOG_MARKERS if any(m in l for l in tail))
     return hits >= 2
 
@@ -411,7 +444,8 @@ def claude_prompt_ready(lines: List[str]) -> bool:
       1. a genuinely bracketed input row exists somewhere on screen
          (_bracketed_input_rows - same structural test prompt_line_empty
          uses, see below),
-      2. no unbracketed _INPUT_BOX_RE match sits below the LAST such row,
+      2. nothing below the LAST such row looks like a live shell prompt -
+         neither an _INPUT_BOX_RE match nor a _shell_prompt_tail line,
       3. the session is not mid-turn (session_working),
       4. the screen is not a selection dialog.
 
@@ -438,15 +472,34 @@ def claude_prompt_ready(lines: List[str]) -> bool:
 
     Condition 1 alone is not enough for the harder half of that defect:
     Claude's own box/footer chrome lingers on screen for a line or two after
-    quitting, sitting ABOVE a now-live shell prompt that can reuse the exact
-    same "❯" glyph _INPUT_BOX_RE matches. That lingering (dead) box is itself
-    a genuine bracketed row, so condition 1 alone would read it ready.
-    Condition 2 closes it: if any line below the LAST bracketed row matches
-    _INPUT_BOX_RE without itself being bracketed, the screen is a live shell
-    prompt sitting under a dead Claude box, and readiness is refused. This
-    guard is narrow on purpose - it fires only on a fresh _INPUT_BOX_RE
-    match, never on ordinary task/agent-row text, which never matches that
-    regex at all.
+    quitting, sitting ABOVE a now-live shell prompt. That lingering (dead)
+    box is itself a genuine bracketed row, so condition 1 alone would read it
+    ready - and relay would then type a message body plus a bare Enter into
+    the shell, executing it as a command.
+
+    Condition 2 closes that: nothing below the LAST bracketed row may look
+    like a shell prompt. Two shapes count, because the two overlap only
+    partly. Every _INPUT_BOX_RE match below `last` is bare by construction
+    (nothing below the last bracketed row can itself be bracketed - `last` is
+    the maximum such index), which catches the themes that reuse Claude's own
+    "❯" glyph. Fix round 3 (defect review, CRITICAL) adds the rest: bash's
+    "$", zsh's "%", root's "#" and starship's "›" match no part of
+    _INPUT_BOX_RE, so all three sailed through and a quit-Claude tab with any
+    of those prompts read READY. A trailing line whose last non-whitespace
+    character is a prompt sigil (_shell_prompt_tail) now vetoes too.
+
+    That second test is best-effort by nature and fails SAFE: it can only add
+    vetoes, and an over-veto costs a delayed message while an under-veto
+    costs a shell command. It is also deliberately confined to the region
+    BELOW the live input row, where Claude renders only task/agent rows and
+    footers - none of which end in a prompt sigil, so ordinary idle chatter
+    is unaffected (there are fixture-backed assertions for exactly that).
+
+    Neither this nor any screen test is the authoritative guard against
+    typing into a shell - the foreground job is (swarm.is_shell_job, applied
+    by watcher's _deliver/_fire_timers/_fire_extreme). The two are
+    independent on purpose: a screen can lie about a job that already exited,
+    and a job can be unreadable while the screen is plain.
 
     No fixed window, no requirement that trailing content be recognized:
     a false "not ready" costs a delayed message; a false "ready" costs relay
@@ -462,7 +515,8 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     if not rows:
         return False
     last = rows[-1]
-    if any(_INPUT_BOX_RE.match(l) for l in tail[last + 1:]):
+    if any(_INPUT_BOX_RE.match(l) or _shell_prompt_tail(l)
+           for l in tail[last + 1:]):
         return False
 
     if session_working(tail):
