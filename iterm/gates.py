@@ -25,6 +25,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
 
+# The one definition of "a horizontal rule line", borrowed rather than
+# re-declared so detect_state's anchor and swarm.session_working's anchor
+# cannot drift apart. swarm imports only os/re/typing, so there is no cycle.
+from swarm import _RULE_RE
+
 # The iTerm2 API renders blank cells as NUL (\x00) and uses non-breaking spaces
 # (\xa0) inside Claude's UI. Normalize both to plain spaces before matching, or
 # "Do you want to proceed?" arrives as "Do\x00you\x00want..." and nothing fires.
@@ -79,12 +84,52 @@ _WORKING_RE = re.compile(
 
 def detect_state(lines: List[str]) -> str:
     """Best-effort working vs idle from screen content. Only called when there
-    is no actionable prompt. Looks at the last several non-blank lines for an
-    active-spinner / interrupt signal; otherwise treats the session as idle.
+    is no actionable prompt.
+
+    Scans from the FIRST horizontal rule on screen (swarm._RULE_RE - the line
+    of nothing but "─" that Claude Code draws above its input row) to the
+    bottom, for an active-spinner / interrupt signal. No rule -> "idle".
     Deliberately conservative: unknown -> idle, so we never claim 'working'
-    for a session that's just sitting at a prompt."""
-    tail = [l for l in lines if l.strip()][-6:]
-    for l in tail:
+    for a session that's just sitting at a prompt.
+
+    This used to look at the last 6 non-blank lines, and that fixed window
+    was wrong in BOTH directions, because Claude Code renders an unbounded
+    number of rows on either side of the box:
+
+    - Completed-tool rows ABOVE the box carry elapsed time and token counts
+      ("⎿  Read 244 lines (2m 3s · ↓ 1.2k tokens)"), which _WORKING_RE
+      matches. On an idle session one of those sitting near the bottom of
+      the window made the screen read "working". detect_state's answer is
+      ANDed onto all three typing paths, so that session became permanently
+      undeliverable - no message, no timer - and _fire_extreme additionally
+      zeroed its dwell anchor on every such tick, so extreme's dwell could
+      never accumulate either.
+    - Task and agent rows BELOW the footer push the footer out of a 6-line
+      window entirely on a busy session, so a genuinely working screen read
+      "idle" and relay would type into a live turn.
+
+    Anchoring on the first rule fixes both: the anchor cannot be moved by
+    anything appended after it, and the scrollback above it (where the
+    completed-tool rows live) is out of scope. It is the same structural
+    anchor, and the same first-rule-not-last-rule reasoning, as
+    swarm.session_working - see that docstring for why anchoring too EARLY
+    (a stale rule up in scrollback, yielding a false "working") is the cheap
+    direction and anchoring too LATE is not.
+
+    _WORKING_RE stays the matcher rather than delegating to
+    session_working: the two catch different signals (spinner text and
+    token/elapsed counters here, the literal "esc to interrupt" footer
+    there), and detect_state is called on screens session_working was not
+    designed for.
+    """
+    anchor = None
+    for i, l in enumerate(lines):
+        if _RULE_RE.match(l.strip()):
+            anchor = i
+            break
+    if anchor is None:
+        return "idle"
+    for l in lines[anchor:]:
         if _WORKING_RE.search(l):
             return "working"
     return "idle"
