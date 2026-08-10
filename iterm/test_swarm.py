@@ -13,7 +13,7 @@ from swarm import (  # noqa: E402
     render_swarm, restore_candidates, clean_candidates, restore_plan_text,
     clean_plan_text, resume_prompt, wipe_candidates, wipe_blocker_warnings,
     wipe_plan_text, parse_pr_ref, resolve_pr_route, intervene_targets,
-    intervene_counts, intervene_tellable_count, is_shell_job,
+    intervene_counts, is_shell_job,
 )
 
 
@@ -896,15 +896,6 @@ def test_intervene_targets():
     ok &= check("counts working", w == 3)
     ok &= check("counts idle", i == 1)
     ok &= check("counts of nothing are zeros", intervene_counts([]) == (0, 0, 0))
-
-    # all_t is [s1(bff), s2(api), s3(web), s4("")] - two named, one
-    # unregistered (s4 has name="").
-    ok &= check("tellable counts only named (registered) targets",
-                intervene_tellable_count(all_t) == 3)
-    ok &= check("tellable count of nothing is zero",
-                intervene_tellable_count([]) == 0)
-    ok &= check("an all-unregistered target list is zero tellable",
-                intervene_tellable_count([_irow("s6", "", "")]) == 0)
 
     # relocated from watcher.py, which never had coverage for it
     ok &= check("a plain shell is a shell job", is_shell_job("zsh"))

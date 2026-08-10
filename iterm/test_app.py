@@ -1358,9 +1358,12 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
-        # --- TELL-only must never touch arm state - a pure broadcast is not
-        # a brake, and changing arm levels behind a TELL would be a bigger
-        # promise than this mode makes.
+        # --- TELL sends immediately and must never touch arm state - a
+        # pure broadcast is not a brake, and changing arm levels behind a
+        # TELL would be a bigger promise than this mode makes. ALL scope
+        # here reaches s0/s1/s2, all UNREGISTERED (StubWatcher.registry is
+        # {}) - TELL now types straight into the tab via send_keys(sid, ...)
+        # (session id, not swarm name), so it sends regardless.
         a.watcher.sessions["s2"].mode = "extreme"
         a.watcher.sessions["s2"].extreme_fires_left = 3
         a.watcher.sent.clear()
@@ -1372,19 +1375,20 @@ async def go():
             await pilot.press(ch)
         await pilot.press("enter")
         await pilot.pause()
-        chk("TELL sent no keystrokes", a.watcher.sent == [])
+        chk("TELL sends keystrokes to every target in scope (3 targets x "
+            "text + return)", len(a.watcher.sent) == 6)
         chk("TELL-only leaves extreme untouched (never in TELL-only mode)",
             a.watcher.sessions["s2"].mode == "extreme")
         await pilot.press("space")
         await pilot.pause()
         a.watcher.sessions["s2"].mode = "insane"      # reset for the blocks below
 
-        # --- TELL reaches unregistered targets but honestly reports none ---
-        # PROJECT scope can't reach an unregistered tab at all (targets ==
-        # []), which would make "TELL sent no keystrokes" trivially true
-        # regardless of the unregistered-skip logic - ALL scope gives it
-        # real (unregistered) targets to skip instead, and this block checks
-        # the report's WORDING, not just that nothing was sent.
+        # --- TELL against an UNREGISTERED target actually sends - this is
+        # the bug the operator hit. `messages.to_name` needs a swarm name;
+        # an unregistered tab has none, so the old queue-based TELL skipped
+        # it silently and reported "queued 0" - on the operator's machine,
+        # with ZERO registered sessions, that made TELL inert entirely. This
+        # must fail if the fix is reverted.
         a.watcher.sessions["s2"].state = "working"
         a.watcher.sent.clear()
         await pilot.press("exclamation_mark")
@@ -1395,15 +1399,20 @@ async def go():
             await pilot.press(ch)
         await pilot.press("enter")
         await pilot.pause()
-        chk("TELL still sent no keystrokes with real (unregistered) targets",
-            a.watcher.sent == [])
+        s2_sends = [s for s in a.watcher.sent if s[0] == "s2"]
+        chk("TELL against an unregistered target actually sends",
+            len(s2_sends) == 2)
+        chk("the sent text is the sanitised, labelled form, not raw 'hi'",
+            s2_sends[0][1] == "[relay msg from human] hi")
+        chk("a return follows the text - unlike STOP's bare ESC, a message "
+            "needs submitting", s2_sends[1][1] == "\r")
         report = a.query_one("#modal", Static).content
-        chk("the report honestly says 'queued 0' - unregistered has no mailbox",
-            "queued 0" in report)
-        chk("the report never claims delivery with the word 'told'",
-            "told" not in report)
-        chk("the report says queuing is not delivery",
-            "delivered on next idle prompt" in report)
+        chk("the report says 'told 3' - every unregistered target reached, "
+            "immediately", "told 3" in report)
+        chk("the report never says 'queued' - nothing is queued anymore",
+            "queued" not in report)
+        chk("the report never claims idle-prompt delivery timing",
+            "delivered on next idle prompt" not in report)
         await pilot.press("space")
         await pilot.pause()
 
@@ -1810,9 +1819,13 @@ async def go():
                 "mode=stop_tell" in dry_entries[0]["command"] and "s1" in
                 dry_entries[0]["command"])
 
-    # --- finding 3: the count line must show TELL's REAL reach, not just
-    # the raw session count - a registered/tellable split, at minimum in the
-    # TELL-capable modes.
+    # --- finding 3 (superseded): the count line used to show a separate
+    # "tellable" figure because an unregistered tab had no mailbox to queue
+    # to. TELL now reaches every target the same way (send_keys on the
+    # session id), so that subset always equals the total session count and
+    # the modal no longer renders it - checked here with a real mixed
+    # registered/unregistered roster, not just the pure-function tests in
+    # test_extreme.py.
     def _mixed_registration_sessions():
         return {
             "r1": SessionInfo("r1", title="w1", window_idx=0, tab_idx=0,
@@ -1835,21 +1848,30 @@ async def go():
         content = at.query_one("#modal", Static).content
         chk("ALL scope with 1 registered + 2 unregistered shows 3 sessions",
             "3 sessions" in content)
-        chk("but only 1 is actually tellable - shown separately, not folded "
-            "into 'sessions'",
-            "1 tellable" in content)
-        await pilot.press("escape")
+        chk("no separate 'tellable' figure - it can never differ from the "
+            "session count anymore", "tellable" not in content)
+        for ch in "hi":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("both the registered and the unregistered targets are actually "
+            "sent to",
+            {s[0] for s in at.watcher.sent} == {"r1", "u1", "u2"})
+        await pilot.press("space")
         await pilot.pause()
 
-    # --- finding 4: a queue-write failure must not be invisible, and the
-    # report must not overstate a queue write as a delivery.
-    def _queue_fail_sessions():
+    # --- finding 4 (superseded): a queue-write failure used to need
+    # surfacing because TELL wrote to the swarm message queue. It no longer
+    # touches that queue at all - db.queue_message is patched to explode on
+    # any call, and TELL must still succeed, proving no queue_message call
+    # remains on the TELL path (this must fail if the fix is reverted).
+    def _no_queue_sessions():
         return {
             "r1": SessionInfo("r1", title="w1", window_idx=0, tab_idx=0,
                               last_screen=["x"], state="working"),
         }
 
-    aq = _TestApp(_queue_fail_sessions(), dry_run=False)
+    aq = _TestApp(_no_queue_sessions(), dry_run=False)
     async with aq.run_test() as pilot:
         await pilot.pause()
         aq.watcher.registry["r1"] = {"name": "w1", "project": "demo", "role": "worker", "task_now": ""}
@@ -1857,7 +1879,7 @@ async def go():
         await pilot.pause()
         real_queue_message = appmod.swarmdb.queue_message
         appmod.swarmdb.queue_message = lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("db is locked"))
+            RuntimeError("queue_message must not be called on the TELL path"))
         try:
             await pilot.press("exclamation_mark")
             await pilot.press("tab")
@@ -1869,11 +1891,12 @@ async def go():
             await pilot.pause()
         finally:
             appmod.swarmdb.queue_message = real_queue_message
+        chk("TELL still sent the message with queue_message poisoned - it "
+            "is never called on this path",
+            aq.watcher.sent == [("r1", "[relay msg from human] hi"),
+                                ("r1", "\r")])
         content = aq.query_one("#modal", Static).content
-        chk("a queue-write failure is surfaced in the report, not only the "
-            "Log", "queue write FAILED" in content)
-        chk("queued count reflects the failure (0, not overstated)",
-            "queued 0" in content)
+        chk("the report says 'told 1'", "told 1" in content)
         await pilot.press("space")
         await pilot.pause()
 
@@ -1901,6 +1924,22 @@ async def go():
             await pilot.press(ch)
         await pilot.press("enter")
         await pilot.pause()
+
+        # --- STOP + TELL (the default mode, untouched here) sends both the
+        # ESC and the message - the working session gets the interrupt, the
+        # idle one is skipped for the ESC (nothing to interrupt) but still
+        # gets told, because TELL is not gated on working state.
+        r1_sends = [s for s in aa.watcher.sent if s[0] == "r1"]
+        r2_sends = [s for s in aa.watcher.sent if s[0] == "r2"]
+        chk("STOP + TELL sends the ESC to the working session",
+            r1_sends[0] == ("r1", "\x1b"))
+        chk("STOP + TELL also sends the TELL text and a return",
+            r1_sends[1:] == [("r1", "[relay msg from human] hi"),
+                             ("r1", "\r")])
+        chk("STOP + TELL skips the ESC on an idle session but still tells "
+            "it", r2_sends == [("r2", "[relay msg from human] hi"),
+                                ("r2", "\r")])
+
         entries = [e for e in auditmod.read_tail() if e.get("verdict") == "intervene"]
         chk("a real intervene writes an audit line", len(entries) >= 1)
         if entries:

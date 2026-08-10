@@ -702,29 +702,29 @@ def park_modal_text(buffer: str, scope_label: str, dir_scope: bool,
 INTERVENE_MODES = ("stop_tell", "stop", "tell")
 
 _INTERVENE_ROWS = (
-    ("stop_tell", "STOP + TELL", "ESC now · on idle"),
+    ("stop_tell", "STOP + TELL", "ESC now · text now"),
     ("stop",      "STOP",        "ESC now"),
-    ("tell",      "TELL",        "text on idle"),
+    ("tell",      "TELL",        "text now"),
 )
 
 
 def intervene_modal_text(buffer: str, mode: str, scope_label: str,
                          n: int, n_working: int, n_idle: int,
-                         n_tellable: int, width: int,
-                         dry_run: bool = False) -> str:
+                         width: int, dry_run: bool = False) -> str:
     """The operator's brake-and-broadcast modal.
 
-    The per-mode timing ("ESC now" vs "on idle") is rendered on screen and is
-    not decoration: an interrupt lands mid-turn while a message waits for a
-    ready prompt, and an operator who types "stop!" in TELL mode would
-    otherwise watch every agent finish the turn they wanted abandoned.
+    Both halves fire immediately: STOP sends a bare ESC, TELL types the
+    (sanitised) message straight into the tab and submits it - the same
+    send_keys(sid, ...) path, on a session id rather than a swarm name, so
+    every target is reachable whether or not it ever ran `relay join`.
+    Neither queues, so this row's timing is not decoration - it is what lets
+    the operator trust that ENTER acts now, not "eventually".
 
     The count line is scope-dependent and recomputed by the caller on every
-    scope change, so the blast radius is visible before ENTER. In a
-    TELL-capable mode it also shows `n_tellable` - the subset of `n` that is
-    actually registered and has a mailbox - because TELL's real reach can be
-    far smaller than the session count (an unregistered tab counts toward
-    `n` but is never told).
+    scope change, so the blast radius is visible before ENTER. It no longer
+    carries a separate "tellable" figure: every target in scope is reachable
+    by TELL now, so that subset was always equal to `n` and would never have
+    told the operator anything a second number could.
 
     `dry_run` marks the box itself, while composing, not only in the report
     after ENTER: a panic button must never look live when it is inert.
@@ -742,8 +742,6 @@ def intervene_modal_text(buffer: str, mode: str, scope_label: str,
     if mode in ("tell", "stop_tell") and not buffer.strip():
         body.append("      text required for this mode - TAB reaches STOP")
     count_line = f"      {n} sessions · {n_working} working · {n_idle} idle"
-    if mode in ("tell", "stop_tell"):
-        count_line += f" · {n_tellable} tellable"
     body += ["", f"SCOPE ‹ {scope_label} ›", count_line]
     if dry_run:
         body += ["", "DRY RUN - relay mutates nothing, this is a preview"]
@@ -2986,11 +2984,10 @@ class RelayApp(App):
         targets = swarmlogic.intervene_targets(
             rows, p["scope"], sid, self._own_sid or "")
         n, w, i = swarmlogic.intervene_counts(targets)
-        n_tellable = swarmlogic.intervene_tellable_count(targets)
         wgt = self.query_one("#modal", Static)
         wgt.update(intervene_modal_text(
             p["buf"], p["mode"], self._intervene_scope_label(p["scope"], rows),
-            n, w, i, n_tellable, self.size.width, dry_run=self.dry_run))
+            n, w, i, self.size.width, dry_run=self.dry_run))
         wgt.display = True
 
     def _intervene_close(self) -> None:
@@ -3028,11 +3025,14 @@ class RelayApp(App):
         return ",".join(names) if names else "(none)"
 
     def _intervene_execute(self, mode, scope, targets, body) -> None:
-        """Brake and/or broadcast. The interrupt is immediate; a TELL only
-        QUEUES a message - it is delivered when the target next reaches a
-        ready prompt, and not at all while relay is paused. Both halves are
-        reported, because an operator who cannot tell which half landed is
-        worse off than one who was refused."""
+        """Brake and/or broadcast. Both halves are immediate: STOP sends a
+        bare ESC, TELL types the sanitised message straight into the tab and
+        submits it - the same send_keys(sid, ...) mechanism, on the session
+        id, that STOP and the manual 1/2/3/ENTER sends already use. There is
+        no queue and no idle wait on this path, so it works on a tab that
+        never ran `relay join`. Both halves are reported, because an
+        operator who cannot tell which half landed is worse off than one who
+        was refused."""
         self._intervene_calls.append((mode, scope, targets, body))
         if self.dry_run:
             audit.record(
@@ -3046,7 +3046,6 @@ class RelayApp(App):
             return
 
         interrupted = skipped = told = disarmed = 0
-        queue_failed = False
         if mode in ("stop", "stop_tell"):
             for t in targets:
                 if not t["working"]:
@@ -3078,17 +3077,23 @@ class RelayApp(App):
                         disarmed += 1
 
         if mode in ("tell", "stop_tell") and body:
-            try:
-                conn = self._swarm_db_conn()
-                for t in targets:
-                    if not t["name"]:
-                        continue          # unregistered: no mailbox to queue to
-                    swarmdb.queue_message(conn, "human", t["name"], body,
-                                          t["project"], kind="info")
-                    told += 1
-            except Exception as e:
-                self.query_one(Log).write_line(f"intervene: queue failed: {e}")
-                queue_failed = True
+            # Typed straight into the tab, immediately - the same mechanism
+            # STOP uses for its ESC, and the same one behind the manual
+            # 1/2/3/ENTER sends. send_keys(sid, ...) takes a session id, not
+            # a swarm name, so this reaches every target whether or not it
+            # ever ran `relay join`. delivery_text sanitises the body
+            # (flattens newlines, strips non-printable bytes, bounds the
+            # length, labels it) - typing the raw operator text unsanitised
+            # would let a stray ESC in the body be interpreted by the
+            # terminal instead of typed. Unlike STOP's bare ESC, a message
+            # needs submitting, so a return follows as a separate send.
+            text = swarmlogic.delivery_text("human", body, kind="info")
+            for t in targets:
+                self.run_worker(self.watcher.send_keys(t["sid"], text),
+                                exclusive=False)
+                self.run_worker(self.watcher.send_keys(t["sid"], "\r"),
+                                exclusive=False)
+                told += 1
 
         audit.record(
             "intervene", self._intervene_audit_session(scope, targets),
@@ -3100,15 +3105,11 @@ class RelayApp(App):
         if mode in ("stop", "stop_tell"):
             lines.append(f"interrupted {interrupted} · skipped {skipped} (idle)")
         if mode in ("tell", "stop_tell"):
-            # "queued", never "told": a queue write is not a delivery. It
-            # waits for the target's next ready prompt, and while relay is
-            # paused it cannot be delivered at all until resumed.
-            line = f"queued {told} (delivered on next idle prompt)"
-            if self.watcher and self.watcher.paused:
-                line += " - relay PAUSED, held until resumed"
-            lines.append(line)
-            if queue_failed:
-                lines.append("queue write FAILED - some messages may be missing")
+            # "told", not "queued": the text is typed straight into the tab
+            # right here, the same fire-and-forget send_keys STOP uses for
+            # its ESC - nothing is written to a queue and nothing waits for
+            # an idle prompt, so pause state does not gate it either.
+            lines.append(f"told {told}")
         if disarmed:
             lines.append(f"extreme disarmed on {disarmed}")
         self._modal_show("INTERVENE", lines or ["nothing to do"])

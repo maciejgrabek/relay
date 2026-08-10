@@ -117,16 +117,17 @@ commit.
 - **STOP** sends a bare `ESC` right away to every targeted session that is
   still working - interrupts mid-turn. Idle targets are skipped; there's
   nothing to interrupt.
-- **TELL** queues a message for each targeted session that is registered,
-  delivered the next time that session reaches a ready prompt. It does not
-  interrupt. An unregistered tab has no mailbox to queue into, so it is not
-  told.
-- **STOP + TELL** does both, each with its own targeting above: the `ESC`
-  lands now, the message waits for idle.
+- **TELL** types the message straight into every targeted session and hits
+  Enter, right away - the same mechanism `STOP`'s `ESC` uses, and the same
+  one behind relay's manual `1`/`2`/`3`/`ENTER` sends. It works on any tab,
+  registered or not: it's keyed on the session, not a swarm name. It does
+  not interrupt - a working session just gets the text queued at its own
+  input, same as if you'd typed it yourself.
+- **STOP + TELL** does both, in the same pass: the `ESC` first (on working
+  targets), then the message and its return.
 
-The timing is not interchangeable: typing "stop, do X instead" as TELL on a
-working session means X arrives only once that session finishes the turn you
-wanted it to abandon.
+Nothing here is queued, and nothing waits for a session to go idle - both
+modes act the moment you press `ENTER` on the modal.
 
 `TAB` cycles mode, `←`/`→` cycles scope through selected / project / all, and
 the counts update on every scope change so the blast radius is visible before
