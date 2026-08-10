@@ -1,0 +1,12 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: working, agent/task rows BELOW the footer
+     ◻ Task 8: Plan preview (BuildAsync)
+      … +5 pending, 3 completed
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks · ← for agents · ↓ to manage
+  ⏺ main
+  ◯ general-purpose  Task 4 implementer                                                                                                                                                        1m 13s · ↓ 58.1k tokens

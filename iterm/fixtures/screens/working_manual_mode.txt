@@ -1,0 +1,12 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: working, manual mode - carries neither legacy marker
+⏺ User answered Claude's questions:
+  ⎿  · What is 'the score' the visitor sees? → Two numbers side by side: AI Visibility % + Tech Score /100 (Recommended)
+     · What does the emailed result do to convert? → Email links to a permanent public result page with a pre-filled signup (Recommended)
+✢ Razzle-dazzling… (3m 21s · ↓ 10.7k tokens · thinking some more with high effort)
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt · ← for agents

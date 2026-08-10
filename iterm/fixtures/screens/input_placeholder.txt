@@ -1,0 +1,12 @@
+# RECONSTRUCTED, not captured - the only fixture here that is not verbatim.
+# The input row below was observed live on 2026-08-10 in a session with queued
+# messages; the surrounding rows are copied from working_accept_edits.txt.
+# Replace with a real capture when this state is next seen.
+# state: working, box shows a PLACEHOLDER not a draft
+⏺ Running 1 shell command…
+  ⎿  $ echo hello
+· Recombobulating… (13s · ↓ 393 tokens)
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages
+────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents

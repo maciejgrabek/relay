@@ -1,0 +1,14 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: working, accept-edits mode, empty box
+     import asyncio, os, sys, json, time
+     sys.path.insert(0, "/Users/maciej/Work/relay/iterm")
+     import iterm2, swarm
+     from watcher import _extract_lines, reconstruct_line…
+✽ Clauding… (35s · ↓ 1.8k tokens)
+                                                                                                                                                                                                     ● high · /effort
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents

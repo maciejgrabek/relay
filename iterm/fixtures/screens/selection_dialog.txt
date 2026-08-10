@@ -1,0 +1,12 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: a selection dialog - typing would navigate a menu
+  4. [ ] Nothing - full trust, audit only
+  Delegated operator gets everything you get. Security comes from per-person tokens, IP allowlist, short TTL, revocation, and the existing ApiTokenUsage audit trail. Fastest to ship; the token is the whole
+  boundary.
+  5. [ ] Type something
+     Submit
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel

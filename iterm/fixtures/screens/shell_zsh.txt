@@ -1,0 +1,12 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: a zsh shell, not Claude Code
+Resume this session with:
+claude --resume bc0ee33d-0cd7-424c-8e63-61481d204deb
+~/Work/dragen took 1d23h8m9s
+❯ claude
+Resume this session with:
+claude --resume b441afe5-558c-40de-96f7-ea7bcabbac69
+~/Work/dragen took 1d9h5m51s
+❯

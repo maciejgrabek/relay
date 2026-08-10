@@ -1,0 +1,14 @@
+# Captured from a live Claude Code session on 2026-08-10 through relay's
+# own read path (_extract_lines + reconstruct_lines). Lines below the
+# header are the screen tail verbatim. Refresh when the UI changes.
+# state: idle, accept-edits mode, empty box
+  - Whether the input row is ❯ between two rules when idle too, or a different shape entirely
+  - Where it sits relative to the bottom, since prompt_line_empty only scans the last 6 non-blank lines
+  - What the footer says idle vs working, because claude_prompt_ready currently matches ⏵⏵ which appears in both
+  With both frames in hand I can write a regex that distinguishes them honestly, rather than swapping one blind spot for another - which is the thing that would make extreme mode look fixed while still never
+  firing.
+✻ Worked for 56s
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
