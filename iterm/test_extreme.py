@@ -792,6 +792,155 @@ def test_park_wiring():
         "_park" in src.split("def action_dismiss_view")[1].split("def ")[0])
 
 
+_SCREEN_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "screens")
+
+
+def screen(name):
+    """A captured screen as the watcher hands it to a predicate: non-blank
+    lines, '#' header stripped. Same loader as test_swarm.load_screen."""
+    with open(os.path.join(_SCREEN_DIR, name + ".txt")) as f:
+        return [l for l in f.read().splitlines()
+                if l.strip() and not l.startswith("#")]
+
+
+def test_extreme_push_gate_now_reachable():
+    """Extreme's push has never fired on the shipping Claude Code UI, because
+    prompt_line_empty could not find the input row (_INPUT_BOX_RE matched only
+    the legacy `│ >` box). Pin that the gates it depends on now pass for a real
+    idle capture and still refuse a real draft."""
+    import swarm
+
+    chk("idle screen passes the extreme push gate",
+        swarm.prompt_line_empty(screen("idle_accept_edits")) is True)
+    chk("idle screen is ready too (the push's other screen gate)",
+        swarm.claude_prompt_ready(screen("idle_accept_edits")) is True)
+
+    # The task brief asked for draft_in_box here. Reading the real capture
+    # showed that fixture is NOT a live draft: the half-typed-looking sentence
+    # is Claude Code's echo of a message the operator already submitted, and it
+    # sits in scrollback ABOVE the live bracketed row, which shows the
+    # placeholder. live_draft carries the genuine draft, so the draft assertion
+    # belongs on it. Both are asserted, each for what it actually is.
+    chk("a live draft still blocks the extreme push",
+        swarm.prompt_line_empty(screen("live_draft")) is False)
+    chk("the draft screen is otherwise ready - prompt_line_empty is the only "
+        "thing holding the push back",
+        swarm.claude_prompt_ready(screen("live_draft")) is True)
+    chk("a queued-message echo in scrollback is not a draft",
+        swarm.prompt_line_empty(screen("draft_in_box")) is True)
+    chk("that screen is working, so the push is refused regardless",
+        swarm.claude_prompt_ready(screen("draft_in_box")) is False)
+    chk("a placeholder in the live row is not a draft either",
+        swarm.prompt_line_empty(screen("input_placeholder")) is True)
+
+    chk("a working session is not ready",
+        swarm.claude_prompt_ready(screen("working_accept_edits")) is False)
+    chk("agent/task rows below the footer do not break readiness - the "
+        "session is refused for working, not for its trailing rows",
+        swarm.claude_prompt_ready(screen("working_with_agent_rows")) is False
+        and swarm.session_working(screen("working_with_agent_rows")) is True)
+    chk("a manual-mode session is no longer invisible",
+        swarm.session_working(screen("working_manual_mode")) is True)
+
+    # Finding 3's actual repair. Relay never delivered into a manual-mode
+    # session because its footer carries NEITHER legacy marker, so readiness
+    # failed working and idle alike. This is the same real capture with the
+    # working clause dropped from the footer and the spinner row removed -
+    # that is what an idle manual-mode screen looks like, and it must read
+    # ready now.
+    idle_manual = [l.replace(" esc to interrupt ·", "")
+                   for l in screen("working_manual_mode")
+                   if "Razzle-dazzling" not in l]
+    chk("an IDLE manual-mode screen is ready (finding 3 repaired)",
+        swarm.claude_prompt_ready(idle_manual) is True)
+
+    chk("a selection dialog is never ready",
+        swarm.claude_prompt_ready(screen("selection_dialog")) is False)
+    # Refused by condition 1 (that capture has no bracketed row at all), so
+    # this pins the outcome, not the shell-suffix veto - test_swarm.py owns
+    # that, and the authoritative guard is is_shell_job, covered by
+    # test_extreme_gates above.
+    chk("a shell screen is never ready",
+        swarm.claude_prompt_ready(screen("shell_zsh")) is False)
+
+
+def _dialog_over_a_live_box():
+    """A real idle capture with a dialog's navigation footer rendered BELOW its
+    input row. selection_dialog.txt has no bracketed row at all, so on that
+    fixture condition 1 refuses first and the dialog check is not what saves
+    us - this screen is the one where the dialog check is the only refusal."""
+    return screen("idle_accept_edits") + [
+        "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+
+
+def test_consumers_on_real_captures():
+    """The checks above are the gates; these are the consumers. _fire_extreme
+    and _deliver both read info.last_screen, so drive them with the real
+    captures rather than the hand-written READY/DRAFT tails at the top of this
+    file - those tails are the legacy `│ >` box and would keep passing even if
+    the modern `❯` row stopped matching."""
+    W, w = _mk_watcher()
+
+    fs = FakeSession()
+    info = _extreme_info(W, fs)
+    info.last_screen = screen("idle_accept_edits")
+    info.job = "node"
+    w.sessions["x1"] = info
+    asyncio.run(w._fire_extreme(info))
+    chk("real idle capture: the extreme push fires (it never has on this UI)",
+        fs.sent == ["keep going", "\r"])
+
+    fs2 = FakeSession()
+    i2 = _extreme_info(W, fs2)
+    i2.last_screen = screen("live_draft")
+    i2.job = "node"
+    asyncio.run(w._fire_extreme(i2))
+    chk("real draft capture: the push is refused and the budget kept",
+        fs2.sent == [] and i2.extreme_fires_left == 2)
+
+    fs3 = FakeSession()
+    i3 = _extreme_info(W, fs3)
+    i3.last_screen = _dialog_over_a_live_box()
+    i3.job = "node"
+    asyncio.run(w._fire_extreme(i3))
+    chk("a dialog rendered over a live input box: the push never types into "
+        "a menu", fs3.sent == [])
+
+    # _deliver, the path finding 3 killed outright. Manual mode, idle, one
+    # queued message: it must now arrive.
+    fs4 = FakeSession()
+    i4 = W.SessionInfo("d1", title="d", _iterm_session=fs4, mode="insane",
+                       state="idle")
+    i4.job = "node"
+    i4.last_screen = [l.replace(" esc to interrupt ·", "")
+                      for l in screen("working_manual_mode")
+                      if "Razzle-dazzling" not in l]
+    w.sessions["d1"] = i4
+    w.registry["d1"] = {"name": "worker-d"}
+    w._swarm_conn = lambda: None
+    marked = []
+    _orig_undelivered = W.swarmdb.undelivered
+    _orig_mark = W.swarmdb.mark_delivered
+    W.swarmdb.undelivered = lambda conn, name: [
+        {"id": 7, "from_name": "boss", "body": "ping", "kind": "msg"}]
+    W.swarmdb.mark_delivered = lambda conn, mid, now=None: marked.append(mid)
+    try:
+        asyncio.run(w._deliver(i4))
+    finally:
+        W.swarmdb.undelivered = _orig_undelivered
+        W.swarmdb.mark_delivered = _orig_mark
+        del w.registry["d1"]
+    chk("idle manual-mode session finally receives its queued message",
+        fs4.sent[:1] == [swarm_batch_text()] and fs4.sent[-1] == "\r"
+        and marked == [7])
+
+
+def swarm_batch_text():
+    import swarm
+    return swarm.batch_delivery_text(
+        [{"id": 7, "from_name": "boss", "body": "ping", "kind": "msg"}])
+
+
 def test_statusbar_label():
     import statusbar
     chk("extreme circle is purple",
@@ -821,5 +970,7 @@ if __name__ == "__main__":
     test_intervene_wiring()
     test_park_wiring()
     test_statusbar_label()
+    test_extreme_push_gate_now_reachable()
+    test_consumers_on_real_captures()
     print("ALL PASSED" if ok else "FAILURES")
     sys.exit(0 if ok else 1)
