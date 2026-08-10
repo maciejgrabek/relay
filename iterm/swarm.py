@@ -425,6 +425,7 @@ def prompt_line_empty(lines: List[str]) -> bool:
 
 
 _WORKING_MARKER = "esc to interrupt"
+_RULE_RE = re.compile(r"^─+$")
 
 
 def session_working(lines) -> bool:
@@ -442,11 +443,37 @@ def session_working(lines) -> bool:
     absent entirely in manual mode (hence a session relay would never deliver
     to at all).
 
-    Scanned across the recent tail rather than one line, because Claude Code
-    appends agent and task rows BELOW the footer and their number is not
-    bounded.
+    Claude Code appends an unbounded number of agent and task rows BELOW the
+    footer, so a fixed-size tail (e.g. "the last 8 lines") can scroll the
+    footer out of range on a busy session running several concurrent
+    subagents - and that is the UNSAFE direction: claude_prompt_ready treats
+    session_working() == False as one of its signals that a screen is idle
+    and safe to type into, so losing the footer reads a working session as
+    idle. Fixture round 1 caught exactly this in working_with_agent_rows.txt.
+
+    So this is anchored on the screen's own structure instead of a line
+    count: every captured footer sits directly below a horizontal rule (a
+    line of nothing but "─", the same glyph the input box's border uses).
+    That rule's position moves with however many agent rows trail below it,
+    so scanning from the LAST such rule to the end of the screen always
+    reaches the footer regardless of how much is appended after it. It also
+    means a stray "esc to interrupt" sitting in ordinary scrollback ABOVE the
+    input box - left over from a previous turn - no longer counts, since
+    that text falls before the anchor.
+
+    No rule line found -> False. That is safe here too: claude_prompt_ready
+    independently requires visible input-box chrome before it will call a
+    screen ready, so this predicate's return value is not load-bearing when
+    there is no rule-bracketed input box at all (e.g. a bare shell prompt).
     """
-    return any(_WORKING_MARKER in l for l in list(lines)[-8:])
+    lines = list(lines)
+    anchor = None
+    for i, l in enumerate(lines):
+        if _RULE_RE.match(l.strip()):
+            anchor = i
+    if anchor is None:
+        return False
+    return any(_WORKING_MARKER in l for l in lines[anchor:])
 
 
 # --- shell-job detection (relocated from watcher.py) ---------------------------

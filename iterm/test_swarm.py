@@ -882,6 +882,19 @@ def test_session_working():
     ok &= check("no fixture is missing",
                 len(list(_SCREEN_DIR.glob('*.txt'))) == len(expected))
     ok &= check("empty screen is not working", session_working([]) is False)
+
+    # Fix round 1: Claude Code appends an unbounded number of agent/task rows
+    # below the footer. A fixed-size tail window can scroll the footer out of
+    # range on a busy session running several concurrent subagents - the
+    # unsafe direction, since claude_prompt_ready treats
+    # session_working() == False as one signal that a screen is idle and
+    # safe to type into. This must stay True no matter how many rows trail
+    # the footer.
+    swarmed = load_screen("working_with_agent_rows") + [
+        f"  ◯ worker-{i}  doing things" for i in range(12)
+    ]
+    ok &= check("footer stays visible behind 12+ trailing agent rows",
+                session_working(swarmed) is True)
     return ok
 
 
