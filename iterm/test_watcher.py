@@ -285,6 +285,29 @@ _READY_SCREEN = [
     "  ? for shortcuts",
 ]
 
+# Two screens that carry a perfectly good bracketed input row and are still
+# NOT safe to type into. Both exist to pin the readiness call itself on the
+# paths that inject arbitrary text: `info.state` is relay's own coarse
+# tracking of a session and cannot see either of these, so a state=="idle"
+# check alone lets relay type into a live turn (where the text lands
+# mid-stream) or into a chooser (where the keystrokes NAVIGATE the menu and
+# pick an entry). Bare rules, not corner boxes: session_working anchors on
+# the first "^─+$" line, so a corner-drawn box would make the working screen
+# read as idle and the test vacuous.
+_WORKING_SCREEN = [
+    "─" * 40,
+    "❯",
+    "─" * 40,
+    "  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents",
+]
+
+_DIALOG_SCREEN = [
+    "─" * 40,
+    "❯",
+    "─" * 40,
+    "  Enter to select · ↑/↓ to navigate · Esc to cancel",
+]
+
 
 async def deliver_tests():
     """Drive Watcher._deliver directly against a fake session + monkeypatched
@@ -435,6 +458,57 @@ async def deliver_tests():
     info7.job = "node"
     await w._deliver(info7)
     chk("live claude job: still delivers", len(fs7.sent) == 2)
+
+    # SCREEN READINESS (final branch review, Finding 2). _deliver's screen gate
+    # was entirely unpinned: deleting `swarm.claude_prompt_ready(...)` from its
+    # condition left every suite green, so the branch's headline property -
+    # relay no longer types into a working session or a chooser - was unproven
+    # on the path that sends arbitrary operator text. `info.state` is relay's
+    # own coarse tracking and says "idle" on both screens below; only the
+    # screen knows better, so these two cases isolate the readiness call.
+    #
+    # First, prove the screens are unready for the REASON claimed, so a future
+    # edit cannot make these pass vacuously (e.g. by breaking the input-row
+    # match, which would make BOTH screens unready for the wrong reason).
+    chk("working screen: has a real bracketed input row",
+        S._bracketed_input_rows(_WORKING_SCREEN) != [])
+    chk("working screen: is unready because it is mid-turn",
+        S.session_working(_WORKING_SCREEN) is True
+        and S.claude_prompt_ready(_WORKING_SCREEN) is False)
+    chk("dialog screen: has a real bracketed input row",
+        S._bracketed_input_rows(_DIALOG_SCREEN) != [])
+    chk("dialog screen: is unready because it is a chooser",
+        S.selection_dialog(_DIALOG_SCREEN) is True
+        and S.session_working(_DIALOG_SCREEN) is False
+        and S.claude_prompt_ready(_DIALOG_SCREEN) is False)
+
+    for screen, sid, why in ((_WORKING_SCREEN, "sid8", "a working screen"),
+                             (_DIALOG_SCREEN, "sid9", "a selection dialog")):
+        qn = {"n": 0}
+
+        def _counting(conn, name=None, _qn=qn):
+            _qn["n"] += 1
+            return [{"id": 31, "from_name": "coord", "body": "do the thing"}]
+        W.swarmdb.undelivered = _counting
+        infoS, fsS = _mk(w, sid, "worker-" + sid)
+        infoS.job = "node"
+        infoS.last_screen = list(screen)
+        await w._deliver(infoS)
+        chk(f"{why} with state=idle: nothing typed", fsS.sent == [])
+        chk(f"{why} with state=idle: no DB query", qn["n"] == 0)
+        chk(f"{why} with state=idle: not marked delivered",
+            31 not in delivered)
+
+    # Control: the same session, same job, same queue - only the screen
+    # changes - and delivery happens. The gate is the screen, not a blanket
+    # refusal that would make the two cases above pass for free.
+    W.swarmdb.undelivered = lambda conn, name=None: [
+        {"id": 32, "from_name": "coord", "body": "do the thing"}]
+    infoR, fsR = _mk(w, "sid10", "worker-sid10")
+    infoR.job = "node"
+    infoR.last_screen = list(_READY_SCREEN)
+    await w._deliver(infoR)
+    chk("ready screen, same job and queue: still delivers", len(fsR.sent) == 2)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
@@ -1620,6 +1694,47 @@ async def timer_tests():
         w10.sessions["s10"] = info10
         chk("live claude job: timer still fires",
             await w10._fire_timers(info10) is True)
+
+        # SCREEN READINESS (final branch review, Finding 2). Deleting
+        # `swarm.claude_prompt_ready(...)` from _fire_timers' `ready` left
+        # every suite green: the idle-mode branch was pinned only against
+        # info.state, which reads "idle" on both screens below. An idle-mode
+        # timer exists precisely so its payload lands at a free prompt, and
+        # both of these would land it in a live turn or in a chooser, where
+        # the payload's characters navigate a menu and pick an entry.
+        import swarm as S
+        for sid, screen, why in (("s11", _WORKING_SCREEN, "a working screen"),
+                                 ("s12", _DIALOG_SCREEN, "a selection dialog")):
+            D.add_timer(conn, iterm_session_id=sid, label="w", interval_min=1,
+                        payload="ship it", mode="idle", now=fresh)
+            wS = Watcher(connection=None, dry_run=False, cfg=C.Config())
+            fsS = FakeSession()
+            infoS = SessionInfo(sid, title="w", _iterm_session=fsS,
+                                mode="safe", state="idle", job="node")
+            infoS.last_screen = list(screen)
+            wS.sessions[sid] = infoS
+            firedS = await wS._fire_timers(infoS)
+            chk(f"idle-mode timer: {why} with state=idle never fires",
+                fsS.sent == [] and firedS is False)
+            chk(f"idle-mode timer: {why} does not consume the timer",
+                D.list_timers(conn, sid)[0]["fire_count"] == 0)
+            chk(f"{why} is genuinely unready (not a vacuous screen)",
+                S._bracketed_input_rows(screen) != []
+                and S.claude_prompt_ready(screen) is False)
+
+        # Control: same timer shape and state, a READY screen -> it fires. The
+        # screen is the gate, not something else refusing for free.
+        D.add_timer(conn, iterm_session_id="s13", label="w", interval_min=1,
+                    payload="ship it", mode="idle", now=fresh)
+        w13 = Watcher(connection=None, dry_run=False, cfg=C.Config())
+        fs13 = FakeSession()
+        info13 = SessionInfo("s13", title="w", _iterm_session=fs13,
+                             mode="safe", state="idle", job="node")
+        info13.last_screen = list(_READY_SCREEN)
+        w13.sessions["s13"] = info13
+        chk("idle-mode timer: a ready screen still fires",
+            await w13._fire_timers(info13) is True
+            and any("ship it" in s for s in fs13.sent))
 
         # _load_timers_on_start: the restore gate. Default config
         # (autostart=false) deactivates every saved timer and flags present

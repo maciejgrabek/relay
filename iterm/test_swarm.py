@@ -1116,8 +1116,58 @@ def test_bracket_line():
                 swarm._bracket_line("╰──╯") is True)
     ok &= check("a bare rule is a bracket",
                 swarm._bracket_line("─────") is True)
-    print()
-    print("ALL PASS" if ok else "FAILURES ABOVE")
+
+    # _bracketed_input_rows requires chrome ABOVE and BELOW the input row, and
+    # the spec calls that rule load-bearing. Either half could be deleted with
+    # every suite still green, so pin both halves independently.
+    #
+    # ABOVE-only is the safety regression: a live shell prompt with Claude's
+    # last rule still painted above it (the operator quit Claude mid-screen)
+    # would become a "bracketed input row", and relay would type a message
+    # body plus a bare Enter into that shell - the body executes as a command.
+    above_only = [
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+        "─" * 60,
+        "❯ ",
+        "~/Work/relay on main",
+    ]
+    ok &= check(
+        "a rule above but ordinary text below is NOT a bracketed input row",
+        swarm._bracketed_input_rows(above_only) == [])
+    ok &= check(
+        "...so a live shell prompt under a lingering rule is never ready",
+        claude_prompt_ready(above_only) is False)
+
+    # BELOW-only is the other half: an _INPUT_BOX_RE match with ordinary text
+    # above it is a scrollback echo of an already-submitted message or a shell
+    # prompt, never the live row (see prompt_line_empty's docstring).
+    below_only = [
+        "~/Work/relay on main",
+        "❯ ",
+        "─" * 60,
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+    ]
+    ok &= check(
+        "ordinary text above but a rule below is NOT a bracketed input row",
+        swarm._bracketed_input_rows(below_only) == [])
+    ok &= check(
+        "...so that screen is never ready either",
+        claude_prompt_ready(below_only) is False)
+
+    # Control: the same row with chrome on BOTH sides is the live row. Without
+    # this, both assertions above would also pass if the function returned []
+    # for everything.
+    both_sides = [
+        "~/Work/relay on main",
+        "─" * 60,
+        "❯ ",
+        "─" * 60,
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+    ]
+    ok &= check("chrome on both sides IS a bracketed input row",
+                swarm._bracketed_input_rows(both_sides) == [2])
+    ok &= check("...and that screen is ready",
+                claude_prompt_ready(both_sides) is True)
     return ok
 
 
@@ -1333,6 +1383,130 @@ def test_selection_dialog_and_readiness():
         "...and that session is still ready - scrollback above the input box "
         "can never veto readiness",
         claude_prompt_ready(src + idle) is True)
+
+    # Fix round 5 (final branch review, Important): round 4's glyph exclusion
+    # was aimed at the wrong thing, and the proof was checked in with it.
+    # _CLAUDE_ROW_GLYPHS shipped WITHOUT "◻" and "…" while both sat on lines
+    # 5-6 of this branch's own fixture, working_with_agent_rows.txt. Pin the
+    # two rows verbatim from that file, so the fixture and the glyph list can
+    # never drift apart again silently.
+    agent_rows = load_screen("working_with_agent_rows")
+    fixture_rows = [l for l in agent_rows
+                    if l.strip()[:1] in ("◻", "…")]
+    ok &= check("the fixture really does carry a ◻ row and a … row",
+                len(fixture_rows) == 2)
+    for row in fixture_rows:
+        # " #" appended on purpose: the two rows as captured end in ")" and
+        # "d", so they could never trip the suffix test and asserting on them
+        # verbatim would be vacuous. With a sigil on the end, the ONLY thing
+        # that can stop them reading as a live shell prompt is their leading
+        # glyph being in _CLAUDE_ROW_GLYPHS.
+        ok &= check(
+            f"a row copied out of working_with_agent_rows.txt "
+            f"({row.strip()[:1]!r}) is not a shell prompt even ending in '#'",
+            swarm._shell_prompt_tail(row + " #") is False)
+    ok &= check("◻ is in the Claude row-glyph list",
+                "◻" in swarm._CLAUDE_ROW_GLYPHS)
+    ok &= check("… is in the Claude row-glyph list",
+                "…" in swarm._CLAUDE_ROW_GLYPHS)
+
+    # ...and the shapes the reviewer measured False on the shipped code.
+    for row, why in (
+        ("     ◻ Task 9: Raise coverage to 90%", "a ◻ task row ending in '%'"),
+        ("      … +5 pending, 3 completed #", "a … elision row ending in '#'"),
+    ):
+        ok &= check(f"{why} below the footer stays ready",
+                    claude_prompt_ready(idle + [row]) is True)
+
+    # The case NO glyph list can ever reach: genuine Claude Code chrome that
+    # starts with an ordinary letter and ends in a sigil. This is why the
+    # suffix test is confined to the bottom-most line and why a sigil glued
+    # to a digit is a unit rather than a prompt.
+    ok &= check(
+        "the auto-compact footer ending in '%' does not stall a session - no "
+        "glyph list could ever have excluded it",
+        claude_prompt_ready(idle + ["Context left until auto-compact: 23%"])
+        is True)
+    ok &= check("a sigil glued to a digit is a unit, not a prompt",
+                swarm._shell_prompt_tail("Context left: 23%") is False)
+    ok &= check("a sigil after a space is still a prompt",
+                swarm._shell_prompt_tail("~/work/relay %") is True)
+
+    # The narrowing itself: the suffix test applies to the BOTTOM-MOST line
+    # only. Claude Code wraps long tool output, and a wrapped continuation row
+    # carries no leading glyph at all - it is plain indented text that can end
+    # in any character the file it printed happens to end in. Applying the
+    # suffix test to every row below the box made each of those a candidate
+    # for a permanent silent stall, and no glyph list can reach them because
+    # they have no glyph. A live shell prompt is never in this position: it is
+    # always the bottom-most line.
+    wrapped_tool_output = idle + [
+        "  ⎿  Read src/app.tsx (214 lines)",
+        '     export default function App() { return <div className="root">',
+        "  ⏺ Done",
+    ]
+    ok &= check(
+        "a wrapped tool-output row ending in '>' ABOVE another row does not "
+        "stall the session - only the bottom-most line is eligible",
+        claude_prompt_ready(wrapped_tool_output) is True)
+    cost_line_above_footer = idle + [
+        "  Total cost: $",
+        "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+    ]
+    ok &= check(
+        "a /cost line ending in '$' ABOVE the footer does not stall the "
+        "session either",
+        claude_prompt_ready(cost_line_above_footer) is True)
+
+    # The bottom-most-line rule must not weaken the shape it exists to catch:
+    # a dead Claude frame with a LIVE shell prompt drawn under it. The shell
+    # prompt is always the bottom-most line in that shape, so every prompt
+    # theme below still vetoes - including two-line prompts, where Claude's
+    # rows sit above the sigil line rather than below it.
+    for extra, why in (
+        (["~/work/relay $"], "bash '$'"),
+        (["~/work/relay %"], "zsh '%'"),
+        (["~/work/relay", "› "], "a starship two-line '›' prompt"),
+        (["~/work/relay", "❯"], "a two-line pure '❯' prompt"),
+        (["~/work/relay #"], "root '#'"),
+        (["~/work/relay ➜"], "oh-my-zsh '➜'"),
+    ):
+        ok &= check(f"{why} as the bottom-most line still vetoes readiness",
+                    claude_prompt_ready(idle + extra) is False)
+
+    # A Claude row ABOVE a live shell prompt must not rescue the shell: the
+    # rule reads the LAST line, and that is still the prompt.
+    ok &= check(
+        "a Claude task row above a live shell prompt does not rescue it",
+        claude_prompt_ready(
+            idle + ["  ⏺ Wrote <html>", "~/work/relay $"]) is False)
+
+    # Fix round 4 (defect review, Minor): selection_dialog requires TWO of the
+    # three markers. One is deliberately not enough - "to navigate" alone shows
+    # up in ordinary output, and a single-marker rule would veto that session's
+    # messages, timers and pushes forever. Pin the threshold from BOTH sides.
+    ok &= check(
+        "the marker list is exactly the three the spec names",
+        swarm._DIALOG_MARKERS == ("Enter to select", "to navigate",
+                                  "Esc to cancel"))
+    for one, why in (
+        (["  Use ↑/↓ to navigate the diff hunks"], "'to navigate' alone"),
+        (["  Press Enter to select a file from the list above"],
+         "'Enter to select' alone"),
+        (["  Esc to cancel is printed by the wizard, not by a menu"],
+         "'Esc to cancel' alone"),
+    ):
+        ok &= check(f"{why} on screen is NOT a dialog",
+                    selection_dialog(one) is False)
+        ok &= check(f"...and a session showing {why} is still ready",
+                    claude_prompt_ready(idle + one) is True)
+    for a, b in (("Enter to select", "to navigate"),
+                 ("to navigate", "Esc to cancel"),
+                 ("Enter to select", "Esc to cancel")):
+        ok &= check(
+            f"any two markers ({a!r} + {b!r}) IS a dialog - every entry in "
+            "the list counts",
+            selection_dialog([f"  {a} · {b}"]) is True)
 
     # The anchor must not weaken dialog detection: selection_dialog.txt has
     # ZERO bracketed input rows, so it keeps the whole-screen scan and stays

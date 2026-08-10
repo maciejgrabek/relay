@@ -401,9 +401,10 @@ _SHELL_PROMPT_TAILS = frozenset("$%#>❯›➜")
 
 # Glyphs Claude Code STARTS its own output rows with: the turn/tool bullet
 # (⏺), an agent row (◯), a tree continuation (⎿), todo checkboxes (☒ ☐), the
-# thinking mark (✻) and the mode-footer arrows (⏵ ⏸). These rows are Claude's
-# own rendering below the input box and can never be a shell prompt - a shell
-# prompt line never STARTS with one of them - so they are not eligible for the
+# thinking mark (✻), the mode-footer arrows (⏵ ⏸), a task row's square (◻) and
+# the "more rows elided" ellipsis (…). These rows are Claude's own rendering
+# below the input box and can never be a shell prompt - a shell prompt line
+# never STARTS with one of them - so they are not eligible for the
 # _SHELL_PROMPT_TAILS suffix test at all.
 #
 # Without this exclusion the suffix test read a todo item like
@@ -413,18 +414,44 @@ _SHELL_PROMPT_TAILS = frozenset("$%#>❯›➜")
 # and task rows are exactly what renders below the input box, so this was not
 # a corner case. Eligibility is what narrows here; _SHELL_PROMPT_TAILS itself
 # is unchanged (a real prompt still vetoes whatever sigil it ends in).
-_CLAUDE_ROW_GLYPHS = frozenset("⏺◯⎿☒☐✻⏵⏸")
+#
+# This list is DEMONSTRABLY incomplete, not merely theoretically so: "◻" and
+# "…" were both missing from the first version of it while sitting in plain
+# sight on lines 5-6 of this branch's own checked-in fixture,
+# fixtures/screens/working_with_agent_rows.txt ("◻ Task 8: Plan preview" and
+# "… +5 pending, 3 completed"). A fixture in the repo was enough to falsify
+# the list, so assume the next Claude Code release falsifies it again - which
+# is why claude_prompt_ready no longer relies on this list ALONE to keep
+# Claude's rows from stalling a session: the suffix test it gates now applies
+# to the bottom-most line on screen only (see its condition 2), so a glyph
+# missing from here costs at most one stalled poll instead of a permanent
+# silent stall.
+_CLAUDE_ROW_GLYPHS = frozenset("⏺◯⎿☒☐✻⏵⏸◻…")
 
 
 def _shell_prompt_tail(l: str) -> bool:
     """True when `l` looks like a live shell's prompt line: non-blank, NOT one
     of Claude Code's own output rows (_CLAUDE_ROW_GLYPHS as its first
     non-whitespace character), and its last non-whitespace character is one of
-    _SHELL_PROMPT_TAILS."""
+    _SHELL_PROMPT_TAILS and is not glued to a digit.
+
+    The digit exclusion: a sigil immediately after a digit is that number's
+    unit, not a prompt. Claude Code's own chrome ends in one routinely -
+    "Context left until auto-compact: 23%" is the case that forced this, and
+    it starts with an ordinary letter, so no growth of _CLAUDE_ROW_GLYPHS
+    could ever have excluded it. Shell prompts put the sigil after a path, a
+    host or a git decoration, effectively never after a bare number; the
+    shapes that do (bash's "sh-5.2$" fallback, a "\\!$" history-number PS1)
+    are missed here and are covered by is_shell_job, which is the
+    authoritative guard. That trade is the same one the rest of this
+    predicate makes: an over-veto stalls a session silently and forever, an
+    under-veto costs nothing while the job guard holds."""
     s = l.strip()
     if not s or s[0] in _CLAUDE_ROW_GLYPHS:
         return False
-    return s[-1] in _SHELL_PROMPT_TAILS
+    if s[-1] not in _SHELL_PROMPT_TAILS:
+        return False
+    return not (len(s) >= 2 and s[-2].isdigit())
 
 
 _DIALOG_MARKERS = ("Enter to select", "to navigate", "Esc to cancel")
@@ -482,10 +509,17 @@ def claude_prompt_ready(lines: List[str]) -> bool:
       1. a genuinely bracketed input row exists somewhere on screen
          (_bracketed_input_rows - same structural test prompt_line_empty
          uses, see below),
-      2. nothing below the LAST such row looks like a live shell prompt -
-         neither an _INPUT_BOX_RE match nor a _shell_prompt_tail line,
+      2. nothing below the LAST such row is another _INPUT_BOX_RE match, and
+         the BOTTOM-MOST line on screen is not a _shell_prompt_tail line,
       3. the session is not mid-turn (session_working),
       4. the screen is not a selection dialog.
+
+    None of this is the authoritative guard against typing into a shell. The
+    tab's foreground job is (swarm.is_shell_job, applied by watcher's
+    _deliver/_fire_timers/_fire_extreme, all three of which refuse before
+    this predicate is consulted). What follows is defence in depth against
+    ONE specific shape the job guard cannot see: a dead Claude frame still
+    painted above a live shell in a tab whose job iTerm2 could not read.
 
     Fix round 1 walked the screen bottom-up and required every trailing line,
     all the way down, to be recognized chrome (a border/rule or footer text).
@@ -526,43 +560,63 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     of those prompts read READY. A trailing line whose last non-whitespace
     character is a prompt sigil (_shell_prompt_tail) now vetoes too.
 
-    That second test is best-effort by nature and fails SAFE: it can only add
-    vetoes, and an over-veto costs a delayed message while an under-veto
-    costs a shell command. It is also deliberately confined to the region
-    BELOW the live input row, where Claude renders only task/agent rows and
-    footers - none of which end in a prompt sigil, so ordinary idle chatter
-    is unaffected (there are fixture-backed assertions for exactly that).
-    Fix round 4 narrows it once more: a line that STARTS with one of
-    _CLAUDE_ROW_GLYPHS is Claude's own output row, never a prompt, and is not
-    eligible for the suffix test at all (a todo item ending in "90%" used to
-    stall a session forever).
+    Fix round 4 narrowed the suffix test to lines that do not START with one
+    of _CLAUDE_ROW_GLYPHS: Claude's own output rows are never prompts, and a
+    todo item ending in "90%" used to stall a session forever.
+
+    Fix round 5 (final branch review, Important) narrows it structurally
+    instead, because the glyph exclusion was aimed at the wrong thing. The
+    suffix test now applies to exactly ONE line: the BOTTOM-MOST non-blank
+    line on screen. Two reasons, and the second is why a glyph list could
+    never have been enough:
+
+    - The shape this test exists to catch always has the shell prompt as the
+      bottom-most line. A shell that has taken over a tab draws its prompt
+      last, under whatever Claude chrome is still painted; nothing of
+      Claude's renders below a live shell prompt. So restricting the test to
+      the last line loses none of its safety value.
+    - Applying it to EVERY line below the box made every row Claude renders
+      there a candidate for a permanent, silent stall, and those rows cannot
+      be enumerated. "Context left until auto-compact: 23%" is genuine
+      Claude Code chrome that starts with an ordinary letter and ends in a
+      sigil, so no growth of _CLAUDE_ROW_GLYPHS could ever exclude it - and
+      _CLAUDE_ROW_GLYPHS was itself missing "◻" and "…" while both sat in a
+      checked-in fixture in this repo. One unlucky row was enough to make a
+      session unreachable with no message, no timer, no push and nothing to
+      tell the operator.
+
+    The _CLAUDE_ROW_GLYPHS exclusion still applies to that last line, and
+    _shell_prompt_tail additionally ignores a sigil glued to a digit (see
+    its docstring). The suffix test remains best-effort and fails SAFE in
+    the direction that matters: an under-veto is caught by is_shell_job, an
+    over-veto is a silent permanent stall.
 
     KNOWN SCREEN-LEVEL LIMITS, accepted, not bugs to fix here. The suffix
-    test only ever inspects a line's LAST non-whitespace character, so two
-    real prompt shapes slip past and this function returns True:
+    test only ever inspects the LAST non-whitespace character of the LAST
+    line, so three real prompt shapes slip past and this function returns
+    True:
 
       "~/work/relay $ ls -la"  - a sigil MID-line, with a typed but not yet
                                  executed command after it.
       "➜  relay git:(main) ✗"  - an oh-my-zsh style SUFFIX (a git-status
                                  mark) printed after the sigil.
+      "sh-5.2$"                - a sigil glued to a digit, which
+                                 _shell_prompt_tail reads as a number's unit.
 
-    Both are left uncovered on purpose. Closing them means either matching
-    sigils anywhere in a line (every prose line containing "$" or ">" becomes
-    a shell prompt, and a session goes permanently unreachable the moment it
-    prints one - the exact failure mode fix round 4 exists to end) or growing
-    a suffix-glyph list that is unbounded by construction. Neither trade is
-    worth it, because neither hole is load-bearing: the AUTHORITATIVE guard
-    against typing into a shell is the tab's foreground job, swarm.is_shell_job
-    applied by watcher's _deliver/_fire_timers/_fire_extreme, and in both
-    shapes above the job IS a shell, so all three injection paths refuse
-    before this predicate is consulted. This screen test covers only the
-    narrow window where the job cannot be read.
-
-    Neither this nor any screen test is the authoritative guard against
-    typing into a shell - the foreground job is (swarm.is_shell_job, applied
-    by watcher's _deliver/_fire_timers/_fire_extreme). The two are
-    independent on purpose: a screen can lie about a job that already exited,
-    and a job can be unreadable while the screen is plain.
+    All three are left uncovered on purpose. Closing them means either
+    matching sigils anywhere in a line (every prose line containing "$" or
+    ">" becomes a shell prompt, and a session goes permanently unreachable
+    the moment it prints one - the exact failure mode fix rounds 4 and 5
+    exist to end) or growing a suffix-glyph list that is unbounded by
+    construction. Neither trade is worth it, because none of these holes is
+    load-bearing: the AUTHORITATIVE guard against typing into a shell is the
+    tab's foreground job, swarm.is_shell_job applied by watcher's
+    _deliver/_fire_timers/_fire_extreme, and in all three shapes above the
+    job IS a shell, so all three injection paths refuse before this predicate
+    is consulted. This screen test covers only the narrow window where the
+    job cannot be read, and the two are independent on purpose: a screen can
+    lie about a job that already exited, and a job can be unreadable while
+    the screen is plain.
 
     No fixed window, no requirement that trailing content be recognized:
     a false "not ready" costs a delayed message; a false "ready" costs relay
@@ -578,8 +632,10 @@ def claude_prompt_ready(lines: List[str]) -> bool:
     if not rows:
         return False
     last = rows[-1]
-    if any(_INPUT_BOX_RE.match(l) or _shell_prompt_tail(l)
-           for l in tail[last + 1:]):
+    below = tail[last + 1:]
+    if any(_INPUT_BOX_RE.match(l) for l in below):
+        return False
+    if below and _shell_prompt_tail(below[-1]):
         return False
 
     if session_working(tail):
@@ -673,7 +729,7 @@ def prompt_line_empty(lines: List[str]) -> bool:
     eventually scrolls the real input row out of range and returns a
     permanent False once enough rows accumulate. That is the same bug class
     session_working's fix round 2 already closed for the footer, and here
-    it is worse: _maybe_extreme_push gates the extreme-mode push on this
+    it is worse: Watcher._fire_extreme gates the extreme-mode push on this
     predicate, so a permanent False would leave the push permanently dead -
     the exact liveness bug this whole plan exists to fix.
 
