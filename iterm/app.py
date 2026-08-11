@@ -132,6 +132,116 @@ def _keys(pairs) -> str:
         f"[{WARN} bold]{k}[/] [{BRIGHT}]{label}[/]" for k, label in pairs)
 
 
+# --- overlay chrome -----------------------------------------------------------
+# Each full-screen overlay owns ONE palette color, so the operator knows which
+# one is up from the chrome alone - before reading a word. Cyan for parked
+# because the subtitle's "N parked" attention chip is already cyan; amber for
+# timers because WARN is already this app's "pending / armed" hue (ARMED,
+# ‼ AWAITING); green for swarm because BRIGHT is the fleet color the roster
+# behind it already uses. All three resolve per theme, so a theme swap
+# recolors the overlays with everything else instead of stranding a hardcoded
+# hue that only reads right on phosphor.
+OVERLAY_ACCENT = {"parked": CYAN, "timers": WARN, "swarm": BRIGHT}
+
+
+def _cells(s: str) -> int:
+    """Rendered width of a PLAIN string in terminal cells.
+
+    len() is wrong for the glyphs this UI actually uses: '↑↓', '←→', '▸' and
+    the box characters are single-cell, but CJK in a session title or a parked
+    idea is double-cell, and an emoji pasted into a parked title is double-cell
+    too. Clamping by len() there lets a row run past the box - which is exactly
+    the overflow this chrome exists to prevent.
+    """
+    from rich.cells import cell_len
+    return cell_len(s)
+
+
+def _fit(s: str, width: int, marker: str = "…") -> str:
+    """Clamp a PLAIN string to `width` CELLS, marking it when text was cut.
+
+    The marker is the point: the previous chrome sliced long rows with a bare
+    `[:w]`, so a 200-character parked idea rendered as its first 140-odd
+    characters with nothing to say the rest existed. A truncation the operator
+    cannot see is worse than a wrapped line - they read a half sentence as the
+    whole thought.
+
+    Operates on PLAIN text only. Never call this on a string that already
+    carries markup: cutting a line mid-tag stops it being a tag and corrupts
+    the whole render from that point on. Every caller here builds the plain
+    line, fits it, and only then wraps it in a color span.
+    """
+    if width <= 0:
+        return ""
+    if _cells(s) <= width:
+        return s
+    keep = max(0, width - _cells(marker))
+    out = ""
+    for ch in s:
+        if _cells(out + ch) > keep:
+            break
+        out += ch
+    return out + marker
+
+
+def _overlay_keybar(pairs, width: int, accent: str) -> list:
+    """Key hints for an overlay, keys in its accent and labels dim.
+
+    Packs pairs onto as many lines as they need, breaking BETWEEN pairs by
+    measuring plain width - never by slicing a marked-up line. The old single
+    key-bar row was built as one string and clamped at the end, so on a narrow
+    terminal the operator simply lost the last few keys (`esc close` among
+    them) with no sign they had been dropped.
+    """
+    sep = " · "
+    rows, cur, cur_w = [], [], 0
+    for k, label in pairs:
+        plain = f"{k} {label}"
+        add = _cells(plain) + (_cells(sep) if cur else 0)
+        if cur and cur_w + add > width - 2:
+            rows.append(cur)
+            cur, cur_w = [], _cells(plain)
+        else:
+            cur_w += add
+        cur.append((k, label))
+    if cur:
+        rows.append(cur)
+    return ["  " + f"[{DIM}]{sep}[/]".join(
+        f"[{accent} bold]{escape(k)}[/] [{DIM}]{escape(label)}[/]"
+        for k, label in row) for row in rows]
+
+
+def overlay_head(glyph: str, title: str, subtitle: str, right: str,
+                 keys, width: int, accent: str) -> list:
+    """The shared chrome every full-screen overlay opens with.
+
+    A rule, a reverse-video title bar (glyph + overlay name + context on the
+    left, a count on the right), a closing rule, then the key bar. Returns a
+    list of MARKUP lines each already fitted to `width` cells - callers join
+    them and must not slice the result.
+
+    `subtitle` is the expendable half when the bar is too narrow for both: the
+    title names the overlay and `right` is the count the operator opened it
+    for, while the subtitle (a workdir, a session name) is context they can
+    also get elsewhere.
+    """
+    w = max(40, width)
+    rule = f"[{accent}]" + "═" * w + "[/]"
+    left = f" {glyph} {title}"
+    if subtitle:
+        left += f"  {subtitle}"
+    tail = f"{right} " if right else ""
+    room = w - _cells(tail)
+    left = _fit(left, max(0, room - 1))
+    bar = (left + " " * max(0, room - _cells(left)) + tail)
+    # Padded to exactly w cells BEFORE the markup goes on, so the reverse-video
+    # block spans the full width instead of ending raggedly at the text.
+    bar += " " * max(0, w - _cells(bar))
+    return [rule,
+            f"[bold {TH['bg_deep']} on {accent}]{escape(bar)}[/]",
+            rule] + _overlay_keybar(keys, w, accent)
+
+
 KEYBAR = (
     _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
            ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"), ("i", "park"),
@@ -798,8 +908,9 @@ def help_text() -> str:
         row("n", "jump to the selected session's iTerm2 tab"),
         row("x", "hide / show the selected session"),
         row("i", "park an idea against the selected session (zero context cost)"),
-        row("b", "PARKED: the whole pile - drop items, hand one to a session; "
-                "left/right widens scope to every directory"),
+        row("b", "PARKED: the whole pile - e retitles, d twice drops, enter "
+                "hands one to a session; left/right widens scope to every "
+                "directory"),
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
@@ -870,16 +981,21 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
     markup ON, so the session title and payload are escaped."""
     import timers as _timers
     w = max(40, width)
-    bar = "═" * w
-    head = (f"╔{bar}╗\n"
-            f" ⏲ TIMERS // {escape(session_title[:w - 14])}\n"
-            f" a add · enter edit · left/right interval · m mode · [ ] cap · "
-            f"space on/off · g fire · x del · r restore/restart · esc close\n"
-            f"╚{bar}╝\n")
+    n = len(rows)
+    on = sum(1 for r in rows if r["enabled"])
+    head = "\n".join(overlay_head(
+        "⏲", "TIMERS", session_title,
+        f"{on}/{n} on" if n else "none",
+        [("a", "add"), ("enter", "edit"), ("←→", "interval"), ("m", "mode"),
+         ("[ ]", "cap"), ("space", "on/off"), ("g", "fire"), ("x", "del"),
+         ("r", "restore/restart"), ("esc", "close")],
+        w, OVERLAY_ACCENT["timers"])) + "\n"
     if not rows:
-        return head + ("\n no timers on this session.\n\n"
-                       " press a to add one: an interval (1-90 min) and a\n"
-                       " payload string sent to this session on that schedule.")
+        return head + (f"\n  [{DIM}]no timers on this session.[/]\n\n"
+                       f"  [{DIM}]press a to add one: an interval (1-90 min)"
+                       f" and a[/]\n"
+                       f"  [{DIM}]payload string sent to this session on that"
+                       f" schedule.[/]")
     lines = []
     for i, r in enumerate(rows):
         sel = (i == cursor)
@@ -926,7 +1042,8 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
 
 def parked_overlay_text(rows: list, scope_label: str, width: int,
                         cursor: int, recipient: str = "",
-                        all_scope: bool = False) -> str:
+                        all_scope: bool = False, armed_id=None,
+                        editing_id=None) -> str:
     """The `b` overlay: the whole parked pile, oldest first, with a cursor.
 
     Modeled on timers_view_text: an open box (border bars only - the header
@@ -953,43 +1070,83 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
     would be noise; widened to all directories, rows from different projects
     are otherwise indistinguishable.
 
-    Rendered with markup ON (like timers_view_text), so the scope label,
-    titles, owners and workdirs - all free text - are escaped. Every line,
-    including the box border, is clamped to `width`: the pane this lands in
-    cannot scroll sideways, so a bare `[:w]` slice (matching timers_view_text's
-    own bare slicing, not an ellipsis marker) runs over the whole render at
-    the end rather than being recomputed per line. Body text stays free of
-    real markup spans for exactly this reason - a color tag sliced mid-tag by
-    that end clamp would corrupt the render, not just crop it.
+    `armed_id` is the item `d` has been pressed on once. Dropping is
+    permanent and there is no undo, so the first press arms and the second
+    confirms - the same two-press shape R / W / Z already use. The armed row
+    is recolored and the key bar is replaced by the confirmation, because the
+    #log line those fleet-wide verbs announce themselves in is hidden behind
+    this overlay.
+
+    `editing_id` is the item whose title is being retitled in the mounted
+    Input below the list; it only drives the hint line here.
+
+    Rendered with markup ON, so the scope label, titles, owners and workdirs -
+    all free text - are escaped. Every line is fitted to `width` CELLS while
+    still plain, and only then wrapped in a color span: markup is never
+    sliced, because a tag cut in half stops being a tag and corrupts the whole
+    render from that point on rather than merely cropping it.
     """
     w = max(40, width)
-    bar = "═" * (w - 2)
-    enter_hint = (f"enter -> @{escape(recipient)}" if recipient
-                  else "enter refuses (unregistered)")
-    head = [
-        f"╔{bar}╗",
-        f" ▓ PARKED // {escape(scope_label)}",
-        f" ↑↓ move · ←→ scope · d drop · {enter_hint} · i park new · esc close",
-        f"╚{bar}╝",
-        "",
-    ]
+    accent = OVERLAY_ACCENT["parked"]
+    n = len(rows)
+    keys = [("↑↓", "move"), ("←→", "scope"), ("e", "edit"), ("d", "drop"),
+            ("enter", f"-> @{recipient}" if recipient
+                      else "refuses (unregistered)"),
+            ("i", "park new"), ("esc", "close")]
+    head = overlay_head("▓", "PARKED", scope_label,
+                        f"{n} item{'' if n == 1 else 's'}", keys, w, accent)
+    if armed_id is not None:
+        # Replaces the key bar rather than adding to it: while a drop is
+        # armed, the only two things that matter are which key confirms and
+        # which item it destroys.
+        head = head[:3] + [
+            "  " + f"[bold {TH['bg_deep']} on {DANGER}]"
+            + escape(_fit(f" press d again to DROP #{armed_id} permanently ",
+                          w - 2)) + "[/]",
+            f"  [{DIM}]any other key cancels[/]"]
+    if editing_id is not None:
+        head = head[:3] + _overlay_keybar(
+            [("enter", "save"), ("esc", "cancel")], w, accent) + [
+            "  " + f"[{accent}]"
+            + escape(_fit(f"EDIT #{editing_id} - retitle it below", w - 2))
+            + "[/]"]
+    head = head + [""]
     if not rows:
         body = [
-            " nothing parked here.",
+            f"  [{DIM}]nothing parked here.[/]",
             "",
-            " `i` on a session parks a thought without spending that",
-            " session's context on it - claim one later with enter.",
+            f"  [{DIM}]`i` on a session parks a thought without spending[/]",
+            f"  [{DIM}]that session's context on it - claim one later[/]",
+            f"  [{DIM}]with enter.[/]",
         ]
-        return "\n".join(l[:w] for l in head + body)
+        return "\n".join(head + body)
     cur = min(max(0, cursor), len(rows) - 1)
     body = []
     for i, r in enumerate(rows):
-        mark = "▸" if i == cur else " "
-        owner = f"  @{escape(str(r['owner']))}" if r.get("owner") else ""
-        title = escape(str(r["title"]))
-        dirtag = f"{escape(str(r.get('workdir') or '?'))}  " if all_scope else ""
-        body.append(f" {mark} #{r['id']} {dirtag}{title}{owner}")
-    return "\n".join(l[:w] for l in head + body)
+        sel = (i == cur)
+        mark = "▸" if sel else " "
+        owner = f"  @{str(r['owner'])}" if r.get("owner") else ""
+        dirtag = f"{str(r.get('workdir') or '?')}  " if all_scope else ""
+        head_txt = f" {mark} #{r['id']} {dirtag}"
+        # The title is what gets cut, never the id or the owner: those are how
+        # the operator addresses the row with d / e / enter, so losing them to
+        # a long idea would make the row unusable rather than just abridged.
+        budget = w - _cells(head_txt) - _cells(owner) - 1
+        plain = _fit(head_txt + _fit(str(r["title"]), max(8, budget)) + owner, w)
+        # Pad measured on the PLAIN line, escaped only afterwards: escape()
+        # adds backslashes that cost a character but render zero cells, so
+        # padding an escaped string leaves the highlight bar short of the edge.
+        pad = " " * max(0, w - _cells(plain))
+        line = escape(plain)
+        if armed_id is not None and r["id"] == armed_id:
+            body.append(f"[bold {TH['bg_deep']} on {DANGER}]{line}{pad}[/]")
+        elif sel:
+            # Full-width highlight bar, matching the main list's cursor row and
+            # the timers overlay, so the selection is unmistakable.
+            body.append(f"[bold {TH['hot']} on {TH['bg_cursor']}]{line}{pad}[/]")
+        else:
+            body.append(line)
+    return "\n".join(head + body)
 
 
 def timer_cell(active, pending) -> str:
@@ -1194,6 +1351,15 @@ class RelayApp(App):
         # None | {"sid": str, "name": str, "workdir": str, "buf": str,
         #         "dir": bool} - the park-an-idea capture modal
         self._park = None
+        # The item `d` has been pressed on ONCE. Dropping is permanent with no
+        # undo, so it arms first and the second press confirms - the R / W / Z
+        # shape. Held as an ID, not an index: the cursor can move and the list
+        # can be re-fetched under it, and arming row 2 must never confirm on
+        # whatever backfilled slot 2 in the meantime.
+        self._parked_drop_armed = None
+        # None | {"id": int} - the retitle form, mirroring _timer_form. Only
+        # the title is editable; re-scoping is ENTER's job (see db.edit_parked).
+        self._parked_edit = None
         # None | {"mode": str, "scope": str, "buf": str} - the operator's
         # brake-and-broadcast modal
         self._intervene = None
@@ -2010,7 +2176,10 @@ class RelayApp(App):
             return
         info = self.watcher.sessions.get(sid)
         title = info.title if info else sid
-        w = self.query_one("#timersview").size.width - 4
+        # See _render_parked: size.width is already the content width, with
+        # the CSS `padding: 0 2` taken off - subtracting it again drew the box
+        # narrower than the pane its rows were laid out in.
+        w = self.query_one("#timersview").size.width
         cursor = min(self._timers_cursor, max(0, len(rows) - 1))
         body = timers_view_text(rows, time.time(), title, max(40, w), cursor)
         if self._timer_form is not None:
@@ -2071,7 +2240,9 @@ class RelayApp(App):
         self._timer_form_close()
 
     def on_input_submitted(self, event) -> None:
-        if self._timer_form is not None:
+        if self._parked_edit is not None:
+            self._parked_edit_save()
+        elif self._timer_form is not None:
             self._timer_form_save()
         elif self._extreme_form is not None:
             self._extreme_form_save()
@@ -2115,6 +2286,14 @@ class RelayApp(App):
             self.action_help()
         if self._timers_visible:
             self.action_timers()
+        if self._parked_visible:
+            # Leaving the overlay must not strand the mounted title Input in a
+            # hidden pane (it would still hold focus and swallow every key on
+            # the roster), nor carry an armed drop into the next open, where
+            # the first `d` would delete instead of arm.
+            if self._parked_edit is not None:
+                self._parked_edit_close()
+            self._parked_drop_armed = None
         self._parked_visible = not self._parked_visible
         on = self._parked_visible
         self.query_one("#middle").styles.display = "none" if on else "block"
@@ -2144,21 +2323,57 @@ class RelayApp(App):
             # reintroducing that.
             self.call_after_refresh(self._render_parked)
 
+    def on_resize(self, event) -> None:
+        """Re-render whichever overlay is open.
+
+        Overlay bodies are built once, against the pane width at the time -
+        they are deliberately kept out of the periodic refresh tick (see
+        action_parked) so a re-snapshot cannot move the list under a
+        stationary cursor. Without this, a terminal resize left the box drawn
+        at the old width inside a pane of the new one, so rows appeared to run
+        past their own border. Resize is the one event that must redraw them,
+        and it carries no such hazard: the row ORDER is unchanged, only the
+        width it is laid out at.
+        """
+        # Guarded: resize also fires during startup and teardown, when the
+        # panes these render into may not be mounted. A redraw is chrome - it
+        # must never be the thing that takes the panel down.
+        try:
+            if self._parked_visible and self._parked_edit is None:
+                self._render_parked()
+            if self._timers_visible and self._timer_form is None:
+                self._render_timers()
+            if self._swarm_visible:
+                self._render_swarm_view()
+        except Exception:
+            pass
+
     def _render_parked(self) -> None:
         rows = self._parked_rows()
         label = ("all directories" if self._parked_scope == "all"
                  else (self._parked_workdir() or "this tab has no directory"))
-        w = self.query_one("#parkedview").size.width - 4
+        # size.width is the CONTENT width - Textual has already taken the
+        # CSS `padding: 0 2` off it. The old `- 4` subtracted that padding a
+        # second time, so the box was drawn four cells narrower than the pane
+        # the rows were laid out in.
+        w = self.query_one("#parkedview").size.width
         self._parked_cursor = min(self._parked_cursor, max(0, len(rows) - 1))
         # Snapshot of what's ACTUALLY on screen, in order - _parked_assign and
         # the 'd' handler read from this, not a fresh fetch, so they act on
         # what the operator is looking at rather than whatever is in the table
         # at the moment the key lands.
         self._parked_ids = [r["id"] for r in rows]
+        # An armed drop whose row is gone (claimed elsewhere, or the scope
+        # changed under it) must not keep the confirmation banner on screen
+        # promising to delete an id this list no longer shows.
+        if self._parked_drop_armed not in self._parked_ids:
+            self._parked_drop_armed = None
         self.query_one("#parkedview", Static).update(
             parked_overlay_text(rows, label, max(40, w), self._parked_cursor,
                                 self._parked_recipient(),
-                                self._parked_scope == "all"))
+                                self._parked_scope == "all",
+                                armed_id=self._parked_drop_armed,
+                                editing_id=(self._parked_edit or {}).get("id")))
 
     def _parked_selected_id(self):
         """The id of the row highlighted at the last render, or None if
@@ -2173,6 +2388,104 @@ class RelayApp(App):
         if not ids or self._parked_cursor >= len(ids):
             return None
         return ids[self._parked_cursor]
+
+    def _parked_drop(self) -> None:
+        """Arm on the first `d`, delete on the second.
+
+        A parked item is the operator's own thought captured at zero context
+        cost; dropping it is permanent and there is no undo anywhere in relay,
+        so a single mistyped key must not be able to destroy one. R / W / Z
+        already arm-then-confirm for the same reason - this is that shape,
+        moved inside an overlay because the #log line those verbs announce
+        themselves in is hidden behind it.
+
+        The arm is keyed on the ITEM ID, so moving the cursor to another row
+        does not inherit the arm, and a row claimed by `relay next` in the
+        meantime cannot be confirmed away by an arm that predates it.
+        """
+        item_id = self._parked_selected_id()
+        if item_id is None:
+            self._parked_drop_armed = None
+            self._render_parked()
+            return
+        if self._parked_drop_armed != item_id:
+            self._parked_drop_armed = item_id
+
+            def _expire(armed=item_id):
+                # Only disarms the arm it was scheduled for: arming row A, then
+                # row B, leaves A's 5s timer still pending, and a blanket clear
+                # would silently cancel B halfway through its own window.
+                if self._parked_drop_armed == armed:
+                    self._parked_drop_armed = None
+                    if self._parked_visible:
+                        self._render_parked()
+
+            self.set_timer(self._CONFIRM_WINDOW, _expire)
+            self._render_parked()
+            return
+        self._parked_drop_armed = None
+        swarmdb.drop_parked(self._swarm_db_conn(), item_id)
+        self._render_parked()
+
+    def _parked_edit_open(self) -> None:
+        """Retitle the selected item in a mounted Input, the same form shape
+        the timers overlay uses for a payload. Park could create and destroy an
+        idea but never fix one, so a typo or a half-written thought meant
+        dropping it and parking it again - and re-parking is exactly the
+        moment an item loses the context stamp it was captured with."""
+        item_id = self._parked_selected_id()
+        row = next((r for r in self._parked_rows() if r["id"] == item_id),
+                   None) if item_id is not None else None
+        if row is None:
+            self._modal_show("ALREADY TAKEN", [
+                "Nothing is parked there anymore - it was",
+                "claimed or dropped just now.",
+            ])
+            self._render_parked()
+            return
+        self._parked_edit = {"id": item_id}
+        inp = Input(value=str(row["title"]),
+                    placeholder="the idea, in one line", id="parked_title")
+        self.query_one("#parkedview").mount(inp)
+        inp.focus()
+        self._render_parked()
+
+    def _parked_edit_close(self) -> None:
+        self._parked_edit = None
+        try:
+            self.query_one("#parked_title").remove()
+        except Exception:
+            pass
+        self._render_parked()
+
+    def _parked_edit_save(self) -> None:
+        if self._parked_edit is None:
+            return
+        item_id = self._parked_edit["id"]
+        try:
+            title = self.query_one("#parked_title").value
+        except Exception:
+            title = ""
+        if not title.strip():
+            # Refused, not saved as blank: an item with no title can never be
+            # recognised again, the same reason park refuses an item with no
+            # workdir. The old title stands.
+            self._parked_edit_close()
+            self._modal_show("NOT SAVED", [
+                "An idea with no title could never be",
+                "recognised again - the old one stands.",
+            ])
+            return
+        ok = swarmdb.edit_parked(self._swarm_db_conn(), item_id, title)
+        self._parked_edit_close()
+        if not ok:
+            # edit_parked is scoped to parked=1, so a miss means the row was
+            # claimed or dropped while the form was open - the same race
+            # _parked_assign reports, and it must not pass as a silent save.
+            self._modal_show("ALREADY TAKEN", [
+                f"#{item_id} was claimed or dropped while",
+                "you were editing. The edit was not saved.",
+            ])
 
     def _parked_assign(self) -> None:
         """Hand the selected item to the selected session.
@@ -2291,6 +2604,15 @@ class RelayApp(App):
             event.stop()
             event.prevent_default()
             return
+        if self._parked_visible and self._parked_edit is not None:
+            # Every key belongs to the focused title Input (same rule as the
+            # timers payload form below). ENTER arrives via
+            # on_input_submitted; ESC is stopped here so it cancels just the
+            # form, and action_dismiss_view - which fires independently of
+            # event.stop() - closes the form rather than the whole overlay.
+            if event.key == "escape":
+                event.stop()
+            return
         if self._parked_visible:
             # Only matched cases stop the event (mirrors the timers branch
             # below) - an unmatched key, notably a second 'b', must fall
@@ -2299,6 +2621,13 @@ class RelayApp(App):
             # swallow that second 'b' before it ever reaches the binding.
             k = event.key
             rows = self._parked_rows()
+            # Any key that is not the confirming second `d` cancels a pending
+            # drop. An arm that survives the operator navigating away is a
+            # trap: the next `d` they press would then be a delete they never
+            # lined up.
+            if k != "d" and self._parked_drop_armed is not None:
+                self._parked_drop_armed = None
+                self._render_parked()
             if k == "escape":
                 self.action_parked()
                 event.stop()
@@ -2325,15 +2654,17 @@ class RelayApp(App):
                 self._render_parked()
                 event.stop()
                 event.prevent_default()
+            elif k == "e":
+                self._parked_edit_open()
+                event.stop()
+                event.prevent_default()
             elif k == "d":
                 # Identity-based, like _parked_assign: the id at the cursor
                 # from the last render, not a fresh fetch re-indexed by a
                 # numeric position that may now point at a different row (or
-                # nothing at all).
-                item_id = self._parked_selected_id()
-                if item_id is not None:
-                    swarmdb.drop_parked(self._swarm_db_conn(), item_id)
-                self._render_parked()
+                # nothing at all). Arms on the first press, drops on the
+                # second - see _parked_drop.
+                self._parked_drop()
                 event.stop()
                 event.prevent_default()
             elif k == "enter":
@@ -2466,6 +2797,12 @@ class RelayApp(App):
             else:
                 self.action_timers()
         elif self._parked_visible:
+            if self._parked_edit is not None:
+                # First esc cancels the retitle form and stays on the list;
+                # only a second esc (form now closed) leaves the overlay. Same
+                # two-step the timers payload form has.
+                self._parked_edit_close()
+                return
             # In practice on_key's own parked branch (escape closes the
             # overlay, then calls event.prevent_default()) already handles
             # ESC and suppresses this action from ever firing while the
@@ -2532,6 +2869,16 @@ class RelayApp(App):
                                            _time.time(), width=w,
                                            stale=stale, activity=activity,
                                            prs=prs, threads=threads)
+            # Chrome only - render_swarm owns the body and its own colors.
+            # Prepended here rather than inside swarm.py because the title bar
+            # belongs to the OVERLAY (which app.py owns for timers and parked
+            # too), not to the swarm rendering, which the CLI also prints
+            # without any overlay around it.
+            text = "\n".join(overlay_head(
+                "◈", "SWARM", f"{len(sessions)} sessions",
+                f"{len(tasks)} tasks",
+                [("TAB", "back"), ("f", "feed"), ("esc", "close")],
+                w, OVERLAY_ACCENT["swarm"])) + "\n\n" + text
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)

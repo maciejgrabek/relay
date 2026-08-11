@@ -815,6 +815,31 @@ def drop_parked(conn, task_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def edit_parked(conn, task_id: int, title: str,
+                now: Optional[float] = None) -> bool:
+    """Retitle a parked item in place.
+
+    Scoped to parked=1 for the same reason drop_parked is: real work is
+    retitled through the `relay task` verbs, which carry the ownership and
+    state rules a parked row does not have. A blank title is refused rather
+    than saved - an item with no title can never be recognised again, which
+    is the same reasoning park refuses an item with no workdir.
+
+    Title only, deliberately. Re-scoping (owner) is already a verb: the
+    operator hands an item to a session with ENTER in the `b` overlay, which
+    promotes it to real work atomically. A second, quieter path to the same
+    column would be two ways to do one thing, with only one of them audited.
+    """
+    title = (title or "").strip()
+    if not title:
+        return False
+    cur = conn.execute(
+        "UPDATE tasks SET title=?, updated_at=? WHERE id=? AND parked=1",
+        (title, _now(now), task_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def orphan_parked(conn, owner: str) -> int:
     """A session closed: its parked items become the directory's.
 

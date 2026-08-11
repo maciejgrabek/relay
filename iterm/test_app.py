@@ -38,8 +38,29 @@ sys.path.insert(0, os.path.dirname(__file__))
 import app as appmod  # noqa: E402
 import audit as auditmod  # noqa: E402
 import config as cfgmod  # noqa: E402
+from rich.cells import cell_len  # noqa: E402
+from rich.text import Text  # noqa: E402
 from textual.widgets import Static  # noqa: E402
 from watcher import SessionInfo  # noqa: E402
+
+
+def _plain(markup) -> str:
+    """The text a marked-up overlay line actually renders as.
+
+    The overlays carry per-overlay accent colors now, so a raw substring or
+    len() check on the markup string measures color tags rather than what the
+    operator sees. Rich resolves the tags (and unescapes '\\[') exactly the way
+    the terminal will, which is also what makes the width assertions honest:
+    len() of a marked-up line is meaningless.
+    """
+    return Text.from_markup(str(markup)).plain
+
+
+def _cells_wide(markup) -> int:
+    """The widest rendered line, in terminal CELLS. Not len(): the box glyphs
+    are single-cell but CJK and emoji in a title are double, and a row that
+    measures inside the box by len() can still run past it on screen."""
+    return max((cell_len(l) for l in _plain(markup).splitlines()), default=0)
 
 
 class StubWatcher:
@@ -776,7 +797,7 @@ async def go():
               {"id": 7, "title": "retry backoff on inject", "owner": None},
               {"id": 9, "title": "widget shows parked count", "owner": "bff"}]
     _po = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0)
-    _po_lines = _po.splitlines()
+    _po_lines = _plain(_po).splitlines()
     chk("parked_overlay_text title row", any("PARKED" in r for r in _po_lines))
     chk("parked_overlay_text scope label in the header",
         any("/Work/relay" in r for r in _po_lines))
@@ -789,22 +810,87 @@ async def go():
     chk("parked_overlay_text cursor on row 0",
         any(r.lstrip().startswith("▸") and "#3" in r for r in _po_lines))
     _po1 = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 2)
-    _po1_lines = _po1.splitlines()
+    _po1_lines = _plain(_po1).splitlines()
     chk("parked_overlay_text cursor moves",
         any(r.lstrip().startswith("▸") and "#9" in r for r in _po1_lines))
     chk("parked_overlay_text exactly one cursor",
         sum(1 for r in _po1_lines if r.lstrip().startswith("▸")) == 1)
     _po_empty = appmod.parked_overlay_text([], "/Work/relay", 60, 0)
     chk("parked_overlay_text empty state teaches i",
-        "i" in _po_empty and "park" in _po_empty.lower())
+        "i" in _plain(_po_empty) and "park" in _plain(_po_empty).lower())
     _po_narrow = appmod.parked_overlay_text(
         [{"id": 1, "title": "y" * 200, "owner": None}], "/Work/x", 40, 0)
-    chk("parked_overlay_text width clamped",
-        all(len(r) <= 40 for r in _po_narrow.splitlines()))
+    chk("parked_overlay_text width clamped", _cells_wide(_po_narrow) <= 40)
+    # A cut title must SAY it was cut. Silently rendering the first 40-odd
+    # characters of a 200-character idea reads as the whole thought, which is
+    # worse than a wrapped line - the operator acts on half a sentence.
+    chk("a truncated title is marked, not silently sliced",
+        "…" in _plain(_po_narrow))
+    # Double-width text must be measured in cells, not characters: 200 CJK
+    # glyphs are 400 cells, and a len()-based clamp lets the row run past the
+    # box it is drawn inside.
+    _po_cjk = appmod.parked_overlay_text(
+        [{"id": 1, "title": "字" * 200, "owner": None}], "/Work/x", 40, 0)
+    chk("a double-width title is clamped by CELLS, not characters",
+        _cells_wide(_po_cjk) <= 40)
+    # The chrome must survive an unfriendly workdir too - a '[' in the scope
+    # label would otherwise be read as the start of a color tag and swallow
+    # the header (the whole reason every dynamic string is escaped).
+    _po_esc = appmod.parked_overlay_text(_prows, "/Work/[weird]", 60, 0)
+    chk("a '[' in the scope label is escaped, not parsed as markup",
+        "/Work/[weird]" in _plain(_po_esc))
     _po_clamped = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 99)
     chk("parked_overlay_text out-of-range cursor clamps",
-        sum(1 for r in _po_clamped.splitlines()
+        sum(1 for r in _plain(_po_clamped).splitlines()
             if r.lstrip().startswith("▸")) == 1)
+
+    # --- the drop confirmation and the retitle form, at the render layer ----
+    _po_armed = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0,
+                                           armed_id=7)
+    chk("an armed drop says which key confirms it",
+        "press d again" in _plain(_po_armed))
+    chk("an armed drop names the item it would destroy",
+        "#7" in _plain(_po_armed) and "permanently" in _plain(_po_armed))
+    chk("an armed drop says how to back out",
+        "cancels" in _plain(_po_armed))
+    chk("the armed banner replaces the key bar rather than crowding it - "
+        "while a delete is pending the only keys that matter are confirm "
+        "and cancel", "i park new" not in _plain(_po_armed))
+    chk("the armed confirmation stays inside the width",
+        _cells_wide(_po_armed) <= 60)
+    _po_editing = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0,
+                                             editing_id=9)
+    chk("the retitle form names the item being edited",
+        "EDIT #9" in _plain(_po_editing))
+    chk("the retitle form advertises save and cancel",
+        "save" in _plain(_po_editing) and "cancel" in _plain(_po_editing))
+    # The earlier `i` and `b` keys both shipped undiscoverable and had to be
+    # retrofitted into the key bar - this is the "don't repeat that" check.
+    chk("e is advertised in the overlay's own key bar", "e edit" in _plain(_po))
+
+    # --- per-overlay accent: the operator must know which overlay is up from
+    # the chrome alone. Same-colored overlays are the failure this prevents.
+    chk("parked, timers and swarm each get their own accent",
+        len(set(appmod.OVERLAY_ACCENT.values())) == 3)
+    chk("the parked overlay is drawn in its accent",
+        appmod.OVERLAY_ACCENT["parked"] in _po)
+    _tv_accent = appmod.timers_view_text(_trows, now=1000.0,
+                                         session_title="api", width=90)
+    chk("the timers overlay is drawn in a different accent",
+        appmod.OVERLAY_ACCENT["timers"] in _tv_accent
+        and appmod.OVERLAY_ACCENT["parked"] not in _tv_accent)
+    chk("the timers header still stays inside its width",
+        _cells_wide(_tv_accent) <= 90)
+    # The accents must be palette TOKENS, not hexes: a hardcoded hue would
+    # survive a theme swap unchanged and strand one overlay in the old
+    # palette while everything around it recolored.
+    chk("the overlay accents are palette tokens, not hardcoded hues",
+        appmod.OVERLAY_ACCENT == {"parked": appmod.TH["cyan"],
+                                  "timers": appmod.TH["warn"],
+                                  "swarm": appmod.TH["bright"]})
+    chk("every token the overlays accent on exists in all three themes",
+        all({"cyan", "warn", "bright"} <= set(t)
+            for t in appmod.THEMES.values()))
 
     # --- finding 1: ENTER's target must be named on screen, not inferred.
     # The roster (the only other place the selected session is visible) is
@@ -1491,13 +1577,81 @@ async def go():
         await pilot.pause()
         chk("up stops at the top", a._parked_cursor == 0)
 
+        # `d` arms, it does not drop: a parked item is a captured thought with
+        # no undo anywhere in relay, so one mistyped key must not destroy one.
         before = len(a._parked_rows())
         first_id = a._parked_rows()[0]["id"]
         await pilot.press("d")
         await pilot.pause()
-        chk("d drops one item", len(a._parked_rows()) == before - 1)
-        chk("d dropped the selected row",
-            first_id not in {r["id"] for r in a._parked_rows()})
+        chk("the first d arms rather than dropping",
+            len(a._parked_rows()) == before)
+        chk("the arm names the selected item", a._parked_drop_armed == first_id)
+
+        # Any other key cancels: an arm that survives navigating away turns
+        # the operator's next `d` into a delete they never lined up.
+        await pilot.press("down")
+        await pilot.pause()
+        chk("moving the cursor cancels the arm", a._parked_drop_armed is None)
+        await pilot.press("d")
+        await pilot.pause()
+        chk("after a cancel, d arms again instead of dropping",
+            len(a._parked_rows()) == before)
+        second_id = a._parked_drop_armed
+        chk("the re-arm follows the cursor, not the first row",
+            second_id is not None and second_id != first_id)
+
+        await pilot.press("d")
+        await pilot.pause()
+        chk("the second d drops one item", len(a._parked_rows()) == before - 1)
+        chk("d dropped the armed row",
+            second_id not in {r["id"] for r in a._parked_rows()})
+        chk("the arm clears after the drop", a._parked_drop_armed is None)
+
+        # `e` retitles in place. Park could create and destroy an idea but
+        # never fix one, so a typo meant dropping it and re-parking - which is
+        # exactly when an item loses the context stamp it was captured with.
+        target = a._parked_rows()[a._parked_cursor]["id"]
+        await pilot.press("e")
+        await pilot.pause()
+        chk("e opens the retitle form", a._parked_edit is not None
+            and a._parked_edit["id"] == target)
+        chk("the form is prefilled with the current title, not blank",
+            a.query_one("#parked_title").value != "")
+        a.query_one("#parked_title").value = "retitled in place"
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("enter saves the new title",
+            any(r["id"] == target and r["title"] == "retitled in place"
+                for r in a._parked_rows()))
+        chk("saving closes the form", a._parked_edit is None)
+        chk("the form's Input is unmounted, not left holding focus",
+            not a.query("#parked_title"))
+        chk("the list is still open after a save", a._parked_visible)
+
+        # A blank title is refused, not saved: an item with no title can never
+        # be recognised again - the same reason park refuses one with no
+        # workdir.
+        await pilot.press("e")
+        await pilot.pause()
+        a.query_one("#parked_title").value = "   "
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("a blank retitle is refused and the old title stands",
+            any(r["id"] == target and r["title"] == "retitled in place"
+                for r in a._parked_rows()))
+        a._modal_close()
+
+        # esc cancels the form without touching the item, and leaves the list
+        # up - only a second esc closes the overlay (the timers form's rule).
+        await pilot.press("e")
+        await pilot.pause()
+        a.query_one("#parked_title").value = "discard me"
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("esc closes the retitle form", a._parked_edit is None)
+        chk("esc did not save the edit",
+            not any(r["title"] == "discard me" for r in a._parked_rows()))
+        chk("the first esc leaves the overlay open", a._parked_visible)
 
         await pilot.press("escape")
         await pilot.pause()

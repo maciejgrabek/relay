@@ -168,8 +168,11 @@ already parked in that directory - the five oldest, not the most recent, so
 it won't catch a duplicate of something you just parked. `b` opens the parked
 overlay instead: every item parked in the selected row's directory, oldest
 first, uncapped - `←→` widens the scope to every directory and back, so
-nothing parked elsewhere reads as lost. `↑↓` moves the cursor, `d` drops the
-highlighted item, and `i` from inside jumps straight to capture.
+nothing parked elsewhere reads as lost. `↑↓` moves the cursor, `e` retitles
+the highlighted item in place (fix a typo without losing the context stamp it
+was captured with), `d` twice drops it - the first press arms and says which
+item it would destroy, any other key cancels, and it disarms itself after five
+seconds - and `i` from inside jumps straight to capture.
 
 A session picks up its own parked work with `relay next` (claims the oldest
 item it owns, then the oldest unowned one - never another session's) or
@@ -308,7 +311,7 @@ can't silently auto-approve.)
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
 | `!` | **Intervene**: stop running sessions and/or broadcast to them (see [Intervene](#intervene-)) |
 | `i` | **Park an idea** against the selected row (see [Parked work](#parked-work-i)) |
-| `b` | **Parked overlay**: this directory's pile, oldest first, `←→` widens to every directory - move, drop, or hand one to a session (see [Parked work](#parked-work-i)) |
+| `b` | **Parked overlay**: this directory's pile, oldest first, `←→` widens to every directory - `e` retitles, `d` twice drops, `ENTER` hands one to a session (see [Parked work](#parked-work-i)) |
 | `,` | Open the **settings editor** (see below) |
 | `n` | Go to (focus) the real iTerm2 tab for the selected session |
 | `x` | Hide / show the selected session |

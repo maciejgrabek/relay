@@ -93,6 +93,36 @@ def run():
     ok &= check("refused drop left the task alive",
                 db.get_task(conn, tid) is not None)
 
+    # edit: retitle in place. Without it a typo meant dropping the item and
+    # parking it again - and re-parking is exactly when an item loses the
+    # context stamp it was captured with.
+    g = db.park_task(conn, "ida with a tpyo", W, owner="bff", context='{"a":1}')
+    ok &= check("edit_parked retitles", db.edit_parked(conn, g, "idea, fixed"))
+    row = [r for r in db.list_parked(conn, W) if r["id"] == g][0]
+    ok &= check("the new title is stored", row["title"] == "idea, fixed")
+    ok &= check("editing keeps the row parked", row["parked"] == 1)
+    ok &= check("editing does not touch the owner", row["owner"] == "bff")
+    ok &= check("editing keeps the capture-time context stamp - preserving it "
+                "is the whole reason to edit rather than re-park",
+                row["context"] == '{"a":1}')
+    ok &= check("edit_parked strips surrounding whitespace",
+                db.edit_parked(conn, g, "  trimmed  ")
+                and [r for r in db.list_parked(conn, W)
+                     if r["id"] == g][0]["title"] == "trimmed")
+    ok &= check("edit_parked refuses a blank title - an item with no title "
+                "can never be recognised again",
+                not db.edit_parked(conn, g, "   "))
+    ok &= check("the refused blank edit left the old title standing",
+                [r for r in db.list_parked(conn, W)
+                 if r["id"] == g][0]["title"] == "trimmed")
+    ok &= check("edit_parked refuses real work - retitling a live task is the "
+                "`relay task` verbs' job, with their ownership rules",
+                not db.edit_parked(conn, tid, "renamed"))
+    ok &= check("the refused edit left the real task's title alone",
+                db.get_task(conn, tid)["title"] != "renamed")
+    ok &= check("edit_parked is false on a gone row",
+                db.drop_parked(conn, g) and not db.edit_parked(conn, g, "x"))
+
     # orphan
     e = db.park_task(conn, "idea e", W, owner="bff")
     f = db.park_task(conn, "idea f", W, owner="api")
