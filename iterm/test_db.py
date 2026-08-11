@@ -37,8 +37,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 11",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 11)
+    ok &= check("fresh connect stamps user_version = 12",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 12)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     ok &= check("tasks has parked/workdir/context",
                 {"parked", "workdir", "context"} <= cols)
@@ -323,12 +323,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 11
+                mig.execute("PRAGMA user_version").fetchone()[0] == 12
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 11
+                mig.execute("PRAGMA user_version").fetchone()[0] == 12
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -362,7 +362,7 @@ def run():
     omig = db.connect(opath)
     _oid = db.queue_message(omig, "a", "b", "post-migration", reply_to=1)
     ok &= check("v9 db migrates and takes reply_to",
-                omig.execute("PRAGMA user_version").fetchone()[0] == 11
+                omig.execute("PRAGMA user_version").fetchone()[0] == 12
                 and omig.execute("SELECT reply_to FROM messages WHERE id=?",
                                  (_oid,)).fetchone()[0] == 1)
     omig.close()
@@ -378,8 +378,8 @@ def run():
     old.commit()
     old.close()
     mig = db.connect(p2)
-    ok &= check("v10 DB migrates to 11",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 11)
+    ok &= check("v10 DB migrates to 12",
+                mig.execute("PRAGMA user_version").fetchone()[0] == 12)
     mcols = {r[1] for r in mig.execute("PRAGMA table_info(tasks)")}
     ok &= check("migrated DB has the three columns",
                 {"parked", "workdir", "context"} <= mcols)
@@ -552,6 +552,36 @@ def run():
                 db.get_session(conn, "bff-worker")["project"] == "otherproj")
     db.register(conn, "bff-worker", "UUID-2", "worker", "webshop", now=320.0)
 
+    # --- claude session id (token usage join) ---------------------------------
+    # This is what lets the panel find a session's transcript EXACTLY rather
+    # than guessing it from a workdir - see usage.py.
+    ok &= check("a fresh registration has no claude session id",
+                db.get_session(conn, "bff-worker")["claude_session_id"] == "")
+    ok &= check("set_claude_session_id on a registered session -> True",
+                db.set_claude_session_id(conn, "bff-worker", "SESS-AAA")
+                and db.get_session(conn, "bff-worker")["claude_session_id"]
+                == "SESS-AAA")
+    # A `relay register` run from a plain shell has no id to offer. Letting it
+    # write '' would lose a working binding every time the operator ran a CLI
+    # verb from outside the session.
+    ok &= check("an empty id is ignored, not stored",
+                not db.set_claude_session_id(conn, "bff-worker", "")
+                and db.get_session(conn, "bff-worker")["claude_session_id"]
+                == "SESS-AAA")
+    ok &= check("set_claude_session_id on an unknown session -> False",
+                not db.set_claude_session_id(conn, "nobody", "SESS-BBB"))
+    # A respawned worker reclaims its name through register(); the binding must
+    # follow the new process, which set_claude_session_id writes right after.
+    db.register(conn, "bff-worker", "UUID-3", "worker", "webshop", now=330.0)
+    ok &= check("re-register alone does not clear the id",
+                db.get_session(conn, "bff-worker")["claude_session_id"]
+                == "SESS-AAA")
+    ok &= check("a new process rebinds it",
+                db.set_claude_session_id(conn, "bff-worker", "SESS-CCC")
+                and db.get_session(conn, "bff-worker")["claude_session_id"]
+                == "SESS-CCC")
+    db.register(conn, "bff-worker", "UUID-2", "worker", "webshop", now=340.0)
+
     # --- arm requests (spawn pre-arming) --------------------------------------
     ok &= check("set_arm_request on registered -> True",
                 db.set_arm_request(conn, "bff-worker", "wild")
@@ -616,7 +646,7 @@ def run():
     hold.close()
     hmig = db.connect(hpath)
     ok &= check("v8 -> v9 migration runs",
-                hmig.execute("PRAGMA user_version").fetchone()[0] == 11)
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 12)
     ok &= check("legacy 'human' session row is cleared",
                 db.get_session(hmig, "human") is None)
     legacy_task = hmig.execute(
@@ -832,7 +862,7 @@ def run():
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
     ok &= check("fresh DB is schema v9",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 11)
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 12)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -874,7 +904,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 11)
+                up.execute("PRAGMA user_version").fetchone()[0] == 12)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -1032,7 +1062,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 11)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 12)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -1105,7 +1135,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 11)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 12)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")

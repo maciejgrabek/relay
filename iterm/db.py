@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   workdir TEXT NOT NULL DEFAULT '',
   spawn_prompt TEXT NOT NULL DEFAULT '',
   closed_at REAL NOT NULL DEFAULT 0,
-  worktree_repo TEXT NOT NULL DEFAULT ''
+  worktree_repo TEXT NOT NULL DEFAULT '',
+  claude_session_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,7 +178,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 11
+_CURRENT_VERSION = 12
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -247,6 +248,15 @@ _MIGRATIONS = {
     10: ("ALTER TABLE tasks ADD COLUMN parked INTEGER NOT NULL DEFAULT 0",
          "ALTER TABLE tasks ADD COLUMN workdir TEXT NOT NULL DEFAULT ''",
          "ALTER TABLE tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''"),
+    # v12: token usage. Claude Code exports CLAUDE_CODE_SESSION_ID into its own
+    # environment, and `relay join` / `relay register` run inside that process,
+    # so the CLI can record the id beside the iTerm2 id already stored here.
+    # That pair is what lets the panel find a session's transcript exactly
+    # rather than guessing it from a workdir - see usage.py. Empty on every
+    # existing row and on any session registered from outside Claude Code,
+    # which reads as "no number available", never as "zero tokens".
+    11: ("ALTER TABLE sessions ADD COLUMN claude_session_id TEXT NOT NULL "
+         "DEFAULT ''",),
 }
 
 
@@ -287,6 +297,24 @@ def _now(now: Optional[float]) -> float:
 
 
 # --- sessions ----------------------------------------------------------------
+
+def set_claude_session_id(conn, name: str, claude_session_id: str) -> bool:
+    """Record which Claude Code transcript belongs to a registered session.
+
+    Written by the CLI, which runs inside the Claude Code process and so
+    inherits CLAUDE_CODE_SESSION_ID from its environment. An empty value is
+    ignored rather than stored: a `relay register` run from a plain shell has
+    no id to offer, and letting it blank the column would lose a working
+    binding every time the operator ran a CLI verb outside the session.
+    """
+    if not claude_session_id:
+        return False
+    cur = conn.execute(
+        "UPDATE sessions SET claude_session_id=? WHERE name=?",
+        (claude_session_id, name))
+    conn.commit()
+    return cur.rowcount > 0
+
 
 def register(conn, name: str, iterm_session_id: str, role: str,
              project: str = "", now: Optional[float] = None) -> None:

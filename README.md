@@ -19,13 +19,13 @@ arm/disarm them with the arrow keys.
   RELAY · SESSION CONTROL · 3 units · 2 armed · 12✓ 1⊘ · 1 awaiting · 2 msgs queued · 3 parked
   CORE TEMP ▰▰▰▱▱▱▱▱▱▱  ◷ WARM
 
-  MODE      STATUS      ↻    SESSION       ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
+  MODE      STATUS      ↻    CTX  SESSION       ROLE   TASK NOW     ✓/⊘  LAST DIRECTIVE
   ── NEEDS ACTION (1) ──────────────────────────────────────────────────────────
-▸ ✦ INSANE  ‼ AWAITING  4s   ‼ api-worker  work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+▸ ✦ INSANE  ‼ AWAITING  4s   91%  ‼ api-worker  work   #17 ⊘ by 14  2/1  terraform apply -auto-…
   ── SESSIONS ──────────────────────────────────────────────────────────────────
-  ◉ SAFE    ▸ ACTIVE    12s  bff-worker    work   #14 doing    5/0  grep -rn "TODO" src/
-  ✦ INSANE  ‼ AWAITING  4s   api-worker    work   #17 ⊘ by 14  2/1  terraform apply -auto-…
-  ○ MANUAL  ◌ STANDBY   3m   coord         coord  specs 3/3    -    -
+  ◉ SAFE    ▸ ACTIVE    12s  62%  bff-worker    work   #14 doing    5/0  grep -rn "TODO" src/
+  ✦ INSANE  ‼ AWAITING  4s   91%  api-worker    work   #17 ⊘ by 14  2/1  terraform apply -auto-…
+  ○ MANUAL  ◌ STANDBY   3m   -    coord         coord  specs 3/3    -    -
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · b parked · v audit · f feed · t timers · E×2 extreme
@@ -189,6 +189,41 @@ It runs the other way too: a session that notices a follow-up mid-task can
 shelve it with `relay task add "<line>" --park` instead of drifting into it or
 dropping it silently. Those land unowned in that directory, for whoever runs
 `relay next` there next.
+
+### Token usage (`CTX`)
+
+The **`CTX` column** shows how full each session's context is, so you can see
+which one is about to compact without switching to its tab. The preview pane
+breaks the number down for the selected session:
+
+```
+TOKENS  62% of context · 124k/200k
+        out 48.2k · in 3.1k · cached 1.2M
+        41 turns · claude-opus-5
+```
+
+The percentage turns amber at 75% and red at 90%. Neither is a hard limit -
+Claude Code compacts on its own - it's the point past which you may want to let
+a session finish a thought rather than start one.
+
+**Where the numbers come from.** Relay doesn't talk to Claude Code; it watches
+iTerm2 tabs. But a Claude Code process exports `CLAUDE_CODE_SESSION_ID` into its
+own environment, and `relay join` runs *inside* that process - so a session
+hands relay the exact id of its own transcript, which relay then reads from
+`~/.claude/projects/`. It's an exact pointer, not a guess.
+
+**That means registered sessions only.** An unregistered tab has no id to join
+on, so its `CTX` cell is blank and the preview says why. Relay deliberately does
+*not* fall back to guessing from the directory: sibling tabs in one directory
+are the normal case here, they'd both resolve to the same transcript, and a
+plausible wrong number is worse than no number on a panel whose job is telling
+you the truth. Run `relay join` in the tab to enable it.
+
+**`cached` is reported separately and never folded into a total.** Cache reads
+are repeat billing on the same prompt - they run to millions of tokens while
+real input stays in the hundreds - so a single "total tokens" figure built from
+them would measure nothing. `ctx` is a *level* (the last turn's prompt, which is
+what a compaction resets); `out`, `in` and `cached` are cumulative.
 
 ### Pause and shadow (reversible controls)
 
@@ -1482,6 +1517,7 @@ relay/
   iterm/swarm.py         # pure swarm logic: delivery text, staleness, rendering
   iterm/cli.py           # swarm CLI verbs (register, send, task, inbox, ...)
   iterm/spawn.py         # relay spawn: new iTerm2 tab + claude + pre-registration
+  iterm/usage.py         # token usage: transcript lookup + incremental reads (no iTerm2/sqlite imports)
   iterm/statusbar.py     # status-bar badge: pure labels + published state / click queue
   iterm/statusbar_autolaunch.py  # always-on badge provider (symlinked into iTerm2 AutoLaunch)
   iterm/test_*.py        # gate/TUI/swarm suites, built from real captured prompts
@@ -1491,6 +1527,7 @@ relay/
   iterm/test_timers.py   # timer scheduling logic tests (due/firable/reconfirm)
   iterm/test_swarm.py    # delivery/staleness/rendering logic tests
   iterm/test_cli.py      # CLI verb tests against a temp DB file
+  iterm/test_usage.py    # token usage tests against hand-written transcripts
   lib/danger.sh          # shared command-classification rules (tune me)
   test/danger_test.sh    # classifier regression suite (run before tuning danger.sh)
   test/run.sh            # run the whole suite (bash + Python), no pytest needed

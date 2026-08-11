@@ -43,6 +43,18 @@ def my_iterm_id():
     return sid.split(":", 1)[-1] or None
 
 
+def my_claude_session_id():
+    """This Claude Code session's id, or '' outside one.
+
+    Claude Code exports CLAUDE_CODE_SESSION_ID into its process environment,
+    and every CLI verb here runs as a child of that process - so a session
+    registering itself hands relay the exact id of its own transcript, with no
+    guessing from directories. Run from a plain shell there is simply no id,
+    which is why every caller treats '' as "leave the binding alone".
+    """
+    return os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+
+
 def whoami(conn):
     sid = my_iterm_id()
     return db.get_by_iterm_id(conn, sid) if sid else None
@@ -78,6 +90,7 @@ def _ensure_me(conn):
         return None, _err("$ITERM_SESSION_ID not set - are you inside iTerm2?")
     name = swarm.derive_name(os.getcwd(), db.registered_names(conn))
     db.register(conn, name, sid, "worker", _default_project(conn))
+    db.set_claude_session_id(conn, name, my_claude_session_id())
     db.set_session_context(conn, name, os.getcwd(), "")
     print(f"relay: registered this session as '{name}' "
           f"(rename with: relay join <name>)")
@@ -150,6 +163,7 @@ def cmd_register(args) -> int:
                     f"mailbox; pick another name")
     conn = db.connect()
     db.register(conn, name, sid, args.role, args.project or "")
+    db.set_claude_session_id(conn, name, my_claude_session_id())
     if args.dir:
         db.set_session_context(conn, name, os.path.abspath(args.dir),
                                db.get_session(conn, name)["spawn_prompt"])
@@ -209,6 +223,7 @@ def cmd_join(args) -> int:
     else:
         project = _default_project(conn)
     db.register(conn, name, sid, args.role, project)
+    db.set_claude_session_id(conn, name, my_claude_session_id())
     db.set_session_context(conn, name, os.getcwd(),
                            db.get_session(conn, name)["spawn_prompt"])
 

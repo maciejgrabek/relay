@@ -30,6 +30,7 @@ import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
 import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
+import usage as usagemod  # noqa: E402
 import widget as widgetmod  # noqa: E402
 from watcher import Watcher  # noqa: E402
 
@@ -1432,8 +1433,8 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "SESSION", "ROLE",
-                          "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
+        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "CTX", "SESSION",
+                          "ROLE", "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
         # Preview pane starts in its configured state (watcher isn't connected
         # yet, so read config directly - same as the theme is read at import).
         try:
@@ -1608,13 +1609,23 @@ class RelayApp(App):
             if tcell:
                 tcolor = WARN if not act and pend else CYAN
                 tcell = f"[{DIM}]{tcell}[/]" if dim else f"[{tcolor}]{tcell}[/]"
-            table.add_row(arm, label, wt, tcell, title, role, task_now,
+            # CTX: how full this session's context is, read off its own Claude
+            # Code transcript. Blank when relay cannot tie the tab to one -
+            # an unregistered tab has no session id to join on, and a blank
+            # cell is never a wrong number where an invented one would be.
+            u = self._usage_for(info.session_id)
+            ctext = usagemod.ctx_cell(u)
+            if ctext:
+                ccolor = {"high": DANGER,
+                          "warn": WARN}.get(usagemod.ctx_level(u), DIM)
+                ctext = f"[{DIM}]{ctext}[/]" if dim else f"[{ccolor}]{ctext}[/]"
+            table.add_row(arm, label, wt, tcell, ctext, title, role, task_now,
                           counts, cmd)
             self._row_sids.append(info.session_id)
 
         def divider(text, color):
-            table.add_row("", f"[{color}]▼▼▼[/]", "", "", f"[{color}]{text}[/]",
-                          "", "", "", "")
+            table.add_row("", f"[{color}]▼▼▼[/]", "", "", "",
+                          f"[{color}]{text}[/]", "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
 
         # NEEDS ACTION is a strip of DUPLICATE rows on top - the main list
@@ -1780,6 +1791,29 @@ class RelayApp(App):
         except Exception:
             pass
 
+    def _usage_for(self, sid: str):
+        """Token usage for one tab, or None when relay cannot read any.
+
+        The join runs through the REGISTRY, not the workdir: a registered
+        session recorded its own CLAUDE_CODE_SESSION_ID when it ran `relay
+        join`, and that is an exact pointer at one transcript. An unregistered
+        tab has nothing to join on and gets None - see usage.py for why
+        guessing from the directory was rejected.
+
+        Guarded whole: a missing transcript, a half-written line or an
+        unreadable projects directory must cost this session its number, not
+        take the roster down mid-render.
+        """
+        if not self.watcher:
+            return None
+        reg = (self.watcher.registry or {}).get(sid)
+        if not reg:
+            return None
+        try:
+            return usagemod.read(reg.get("claude_session_id") or "")
+        except Exception:
+            return None
+
     def _update_preview(self) -> None:
         if not self.watcher or not self._preview_visible:
             return
@@ -1855,10 +1889,19 @@ class RelayApp(App):
         tsum_line = f"{tsum[:w]}\n" if tsum else ""
         push = extreme_push_line(
             info, getattr(self.watcher, "extreme_dwell", 45.0), time.time(), w)
+        # TOKENS: the CTX column's number, with what is behind it. The roster
+        # cell is a percentage because it has to be scannable across the fleet;
+        # this is where the operator finds out whether that percentage is a
+        # long conversation or one enormous turn.
+        registered = bool((self.watcher.registry or {}).get(sid))
+        tok = "\n".join(
+            line[:w] for line in
+            usagemod.preview_lines(self._usage_for(sid), registered)) + "\n"
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
+                  f"{tok}"
                   f"{push}"
                   f"{tsum_line}"
                   f"{why}"

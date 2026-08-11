@@ -2283,8 +2283,14 @@ async def test_parked_badge_per_session():
         await pilot.pause()
         table = app.query_one(appmod.DataTable)
 
+        # Resolved by column LABEL, not a hardcoded index: this broke silently
+        # the first time a column was inserted to its left (CTX), and the
+        # assertion then measured whatever cell happened to land in slot 4.
+        _sess_col = [str(c.label) for c in table.columns.values()].index(
+            "SESSION")
+
         def cell(sid):
-            return str(table.get_row_at(app._row_sids.index(sid))[4])
+            return str(table.get_row_at(app._row_sids.index(sid))[_sess_col])
 
         chk("no badge when nothing is parked", "⏸" not in cell("a1"))
 
