@@ -231,6 +231,35 @@ real input stays in the hundreds - so a single "total tokens" figure built from
 them would measure nothing. `ctx` is a *level* (the last turn's prompt, which is
 what a compaction resets); `out`, `in` and `cached` are cumulative.
 
+### When relay can't read a session (`⚑ CANNOT READ`)
+
+Relay reads Claude Code's on-screen chrome to tell working from idle and to
+spot permission prompts. That chrome can change without notice - it has once
+already - and every "I don't recognise this" path in relay fails safe to
+*"nothing actionable"*. Per screen that's correct. Across a fleet it's a trap:
+if the chrome changes shape, **every** session reads as a calm idle tab and the
+panel reports quiet while relay sees nothing.
+
+So relay watches whether it can still read at all. When a tab running Claude
+shows none of the chrome relay depends on for ~15 seconds, the header says so:
+
+```
+⚑ CANNOT READ 2: api-worker, bff-worker · RELAY · SESSION CONTROL · 6 units …
+```
+
+It's advisory - it never changes a decision, and a blind session still fails
+safe exactly as before. The point is that *"I can't read this"* stops being
+indistinguishable from *"nothing is happening"*. It sits ahead of every other
+count because those counts are derived from screens relay may no longer
+understand.
+
+A blank or starting-up tab is never reported: there's nothing to recognise and
+nothing to be wrong about.
+
+If you see it, relay's screen parsing needs updating - capture the frame into
+`iterm/fixtures/screens/` and `python3 iterm/test_state.py` will fail on it
+until the classifier can read it again.
+
 ### Pause and shadow (reversible controls)
 
 - **Pause (`p`)** freezes relay's *hands* - it stops auto-approving and stops

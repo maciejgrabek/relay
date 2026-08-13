@@ -28,6 +28,7 @@ import statusbar as statusbar_mod
 import config as relay_config
 import titles
 import timers as timers_mod
+import gates
 from gates import (classify, Action, Decision, reconstruct_lines,
                    detect_state, DANGEROUS_COMMAND)
 
@@ -88,6 +89,9 @@ class SessionInfo:
     last_decision: str = ""
     last_screen: List[str] = field(default_factory=list)  # sanitized recent lines
     n_approved: int = 0              # auto-approvals in this tab (running tally)
+    # Consecutive frames carrying none of the chrome relay reads (gates.blind).
+    # Diagnostic only - no decision consults it. See Watcher._check_blind.
+    blind_ticks: int = 0
     n_escalated: int = 0             # dangerous/question escalations in this tab
     stale: bool = False              # swarm: flagged unresponsive (see Task 8)
     extreme_prompt: str = ""         # extreme: text pushed into an idle tab
@@ -541,7 +545,55 @@ class Watcher:
         except Exception:
             return None
 
+    # Consecutive unreadable frames before a session counts as blind. The poll
+    # is ~1s, so this is ~15s of a live Claude tab drawing nothing relay knows.
+    # High enough to ride out startup, a full-screen takeover (/help, a diff
+    # viewer) and mid-redraw frames; low enough that a real chrome change is
+    # named while the operator is still at the desk.
+    BLIND_TICKS = 15
+
+    def _check_blind(self, info: SessionInfo, raw, hard) -> None:
+        """Track whether relay can still READ this session at all.
+
+        Every unrecognised frame elsewhere in the pipeline fails safe to
+        "idle"/"nothing actionable", which is right per screen and wrong across
+        a fleet: if Claude Code's chrome changes, every session reads as a calm
+        idle tab and the panel reports quiet while relay sees nothing. That is
+        indistinguishable from an actually quiet swarm, and it has happened
+        once already (2026-08-10).
+
+        Advisory only. It never changes a decision - a blind session is still
+        classified exactly as before, and still fails safe. The point is to
+        make "I cannot read this" observable.
+        """
+        try:
+            if gates.blind(raw, hard):
+                info.blind_ticks += 1
+            else:
+                info.blind_ticks = 0
+        except Exception:
+            # A canary must never be the thing that breaks the loop it watches.
+            info.blind_ticks = 0
+
+    @property
+    def blind_names(self) -> list:
+        """Titles of sessions relay has been unable to read for BLIND_TICKS.
+
+        Only tabs where Claude is the foreground job: a shell prompt has no
+        Claude chrome by definition and is not evidence of anything.
+        """
+        out = []
+        for i in self.sessions.values():
+            if i.session_id == getattr(self, "own_sid", None):
+                continue
+            if swarm.is_shell_job(i.job) or not i.job:
+                continue
+            if i.blind_ticks >= self.BLIND_TICKS:
+                out.append(i.title or i.session_id)
+        return out
+
     async def _handle(self, info: SessionInfo, raw, hard) -> None:
+        self._check_blind(info, raw, hard)
         # Foreground is a plain shell => no Claude is running in this tab, so any
         # prompt text on screen is a leftover frame from an exited Claude, not a
         # live prompt. Treat it exactly like "no actionable prompt": never mark

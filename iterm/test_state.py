@@ -155,5 +155,70 @@ def run():
     return ok
 
 
+# --- the canary: relay must notice when it can no longer READ a screen -------
+# Every "unrecognised" path in gates fails safe to idle / nothing-actionable.
+# That is right per screen and wrong across a fleet: if Claude Code's chrome
+# changes shape, every session reads as a calm idle tab and relay reports quiet
+# while seeing nothing. This already happened once (2026-08-10), and the only
+# symptom was sessions silently going undeliverable.
+def _canary():
+    from gates import blind, chrome_seen, ANCHORS
+    ok = True
+
+    def chk(label, cond):
+        nonlocal ok
+        print(("  OK   " if cond else " FAIL  ") + label)
+        ok = ok and bool(cond)
+
+    # EVERY real captured Claude frame must be readable. This is the assertion
+    # that turns the fixture corpus into a regression tripwire: if a future
+    # capture lands here and relay cannot see its box, the canary is doing its
+    # job and the classifier needs updating - in that order.
+    import glob
+    claude_frames = [os.path.basename(p)[:-4]
+                     for p in sorted(glob.glob(os.path.join(_SCREEN_DIR, "*.txt")))
+                     if not os.path.basename(p).startswith("shell_")]
+    chk("the fixture corpus is not empty (a canary with no corpus is a "
+        "no-op that always passes)", len(claude_frames) >= 5)
+    for name in claude_frames:
+        chk(f"relay can read the captured frame '{name}'",
+            not blind(screen(name)))
+    # The box rule is the anchor blind() keys on, and the one every live
+    # Claude tab draws. Spot-check it is actually what is being found, so this
+    # cannot pass by accidentally matching a spinner in scrollback.
+    chk("an idle frame is recognised by its input box, not by chance",
+        "box" in chrome_seen(screen("idle_accept_edits")))
+
+    # A screen with none of relay's chrome is the thing worth shouting about.
+    chk("a screen with no Claude chrome at all is blind",
+        blind(["$ ls -la", "total 48", "drwxr-xr-x  12 me  staff   384 Aug 13 09:12 ."]))
+    # ...but a BLANK screen is not: a tab starting up or scrolled to empty has
+    # nothing to recognise and nothing to be wrong about. A canary that cries
+    # during startup is one the operator silences.
+    chk("a blank screen is not reported as blind", not blind([]))
+    chk("a whitespace-only screen is not reported as blind",
+        not blind(["", "   ", "\x00\x00"]))
+
+    # The anchors are diagnostic, so each must be independently detectable -
+    # otherwise "which part of the chrome moved" collapses to one bit.
+    chk("a permission prompt reports its own anchor",
+        "prompt" in chrome_seen(["Do you want to proceed?"]))
+    chk("an option menu reports its own anchor",
+        "menu" in chrome_seen(["❯ 1. Yes", "  2. No"]))
+    chk("every named anchor is reachable",
+        set(ANCHORS) == {"box", "prompt", "menu", "working"})
+    # The canary must never be able to change a decision - it is advisory, and
+    # a diagnostic that alters behaviour is a second classifier nobody audits.
+    import inspect
+    import gates as _g
+    chk("blind() is not consulted anywhere in the decision path",
+        "blind(" not in inspect.getsource(_g.classify)
+        and "blind(" not in inspect.getsource(_g.detect_state))
+    return ok
+
+
 if __name__ == "__main__":
-    sys.exit(0 if run() else 1)
+    _a = run()
+    print()
+    _b = _canary()
+    sys.exit(0 if (_a and _b) else 1)

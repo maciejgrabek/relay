@@ -135,6 +135,83 @@ def detect_state(lines: List[str]) -> str:
     return "idle"
 
 
+# --- the canary --------------------------------------------------------------
+# Every "I do not recognise this" path in this module fails safe by returning
+# NONE / "idle". That is the right call per screen and the wrong one across a
+# fleet: if Claude Code's chrome changes shape, EVERY session reads as a quiet
+# idle tab and relay sits there reporting calm while seeing nothing. The panel
+# looks identical whether the swarm is genuinely quiet or relay has gone blind.
+#
+# So: name the anchors this module is load-bearing on, and let the watcher
+# notice when a live Claude tab shows none of them. This does not change a
+# single decision - it only makes "I cannot read this" observable instead of
+# indistinguishable from "nothing is happening".
+#
+# It has already happened once: the 2026-08-10 round exists because the working
+# check was anchored on a bare rule that Claude Code stopped drawing, and the
+# only symptom was sessions silently becoming undeliverable.
+ANCHORS = ("box", "prompt", "menu", "working")
+
+
+def chrome_seen(lines: List[str]) -> set:
+    """Which of relay's load-bearing screen anchors this frame contains.
+
+    Diagnostic ONLY - nothing in the decision path consults it. Each entry maps
+    to a specific thing this module (or swarm.py) matches on:
+
+      box      - _bracket_line, the box chrome around Claude's input row. The
+                 structural anchor for detect_state, session_working and draft
+                 detection. The one that matters most: a live Claude tab always
+                 draws it, so its absence is the strongest "I am blind" signal.
+      prompt   - _PROMPT_MARKER, the permission question.
+      menu     - _OPTION_RE, the numbered option list.
+      working  - _WORKING_RE, the spinner / interrupt footer.
+
+    `prompt`, `menu` and `working` are legitimately absent from a calm idle
+    screen, which is why blind() below keys on `box` alone.
+    """
+    seen = set()
+    for l in lines:
+        s = l.strip()
+        if not s:
+            continue
+        if "box" not in seen and _bracket_line(s):
+            seen.add("box")
+        if "prompt" not in seen and s.startswith(_PROMPT_MARKER):
+            seen.add("prompt")
+        if "menu" not in seen and _OPTION_RE.match(l):
+            seen.add("menu")
+        if "working" not in seen and _WORKING_RE.search(l):
+            seen.add("working")
+        if len(seen) == len(ANCHORS):
+            break
+    return seen
+
+
+def blind(raw_lines: List[str], hard_eols: Optional[List[bool]] = None) -> bool:
+    """True when a screen carries NONE of the chrome relay reads.
+
+    Keyed on the box rule rather than on all four anchors: a calm idle session
+    genuinely has no prompt, no menu and no spinner, so requiring those would
+    fire constantly. A live Claude Code tab always draws its input box.
+
+    A blank screen is NOT blind - a tab that has scrolled to empty, or is
+    starting up, has nothing to recognise and nothing to be wrong about.
+    Reporting it would make the canary noisy on exactly the frames that carry
+    no information, and a canary that cries during startup is one the operator
+    silences.
+
+    The CALLER is responsible for only asking about tabs where Claude is the
+    foreground job, and for requiring this to persist - see the watcher's
+    blind_ticks. One frame proves nothing: the box is legitimately absent mid-
+    redraw, during a full-screen takeover, and for the first second of startup.
+    """
+    lines = reconstruct_lines(raw_lines, hard_eols)
+    if not any(l.strip() for l in lines):
+        return False
+    return not chrome_seen(lines)
+
+
 def sanitize(line: str) -> str:
     """Map iTerm cell-junk (NUL, nbsp) to spaces and strip trailing blanks."""
     return line.translate(_CELL_JUNK).rstrip()

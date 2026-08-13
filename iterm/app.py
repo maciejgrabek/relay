@@ -1740,10 +1740,22 @@ class RelayApp(App):
             attn += f" [{DIM}]·[/] [{CYAN}]{queued_n} msgs queued[/]"
         if parked_n:
             attn += f" [{DIM}]·[/] [{CYAN}]{parked_n} parked[/]"
+        # The canary. Placed FIRST in the pause slot rather than appended to
+        # the attention strip, because it does not describe the swarm - it
+        # says relay's reading of the swarm is not to be trusted, which
+        # outranks every count next to it. Everything else on this line is
+        # derived from screens relay may no longer understand.
+        blind = getattr(self.watcher, "blind_names", []) or []
+        blind_tag = ""
+        if blind:
+            who = ", ".join(escape(b) for b in blind[:3])
+            more = f" +{len(blind) - 3}" if len(blind) > 3 else ""
+            blind_tag = (f"[bold {DANGER}]⚑ CANNOT READ {len(blind)}: "
+                         f"{who}{more}[/] [{DIM}]·[/] ")
         pause_tag = (f"[bold {WARN}]⏸ PAUSED - NOT acting[/] [{DIM}]·[/] "
                      if getattr(self.watcher, "paused", False) else "")
         self.query_one("#subtitle", Static).update(
-            pause_tag +
+            blind_tag + pause_tag +
             f"[{DIM}]RELAY · SESSION CONTROL ·[/] "
             f"[{BRIGHT}]{len(sess)} units[/] [{DIM}]·[/] "
             f"[{WARN}]{armed} armed[/] [{DIM}]·[/] "
