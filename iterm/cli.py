@@ -1534,6 +1534,18 @@ def cmd_doctor(args) -> int:
                 print(f"    !! {', '.join(names)} share one working copy ({d})"
                       f" - parallel edits overwrite each other; give all but "
                       f"one its own git worktree")
+        # A session registered before relay recorded Claude session ids has no
+        # way to report token usage, and the ONLY symptom in the panel is a
+        # blank CTX cell - which looks identical to a feature that is simply
+        # not there. Doctor is where you look when something is silently not
+        # working, so it is where this belongs.
+        no_id = [s["name"] for s in sessions
+                 if not s["closed_at"] and not s["claude_session_id"]]
+        if no_id:
+            print(f"    !! {', '.join(no_id)} cannot report token usage "
+                  f"(no Claude session id on file)")
+            print(f"       -> run `relay join` once in each - it keeps the "
+                  f"name, mode and current task")
 
     queued = db.undelivered(conn)
     now = time.time()

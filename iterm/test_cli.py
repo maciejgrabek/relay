@@ -551,6 +551,33 @@ def run():
     ok &= check("doctor exits 0 and reports sessions/tasks",
                 code == 0 and "relay doctor" in out
                 and ("sessions:" in out or "registered" in out))
+    # A session registered before relay recorded Claude session ids reports no
+    # token usage, and the ONLY symptom in the panel is a blank CTX cell -
+    # indistinguishable from the feature not being there. Doctor is where you
+    # look when something is silently not working, so it has to name them.
+    # The id is blanked by raw SQL, deliberately: registering through the CLI
+    # inside a Claude Code session inherits a REAL CLAUDE_CODE_SESSION_ID, so
+    # asserting on "a freshly registered session has no id" would pass or fail
+    # depending on where the suite was run from.
+    import db as _dbm
+    _c = _dbm.connect()
+    _live = [s["name"] for s in _dbm.list_sessions(_c) if not s["closed_at"]]
+    _c.execute("UPDATE sessions SET claude_session_id='' WHERE name=?",
+               (_live[0],))
+    _c.commit()
+    code, out_noid, _ = run_cli("doctor")
+    ok &= check("doctor flags a session that cannot report token usage",
+                code == 0 and "cannot report token usage" in out_noid
+                and _live[0] in out_noid)
+    ok &= check("doctor says how to fix it, and that it is not a rename",
+                "relay join" in out_noid and "keeps the name" in out_noid)
+    for _n in _live:
+        _dbm.set_claude_session_id(_c, _n, f"SESS-{_n}")
+    code, out_ok, _ = run_cli("doctor")
+    ok &= check("and it goes quiet once every session has an id - a warning "
+                "that never clears is one the operator learns to ignore",
+                code == 0 and "cannot report token usage" not in out_ok)
+
     # doctor on an empty DB still works and guides the user.
     import tempfile as _tf
     empty = os.path.join(_tf.mkdtemp(), "empty.db")

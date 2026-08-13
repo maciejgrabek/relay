@@ -1461,6 +1461,23 @@ class RelayApp(App):
                     self.query_one(Log).write_line(f"mascot widget: {err}")
         except Exception:
             pass
+        # Say ONCE, at launch, that an upgraded swarm needs a re-join. Without
+        # it the only symptom is a blank CTX cell on every row, which is
+        # indistinguishable from the feature not existing - and the operator
+        # would have to open each session's preview to find out otherwise.
+        # Once, not per tick: this is a fact about the DB, not a condition to
+        # nag about, and it is fixed by one command per session.
+        try:
+            stale_ids = [s["name"] for s in swarmdb.list_sessions(
+                self._swarm_db_conn())
+                if not s["closed_at"] and not s["claude_session_id"]]
+            if stale_ids:
+                self.query_one(Log).write_line(
+                    f"usage: {', '.join(stale_ids)} cannot report tokens (CTX "
+                    f"blank) - run `relay join` once in each; it keeps the "
+                    f"name, mode and task")
+        except Exception:
+            pass
         # Launch the iTerm2 connection in the background; it shares this loop.
         self._conn_worker = self.run_worker(self._connect(), exclusive=True)
         self.set_interval(1.0, self._refresh)  # periodic repaint (ages, etc.)
