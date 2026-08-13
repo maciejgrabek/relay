@@ -260,6 +260,52 @@ If you see it, relay's screen parsing needs updating - capture the frame into
 `iterm/fixtures/screens/` and `python3 iterm/test_state.py` will fail on it
 until the classifier can read it again.
 
+### `relay review` - a verdict on relay's own judgment
+
+`relay recap` says what relay *did*. `relay review` asks whether it was right
+to, and it's the only place that separates two things the audit log records
+identically:
+
+```
+relay review (last 7 days) - what relay decided, and on whose authority
+
+  approvals: 2363  (2136 cleared by the safety gate, 135 approved over it, 92 unverified)
+  escalated to you: 240 · delivered 1 · extreme pushes 5
+  9.6% of approvals did NOT come from the safety gate reading the command
+
+  the gate said DANGEROUS and the arm level approved anyway (135):
+    pkill/killall 31x · ssh 30x · psql 29x · curl -X 28x · rm -rf 27x · git push --force 4x
+
+  approved WITHOUT the gate being able to read the command (92):
+    (unreadable) 92x
+
+  by session: DRAGEN 94 · GLASS 26 · RELAY REWORK 22
+```
+
+Both of those land in the log as `auto-approved`, and they mean opposite
+things:
+
+- **cleared by the safety gate** - relay read the command and `danger.sh` said
+  it was fine.
+- **approved over it** - the gate said *dangerous* and the arm level
+  (`wild`/`insane`/`extreme`) approved anyway. That's arming working as
+  designed. It's also the only answer to *"what did I actually authorise when I
+  armed that tab?"*
+- **unverified** - approved without the gate being able to read the command at
+  all (an off-screen heredoc header, an unparseable frame). Not overruled;
+  unexamined - a different risk.
+
+Overrides are grouped by the risky verb rather than the exact command, because
+almost every command is a one-off: a real log produces 130+ buckets of "1x" and
+answers nothing, while `ssh 30x · psql 29x` tells you what you've been waving
+through. The rate is shown alongside the count on purpose - 135 reads as
+alarming until you know it's 9.6% of 2,363, and reads as complacent if you only
+ever see the percentage.
+
+Nobody's being scolded: arming a tab `insane` is a deliberate choice. This is
+where its consequences are visible once, instead of buried across thousands of
+scrollback lines nobody re-reads. `--all` widens from 7 days to all time.
+
 ### Pause and shadow (reversible controls)
 
 - **Pause (`p`)** freezes relay's *hands* - it stops auto-approving and stops
@@ -1561,6 +1607,7 @@ relay/
   iterm/test_db.py       # swarm schema + query tests (temp DB file)
   iterm/test_timers.py   # timer scheduling logic tests (due/firable/reconfirm)
   iterm/test_swarm.py    # delivery/staleness/rendering logic tests
+  iterm/selftest.py      # relay selftest: live read check + fixture capture
   iterm/test_cli.py      # CLI verb tests against a temp DB file
   iterm/test_usage.py    # token usage tests against hand-written transcripts
   lib/danger.sh          # shared command-classification rules (tune me)

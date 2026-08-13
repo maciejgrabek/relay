@@ -37,8 +37,101 @@ def run():
                 isinstance(recap.start_of_today(), float)
                 and recap.start_of_today() > 0)
 
+    ok &= _review(check)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
+def _review(check) -> bool:
+    """The review loop: separating approvals the SAFETY GATE made from those
+    the ARM LEVEL made over its objection. Both land in the log as
+    'auto-approved' and they mean opposite things - collapsing them is what
+    made 135 overridden dangerous commands invisible for months."""
+    ok = True
+
+    def ap(reason, cmd="", sess="w1", ts=1000.0):
+        return {"ts": ts, "verdict": "auto-approved", "reason": reason,
+                "command": cmd, "session": sess}
+
+    entries = [
+        ap("safe permission prompt", "ls -la"),
+        ap("safe permission prompt", "grep -rn TODO ."),
+        ap("insane-approve (dangerous command)", "ssh root@box 'systemctl restart x'"),
+        ap("wild-approve (dangerous command)", "rm -rf /tmp/build"),
+        ap("extreme-approve (dangerous command)", "psql -c 'drop table t'", "w2"),
+        ap("insane-approve (command too large to verify (header off-screen) - fail safe)"),
+        ap("insane-approve (cursor not on option 1 - fail safe)", "curl -X POST h"),
+        {"ts": 1000.0, "verdict": "escalated", "reason": "dangerous command",
+         "command": "dd if=/dev/zero", "session": "w1"},
+        {"ts": 1000.0, "verdict": "delivered", "reason": "", "command": "",
+         "session": "w1"},
+        {"ts": 1000.0, "verdict": "extreme-pushed", "reason": "", "command": "",
+         "session": "w2"},
+        {"ts": 1.0, "verdict": "auto-approved", "reason": "safe permission "
+         "prompt", "command": "old", "session": "w1"},   # before the window
+    ]
+    r = recap.review(entries, since=100.0)
+    ok &= check("review counts every auto-approval in the window",
+                r["approved"] == 7)
+    ok &= check("review excludes entries before the window",
+                r["approved"] == 7 and r["clean"] == 2)
+    ok &= check("an approval the safety gate made is 'clean'", r["clean"] == 2)
+    ok &= check("wild/insane/extreme approvals over a DANGEROUS verdict are "
+                "counted as overridden, whatever the arm level",
+                r["overridden"] == 3)
+    ok &= check("approvals the gate could not read are counted separately - "
+                "unexamined is a different risk from overruled",
+                r["unverified"] == 2)
+    ok &= check("the three approval kinds account for every approval",
+                r["clean"] + r["overridden"] + r["unverified"] == r["approved"])
+    ok &= check("an ESCALATION is never counted as an approval, even when its "
+                "reason is 'dangerous command'",
+                r["escalated"] == 1 and r["overridden"] == 3)
+    ok &= check("deliveries and extreme pushes are counted, not conflated "
+                "with approvals", r["delivered"] == 1 and r["pushed"] == 1)
+
+    # Grouping by exact command produces a bucket of "1x" per one-off and
+    # answers nothing; the verb is what tells the operator what they authorised.
+    ok &= check("overrides are grouped by the risky verb",
+                r["override_cmds"].get("ssh") == 1
+                and r["override_cmds"].get("rm -rf") == 1
+                and r["override_cmds"].get("psql") == 1)
+    ok &= check("a command matching several risky verbs counts under each - "
+                "`ssh ... | psql` is honestly both",
+                set(recap.risk_tags("ssh h 'psql -c drop'")) >= {"ssh", "psql"})
+    ok &= check("a dangerous command this summary cannot label is bucketed as "
+                "'(other)', never dropped - dropping it would understate the "
+                "total the headline count reports",
+                recap.risk_tags("some-exotic-thing --wipe") == ["(other)"])
+    ok &= check("an unreadable command is labelled as such",
+                recap.risk_tags("") == ["(unreadable)"]
+                and r["unverified_cmds"].get("(unreadable)") == 1)
+    ok &= check("overrides are attributed to the session that made them",
+                r["sessions"].get("w1", 0) >= 2 and "w2" in r["sessions"])
+
+    body = "\n".join(recap.review_lines(r))
+    ok &= check("the report leads with the split, not a bare total",
+                "cleared by the safety gate" in body and "approved over it" in body)
+    ok &= check("the report gives a RATE as well as a count - a count alone "
+                "reads as alarming or complacent depending on the denominator",
+                "% of approvals" in body)
+    ok &= check("the report names the overridden verbs", "ssh" in body)
+    ok &= check("the report attributes them to sessions", "by session" in body)
+
+    clean_only = recap.review([ap("safe permission prompt", "ls")], since=0.0)
+    clean_body = "\n".join(recap.review_lines(clean_only))
+    ok &= check("with nothing waved through, the report says so plainly "
+                "instead of printing an empty warning block",
+                "Nothing was waved through" in clean_body
+                and "DANGEROUS" not in clean_body)
+    ok &= check("an empty log reviews to zeros rather than raising",
+                recap.review([], since=0.0)["approved"] == 0)
+    ok &= check("a garbled row is skipped, not fatal",
+                recap.review([{"ts": "nope"}, {"verdict": None},
+                              ap("safe permission prompt", "ls")],
+                             since=0.0)["approved"] == 1)
     return ok
 
 

@@ -1470,6 +1470,40 @@ def cmd_update(args) -> int:
     return 0
 
 
+def cmd_review(args) -> int:
+    """A verdict on relay's OWN judgment, from the audit log.
+
+    `relay recap` answers "what did relay do". This answers the question the
+    audit log has always been able to support and nothing ever asked it: was
+    relay right to do it? Specifically, it separates approvals the SAFETY GATE
+    made from approvals the ARM LEVEL made over the gate's objection - both land
+    in the log as "auto-approved" and they mean opposite things.
+
+    Read-only. Nobody is being scolded: arming a tab insane is a deliberate
+    choice, and this is where its consequences are visible once instead of
+    buried across thousands of scrollback lines nobody re-reads.
+    """
+    import audit
+    import recap
+    since = 0.0 if getattr(args, "all", False) else (
+        recap.start_of_today() - 6 * 86400)
+    rows = audit.read_tail(limit=10 ** 6)
+    r = recap.review(rows, since)
+    window = "all time" if since == 0.0 else "last 7 days"
+    print(f"relay review ({window}) - what relay decided, and on whose "
+          f"authority")
+    print()
+    if not r["approved"] and not r["escalated"]:
+        print("  nothing in the audit log for this window."
+              "\n  -> relay records a line every time it approves, escalates "
+              "or delivers;\n     an empty window means it has not acted "
+              "(or was never armed).")
+        return 0
+    for line in recap.review_lines(r):
+        print(line)
+    return 0
+
+
 def cmd_selftest(args) -> int:
     """Check relay against the LIVE terminal - the half of the manual gate a
     machine can do.
@@ -2313,6 +2347,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
     dr.set_defaults(fn=cmd_doctor)
+
+    rv = sub.add_parser("review",
+                        help="verdict on relay's own decisions (audit log): "
+                             "what the safety gate cleared vs what the arm "
+                             "level waved through")
+    rv.add_argument("--all", action="store_true",
+                    help="all time instead of the last 7 days")
+    rv.set_defaults(fn=cmd_review)
 
     st = sub.add_parser("selftest",
                         help="check relay can still READ your live Claude tabs")
