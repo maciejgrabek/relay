@@ -201,9 +201,26 @@ def main():
     check("an unregistered tab is told WHY there is no number, not just left "
           "blank", "not registered" in unreg)
     check("and it is told what to do about it", "relay join" in unreg)
-    none_yet = "\n".join(usage.preview_lines(None, registered=True))
+    none_yet = "\n".join(usage.preview_lines(None, registered=True,
+                                             has_id=True))
     check("a registered session with no transcript yet says so distinctly",
           "no transcript" in none_yet and "not registered" not in none_yet)
+    # The case that shipped broken: EVERY session in an existing swarm has an
+    # empty claude_session_id the first time it runs a build with usage in it,
+    # because the rows predate the column. Reporting that as "no transcript
+    # yet" tells the operator to wait for something that never arrives.
+    no_id = "\n".join(usage.preview_lines(None, registered=True,
+                                          has_id=False))
+    check("a session registered before ids were recorded is told to re-join",
+          "relay join" in no_id)
+    check("and it is NOT reported as merely waiting for a first turn",
+          "no transcript" not in no_id)
+    check("and it is told re-joining is not destructive - a rename would lose "
+          "every peer that knows the name",
+          "keeps the name" in no_id)
+    check("the three no-number states are all distinguishable",
+          len({no_id, none_yet,
+               "\n".join(usage.preview_lines(None, registered=False))}) == 3)
 
     print()
     if _fails:

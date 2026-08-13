@@ -224,20 +224,36 @@ def ctx_level(u: Optional[dict]) -> str:
     return "ok"
 
 
-def preview_lines(u: Optional[dict], registered: bool) -> list:
+def preview_lines(u: Optional[dict], registered: bool,
+                  has_id: bool = True) -> list:
     """The preview pane's TOKENS block, as plain text lines (that pane renders
     with markup OFF, so no color tags here).
 
-    An unregistered tab gets an explanation, not a blank: 'no number' and 'no
-    number BECAUSE relay cannot tie this tab to a transcript' are different
-    facts, and only the second one tells the operator what to do about it.
+    THREE distinct no-number states, because they need three different actions
+    from the operator and collapsing them is how a working feature reads as a
+    broken one:
+
+    - not registered at all -> `relay join` (nothing to tie to)
+    - registered, but with no session id on file -> ALSO `relay join`, but for
+      a different reason: the session registered before relay recorded ids, so
+      the row predates the column. This is every session in an existing swarm
+      the first time it runs a build with usage in it, and reporting it as "no
+      transcript yet" (as this did on first release) tells the operator to wait
+      for something that will never arrive on its own.
+    - registered with an id, but no transcript yet -> genuinely just wait; the
+      session has not taken a turn.
     """
     if not registered:
         return ["TOKENS  not registered - relay cannot tie this tab",
                 "        to a Claude transcript. `relay join` here",
                 "        to enable it."]
+    if not has_id:
+        return ["TOKENS  registered before relay recorded session ids.",
+                "        Run `relay join` in this tab once to enable it",
+                "        (it keeps the name, mode and task)."]
     if not u:
-        return ["TOKENS  no transcript yet for this session."]
+        return ["TOKENS  no transcript yet - this session has not",
+                "        taken a turn."]
     return [
         f"TOKENS  {u['pct']}% of context · {fmt_tokens(u['ctx'])}"
         f"/{fmt_tokens(u['window'])}",

@@ -1893,10 +1893,12 @@ class RelayApp(App):
         # cell is a percentage because it has to be scannable across the fleet;
         # this is where the operator finds out whether that percentage is a
         # long conversation or one enormous turn.
-        registered = bool((self.watcher.registry or {}).get(sid))
+        _reg = (self.watcher.registry or {}).get(sid)
         tok = "\n".join(
             line[:w] for line in
-            usagemod.preview_lines(self._usage_for(sid), registered)) + "\n"
+            usagemod.preview_lines(self._usage_for(sid), bool(_reg),
+                                   bool((_reg or {}).get("claude_session_id")))
+        ) + "\n"
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
