@@ -1470,6 +1470,33 @@ def cmd_update(args) -> int:
     return 0
 
 
+def cmd_selftest(args) -> int:
+    """Check relay against the LIVE terminal - the half of the manual gate a
+    machine can do.
+
+    Read-only by construction: it reads screens, classifies them, and prints
+    what relay WOULD decide, without typing anything or touching the swarm DB.
+    A selftest that mutates state is one the operator hesitates to run, and a
+    check nobody runs is the check that lets a chrome change ship unnoticed.
+    """
+    try:
+        import iterm2
+    except ImportError:
+        return _err("selftest needs the iterm2 module: pip3 install iterm2")
+    import selftest as _selftest
+    rc = {}
+
+    async def _main(connection):
+        rc["code"] = await _selftest.run(connection, capture=args.capture)
+
+    try:
+        iterm2.run_until_complete(_main, True)
+    except Exception as e:
+        return _err(f"could not reach iTerm2 ({e}) - is iTerm2 running with "
+                    f"the Python API enabled? (Settings > General > Magic)")
+    return rc.get("code", 1)
+
+
 def cmd_doctor(args) -> int:
     """Print swarm health from OUTSIDE the TUI - a lifeline for 'I launched it
     and I'm stuck'. Reads the DB only; never mutates. Flags the two things that
@@ -2286,6 +2313,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
     dr.set_defaults(fn=cmd_doctor)
+
+    st = sub.add_parser("selftest",
+                        help="check relay can still READ your live Claude tabs")
+    st.add_argument("--capture", action="store_true",
+                    help="save any unreadable frame into iterm/fixtures/"
+                         "screens/ as a regression fixture")
+    st.set_defaults(fn=cmd_selftest)
 
     rp = sub.add_parser("recap",
                         help="summarize what relay did today (reads audit log)")

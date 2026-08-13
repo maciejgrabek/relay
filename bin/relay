@@ -20,6 +20,8 @@
 #   relay timer ...  register/list/remove a timer on your own tab
 #   relay demo       guided 60s tour: spawns a demo worker, you watch the loop
 #   relay doctor     print swarm health from outside the TUI (debugging)
+#   relay selftest   check relay can still READ your live Claude tabs
+#                    (--capture saves any unreadable frame as a fixture)
 #   relay update     fetch + fast-forward to the latest relay version
 #                    (the TUI also self-updates at start, at most once a day;
 #                    disable with RELAY_NO_AUTOUPDATE=1)
@@ -39,7 +41,7 @@ case "${1:-}" in
   # Keep this list in sync with cli.py's subparsers - a verb missing here does
   # NOT error, it silently falls through and launches a second TUI. Guarded by
   # test_cli.py's "every cli.py verb is routed by bin/relay" check.
-  join|who|register|send|reply|ask|discuss|say|agree|close|thread|status|task|next|parked|pr|inbox|msgs|help|spawn|doctor|demo|recap|version|update|clean|restore|wipe|timer)
+  join|who|register|send|reply|ask|discuss|say|agree|close|thread|status|task|next|parked|pr|inbox|msgs|help|spawn|doctor|selftest|demo|recap|version|update|clean|restore|wipe|timer)
     exec python3 "$HERE/../iterm/cli.py" "$@" ;;
 esac
 # TUI start: quiet self-update BEFORE the app boots, so the code that runs is
