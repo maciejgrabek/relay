@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ROOT = tempfile.mkdtemp(prefix="relay-test-projects-")
 os.environ["RELAY_CLAUDE_PROJECTS"] = ROOT
+SESS_ROOT = tempfile.mkdtemp(prefix="relay-test-sessions-")
+os.environ["RELAY_CLAUDE_SESSIONS"] = SESS_ROOT
 
 import usage  # noqa: E402
 
@@ -160,6 +162,63 @@ def main():
     check("and it is picked up once it appears - a miss is never cached",
           usage.read("jjjj-9999")["out"] == 3)
 
+    # --- resolving a tab to a session WITHOUT registration -----------------
+    # Claude Code writes ~/.claude/sessions/<pid>.json for every running
+    # session. Walking up from the tab's foreground job finds the id with no
+    # `relay join` at all - which is what lets an unregistered tab report
+    # usage, and what keeps a tab honest after it restarts Claude (the DB
+    # would still name the PREVIOUS run's transcript and show its numbers).
+    usage.reset_cache()
+    os.makedirs(SESS_ROOT, exist_ok=True)
+    with open(os.path.join(SESS_ROOT, "4242.json"), "w") as fh:
+        json.dump({"pid": 4242, "sessionId": "live-abcd",
+                   "cwd": "/w", "status": "idle"}, fh)
+    check("a claude pid resolves straight to its session id",
+          usage.session_id_for_pid(4242) == "live-abcd")
+
+    # iTerm2 reports the FOREGROUND job's pid, which for a Claude tab is often
+    # a descendant (an MCP server, a running Bash tool). Measured live: iTerm2
+    # said 92157 = chrome-devtools-mcp, whose grandparent 92030 was `claude`.
+    chain = {9001: 9002, 9002: 4242}
+    real_parent = usage._parent_pid
+    usage._parent_pid = lambda p: chain.get(p, 0)
+    try:
+        usage.reset_cache()
+        check("a descendant pid walks up to the owning claude session",
+              usage.session_id_for_pid(9001) == "live-abcd")
+        usage.reset_cache()
+        check("an unrelated process tree resolves to nothing, not to whichever "
+              "session happens to be running",
+              usage.session_id_for_pid(7777) == "")
+        # An unbounded walk would turn one shell tab into an endless ps chain.
+        usage.reset_cache()
+        loop = {i: i + 1 for i in range(100, 200)}
+        usage._parent_pid = lambda p: loop.get(p, 0)
+        check("the walk is bounded, so a deep tree cannot hang the panel",
+              usage.session_id_for_pid(100) == "")
+    finally:
+        usage._parent_pid = real_parent
+    check("a missing or nonsense pid resolves to nothing",
+          usage.session_id_for_pid(0) == ""
+          and usage.session_id_for_pid(None) == ""
+          and usage.session_id_for_pid("nope") == "")
+    # A session that starts after the index was built must be picked up: the
+    # index is keyed on the sessions-dir mtime, not cached forever.
+    usage.reset_cache()
+    usage.session_id_for_pid(4242)
+    with open(os.path.join(SESS_ROOT, "4343.json"), "w") as fh:
+        json.dump({"pid": 4343, "sessionId": "later-efgh"}, fh)
+    os.utime(SESS_ROOT, (0, 0))    # force a different mtime
+    check("a session that starts after the first lookup is still found",
+          usage.session_id_for_pid(4343) == "later-efgh")
+    # A malformed or partial file must not take the whole index down - Claude
+    # Code writes these live and one can be caught mid-write.
+    with open(os.path.join(SESS_ROOT, "bad.json"), "w") as fh:
+        fh.write("{not json")
+    os.utime(SESS_ROOT, (1, 1))
+    check("a malformed session file is skipped, not fatal",
+          usage.session_id_for_pid(4242) == "live-abcd")
+
     # --- rendering ---------------------------------------------------------
     check("fmt_tokens keeps small counts exact", usage.fmt_tokens(812) == "812")
     check("fmt_tokens abbreviates thousands", usage.fmt_tokens(48_200) == "48.2k")
@@ -197,30 +256,29 @@ def main():
     check("cached tokens are reported separately, never folded into a total",
           "1.2M" in body and "1.25M" not in body and "total" not in body.lower())
 
-    unreg = "\n".join(usage.preview_lines(None, registered=False))
-    check("an unregistered tab is told WHY there is no number, not just left "
-          "blank", "not registered" in unreg)
-    check("and it is told what to do about it", "relay join" in unreg)
+    # Registration is no longer required: the process-tree lookup resolves an
+    # unregistered tab the same as a registered one, so an unregistered tab
+    # with a resolved id must be treated identically.
+    unreg = "\n".join(usage.preview_lines(
+        {"pct": 5, "ctx": 10_000, "window": 200_000, "out": 1, "in": 1,
+         "cached": 1, "turns": 1, "model": "m"}, registered=False))
+    check("an UNREGISTERED tab with a resolved id reports numbers like any "
+          "other - registration is no longer the gate",
+          "5% of context" in unreg and "relay join" not in unreg)
     none_yet = "\n".join(usage.preview_lines(None, registered=True,
                                              has_id=True))
     check("a registered session with no transcript yet says so distinctly",
           "no transcript" in none_yet and "not registered" not in none_yet)
-    # The case that shipped broken: EVERY session in an existing swarm has an
-    # empty claude_session_id the first time it runs a build with usage in it,
-    # because the rows predate the column. Reporting that as "no transcript
-    # yet" tells the operator to wait for something that never arrives.
     no_id = "\n".join(usage.preview_lines(None, registered=True,
                                           has_id=False))
-    check("a session registered before ids were recorded is told to re-join",
-          "relay join" in no_id)
+    check("a tab with no resolvable session id names the LIKELY cause first",
+          "not running here" in no_id)
     check("and it is NOT reported as merely waiting for a first turn",
           "no transcript" not in no_id)
-    check("and it is told re-joining is not destructive - a rename would lose "
-          "every peer that knows the name",
-          "keeps the name" in no_id)
-    check("the three no-number states are all distinguishable",
-          len({no_id, none_yet,
-               "\n".join(usage.preview_lines(None, registered=False))}) == 3)
+    check("relay join survives as the explicit fallback, not the headline",
+          "relay join" in no_id)
+    check("the two no-number states stay distinguishable",
+          no_id != none_yet)
 
     print()
     if _fails:

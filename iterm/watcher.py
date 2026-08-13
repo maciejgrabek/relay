@@ -92,6 +92,10 @@ class SessionInfo:
     # Consecutive frames carrying none of the chrome relay reads (gates.blind).
     # Diagnostic only - no decision consults it. See Watcher._check_blind.
     blind_ticks: int = 0
+    # iTerm2's foreground-job pid. The route to this tab's Claude session id
+    # (usage.session_id_for_pid) and therefore its token usage, WITHOUT the tab
+    # having to register. 0 when unreadable.
+    job_pid: int = 0
     n_escalated: int = 0             # dangerous/question escalations in this tab
     stale: bool = False              # swarm: flagged unresponsive (see Task 8)
     extreme_prompt: str = ""         # extreme: text pushed into an idle tab
@@ -443,6 +447,21 @@ class Watcher:
         return v.strip() if isinstance(v, str) and v.strip() else ""
 
     @staticmethod
+    async def _session_pid(s):
+        """iTerm2's foreground-job pid for the session, or 0.
+
+        Often a DESCENDANT of claude (an MCP server, a running Bash tool), not
+        claude itself - usage.session_id_for_pid walks up from here. Defensive
+        like _session_job: an unreadable pid costs this tab its token numbers
+        and nothing else.
+        """
+        try:
+            v = await s.async_get_variable("jobPid")
+            return int(v or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
     async def _session_path(s) -> str:
         """iTerm2's current directory for the session, or '' when unavailable.
 
@@ -476,6 +495,7 @@ class Watcher:
                     title = titles.strip_prefix(raw_title)
                     job = await self._session_job(s)
                     path = await self._session_path(s)
+                    jpid = await self._session_pid(s)
                     # Cache iTerm2's cwd on the SessionInfo for EVERY tab, the
                     # same way `job` is cached, regardless of registration -
                     # this is the only directory source an unregistered solo
@@ -503,7 +523,7 @@ class Watcher:
                         info = SessionInfo(session_id=sid, title=title,
                                            window_idx=wi, tab_idx=ti,
                                            _iterm_session=s, job=job,
-                                           workdir=path)
+                                           workdir=path, job_pid=jpid)
                         info._raw_title = raw_title
                         # Grab the current screen once so the list/preview has
                         # content immediately, without holding a streamer open.
@@ -516,6 +536,7 @@ class Watcher:
                         info._iterm_session = s
                         info.job = job
                         info.workdir = path
+                        info.job_pid = jpid
         # Drop sessions whose tabs closed.
         for sid in list(self.sessions):
             if sid not in seen:

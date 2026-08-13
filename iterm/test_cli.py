@@ -566,17 +566,22 @@ def run():
                (_live[0],))
     _c.commit()
     code, out_noid, _ = run_cli("doctor")
-    ok &= check("doctor flags a session that cannot report token usage",
-                code == 0 and "cannot report token usage" in out_noid
+    ok &= check("doctor reports a session with no stored session id",
+                code == 0 and "no Claude session id stored" in out_noid
                 and _live[0] in out_noid)
-    ok &= check("doctor says how to fix it, and that it is not a rename",
-                "relay join" in out_noid and "keeps the name" in out_noid)
+    ok &= check("but does NOT call it a fault - the panel resolves it live "
+                "from the process tree, so these sessions report tokens fine",
+                "!!" not in [l.strip()[:2] for l in out_noid.splitlines()
+                             if _live[0] in l][0][:2]
+                and "cannot report" not in out_noid)
+    ok &= check("and it still names the explicit fallback",
+                "relay join" in out_noid)
     for _n in _live:
         _dbm.set_claude_session_id(_c, _n, f"SESS-{_n}")
     code, out_ok, _ = run_cli("doctor")
-    ok &= check("and it goes quiet once every session has an id - a warning "
-                "that never clears is one the operator learns to ignore",
-                code == 0 and "cannot report token usage" not in out_ok)
+    ok &= check("and it goes quiet once every session has an id - a note that "
+                "never clears is one the operator learns to ignore",
+                code == 0 and "no Claude session id stored" not in out_ok)
 
     # doctor on an empty DB still works and guides the user.
     import tempfile as _tf

@@ -1461,23 +1461,6 @@ class RelayApp(App):
                     self.query_one(Log).write_line(f"mascot widget: {err}")
         except Exception:
             pass
-        # Say ONCE, at launch, that an upgraded swarm needs a re-join. Without
-        # it the only symptom is a blank CTX cell on every row, which is
-        # indistinguishable from the feature not existing - and the operator
-        # would have to open each session's preview to find out otherwise.
-        # Once, not per tick: this is a fact about the DB, not a condition to
-        # nag about, and it is fixed by one command per session.
-        try:
-            stale_ids = [s["name"] for s in swarmdb.list_sessions(
-                self._swarm_db_conn())
-                if not s["closed_at"] and not s["claude_session_id"]]
-            if stale_ids:
-                self.query_one(Log).write_line(
-                    f"usage: {', '.join(stale_ids)} cannot report tokens (CTX "
-                    f"blank) - run `relay join` once in each; it keeps the "
-                    f"name, mode and task")
-        except Exception:
-            pass
         # Launch the iTerm2 connection in the background; it shares this loop.
         self._conn_worker = self.run_worker(self._connect(), exclusive=True)
         self.set_interval(1.0, self._refresh)  # periodic repaint (ages, etc.)
@@ -1835,13 +1818,36 @@ class RelayApp(App):
         """
         if not self.watcher:
             return None
-        reg = (self.watcher.registry or {}).get(sid)
-        if not reg:
-            return None
         try:
-            return usagemod.read(reg.get("claude_session_id") or "")
+            return usagemod.read(self._claude_sid_for(sid))
         except Exception:
             return None
+
+    def _claude_sid_for(self, sid: str) -> str:
+        """This tab's Claude session id, by the most trustworthy route available.
+
+        PROCESS TREE FIRST. Claude Code writes ~/.claude/sessions/<pid>.json
+        for every running session, so walking up from the tab's foreground job
+        finds the id with no registration at all - which is what lets an
+        unregistered tab report usage, and what keeps a tab honest after it
+        restarts Claude (the DB would still name the PREVIOUS run's transcript,
+        and happily show its numbers forever).
+
+        The registry value is the fallback, not the primary, for exactly that
+        staleness reason. It still matters: it is the only route left when
+        ~/.claude/sessions is absent or a session's process tree cannot be
+        walked.
+        """
+        info = self.watcher.sessions.get(sid) if self.watcher else None
+        live = ""
+        try:
+            live = usagemod.session_id_for_pid(getattr(info, "job_pid", 0))
+        except Exception:
+            live = ""
+        if live:
+            return live
+        reg = (self.watcher.registry or {}).get(sid) or {}
+        return reg.get("claude_session_id") or ""
 
     def _update_preview(self) -> None:
         if not self.watcher or not self._preview_visible:
@@ -1922,12 +1928,13 @@ class RelayApp(App):
         # cell is a percentage because it has to be scannable across the fleet;
         # this is where the operator finds out whether that percentage is a
         # long conversation or one enormous turn.
-        _reg = (self.watcher.registry or {}).get(sid)
+        # `has_id` is now "relay found this tab's session id by ANY route",
+        # so a tab resolved through the process tree is never told to run
+        # `relay join` - it does not need to.
         tok = "\n".join(
             line[:w] for line in
-            usagemod.preview_lines(self._usage_for(sid), bool(_reg),
-                                   bool((_reg or {}).get("claude_session_id")))
-        ) + "\n"
+            usagemod.preview_lines(self._usage_for(sid), True,
+                                   bool(self._claude_sid_for(sid)))) + "\n"
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "

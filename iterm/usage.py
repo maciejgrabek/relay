@@ -29,6 +29,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import subprocess
 from typing import Optional
 
 # Every model relay is likely to watch ships a 200k context window. The 1M
@@ -41,6 +42,116 @@ from typing import Optional
 # direction to be wrong in.
 _BASE_WINDOW = 200_000
 _WIDE_WINDOW = 1_000_000
+
+
+def sessions_root() -> str:
+    """Where Claude Code records one JSON file per RUNNING session, named for
+    its process id. Overridable for tests like projects_root()."""
+    return os.environ.get(
+        "RELAY_CLAUDE_SESSIONS",
+        os.path.expanduser("~/.claude/sessions"))
+
+
+# pid -> session id, and the sessions-dir mtime the map was built at. Rebuilt
+# when the directory changes, so a session that starts (or exits) mid-run is
+# picked up without a per-tick directory scan.
+_PID_INDEX: dict = {}
+_PID_INDEX_MTIME = [-1.0]
+# tab foreground-job pid -> resolved session id (or '' for "walked and found
+# nothing"). The walk costs a few `ps` calls; the panel asks per tab per tick.
+_PID_WALK: dict = {}
+
+
+def _sessions_index() -> dict:
+    """{claude pid: session id} from ~/.claude/sessions/<pid>.json.
+
+    Rebuilt only when the directory's mtime moves. Files are keyed by pid AND
+    carry `pid` inside; the inner value is trusted because a stale filename
+    (pid reused by an unrelated process after a crash) would otherwise bind a
+    tab to a transcript that was never its own.
+    """
+    root = sessions_root()
+    try:
+        mtime = os.path.getmtime(root)
+    except OSError:
+        _PID_INDEX.clear()
+        return _PID_INDEX
+    if mtime == _PID_INDEX_MTIME[0]:
+        return _PID_INDEX
+    idx = {}
+    try:
+        for name in os.listdir(root):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(root, name)) as fh:
+                    d = json.load(fh)
+                pid, sid = int(d.get("pid") or 0), str(d.get("sessionId") or "")
+            except (OSError, ValueError, TypeError):
+                continue
+            if pid and sid:
+                idx[pid] = sid
+    except OSError:
+        return _PID_INDEX
+    _PID_INDEX.clear()
+    _PID_INDEX.update(idx)
+    _PID_INDEX_MTIME[0] = mtime
+    _PID_WALK.clear()      # parents may have changed under the new index
+    return _PID_INDEX
+
+
+def _parent_pid(pid: int) -> int:
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=2).stdout
+        return int(out.strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+MAX_WALK = 8
+
+
+def session_id_for_pid(pid) -> str:
+    """The Claude session id owning a tab's foreground job, or ''.
+
+    iTerm2 reports the FOREGROUND job's pid, which for a Claude tab is often a
+    descendant rather than claude itself - an MCP server, a running Bash tool,
+    a spawned agent. (Measured on a live window: iTerm2 said 92157, which was
+    `chrome-devtools-mcp`, whose grandparent 92030 was the actual `claude`.) So
+    walk up the process tree until a pid appears in the sessions index.
+
+    This is what makes usage work WITHOUT registration. `relay join` recording
+    CLAUDE_CODE_SESSION_ID is still the explicit path, but it only covers
+    sessions that registered, and it goes stale the moment a tab restarts
+    Claude - the DB keeps pointing at the previous run's transcript. Reading
+    the live process tree has neither problem, so it is preferred and the DB
+    value is the fallback.
+
+    Bounded to MAX_WALK hops so a deep tool tree cannot turn one tab's lookup
+    into an unbounded ps chain, and cached per pid because the answer for a
+    live process never changes.
+    """
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        return ""
+    if pid <= 1:
+        return ""
+    if pid in _PID_WALK:
+        return _PID_WALK[pid]
+    idx = _sessions_index()
+    cur, hops = pid, 0
+    while cur > 1 and hops < MAX_WALK:
+        if cur in idx:
+            _PID_WALK[pid] = idx[cur]
+            return idx[cur]
+        cur = _parent_pid(cur)
+        hops += 1
+    # Cached as a miss too: a shell tab or relay's own panel would otherwise
+    # re-walk the whole tree every tick forever.
+    _PID_WALK[pid] = ""
+    return ""
 
 
 def projects_root() -> str:
@@ -100,6 +211,9 @@ def reset_cache() -> None:
     """Drop all incremental state. For tests, and for a panel restart."""
     _STATE.clear()
     _PATHS.clear()
+    _PID_INDEX.clear()
+    _PID_INDEX_MTIME[0] = -1.0
+    _PID_WALK.clear()
 
 
 def _blank(path: str) -> dict:
@@ -229,28 +343,24 @@ def preview_lines(u: Optional[dict], registered: bool,
     """The preview pane's TOKENS block, as plain text lines (that pane renders
     with markup OFF, so no color tags here).
 
-    THREE distinct no-number states, because they need three different actions
-    from the operator and collapsing them is how a working feature reads as a
-    broken one:
+    Two no-number states, and they need different actions from the operator -
+    collapsing them is how a working feature reads as a broken one:
 
-    - not registered at all -> `relay join` (nothing to tie to)
-    - registered, but with no session id on file -> ALSO `relay join`, but for
-      a different reason: the session registered before relay recorded ids, so
-      the row predates the column. This is every session in an existing swarm
-      the first time it runs a build with usage in it, and reporting it as "no
-      transcript yet" (as this did on first release) tells the operator to wait
-      for something that will never arrive on its own.
-    - registered with an id, but no transcript yet -> genuinely just wait; the
-      session has not taken a turn.
+    - no session id found by ANY route -> almost always "Claude is not running
+      in this tab". Registration is no longer the fix, because the process-tree
+      lookup needs none; `relay join` survives only as the explicit fallback
+      for when ~/.claude/sessions is unavailable.
+    - id found, but no transcript yet -> genuinely just wait; the session has
+      not taken a turn.
+
+    `registered` is kept in the signature and no longer branches on its own:
+    an unregistered tab now reports usage exactly like a registered one, and
+    telling it to register would be advice that changes nothing.
     """
-    if not registered:
-        return ["TOKENS  not registered - relay cannot tie this tab",
-                "        to a Claude transcript. `relay join` here",
-                "        to enable it."]
     if not has_id:
-        return ["TOKENS  registered before relay recorded session ids.",
-                "        Run `relay join` in this tab once to enable it",
-                "        (it keeps the name, mode and task)."]
+        return ["TOKENS  relay could not tie this tab to a Claude session.",
+                "        Usually means Claude is not running here. If it is,",
+                "        `relay join` in this tab records the link directly."]
     if not u:
         return ["TOKENS  no transcript yet - this session has not",
                 "        taken a turn."]

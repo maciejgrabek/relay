@@ -212,18 +212,26 @@ own environment, and `relay join` runs *inside* that process - so a session
 hands relay the exact id of its own transcript, which relay then reads from
 `~/.claude/projects/`. It's an exact pointer, not a guess.
 
-**Upgrading an existing swarm:** sessions that registered before relay recorded
-session ids have no id on file, so they show a blank `CTX` until they run
-`relay join` once. That keeps the name, mode and current task - it's a
-re-orientation, not a rename. The preview pane says so for any session in that
-state, rather than leaving you to wonder why the column is empty.
+**No registration needed.** Claude Code writes `~/.claude/sessions/<pid>.json`
+for every running session, so relay walks up from the tab's foreground job to
+the `claude` process and reads the session id straight off it. Unregistered
+tabs report usage exactly like registered ones.
 
-**That means registered sessions only.** An unregistered tab has no id to join
-on, so its `CTX` cell is blank and the preview says why. Relay deliberately does
-*not* fall back to guessing from the directory: sibling tabs in one directory
-are the normal case here, they'd both resolve to the same transcript, and a
-plausible wrong number is worse than no number on a panel whose job is telling
-you the truth. Run `relay join` in the tab to enable it.
+The walk matters: iTerm2 reports the *foreground job's* pid, which for a Claude
+tab is often a descendant - an MCP server, a running Bash tool. On a live window
+iTerm2 reported `92157` (`chrome-devtools-mcp`), whose grandparent `92030` was
+the actual `claude`.
+
+This route is preferred over the id `relay join` stores, because the stored one
+goes stale the moment a tab restarts Claude - the DB would keep naming the
+previous run's transcript and happily show its numbers forever. The stored id
+survives as the fallback for when `~/.claude/sessions` is unavailable.
+
+Relay deliberately does *not* fall back to guessing from the directory: sibling
+tabs in one directory are the normal case here, they'd both resolve to the same
+transcript, and a plausible wrong number is worse than no number on a panel
+whose job is telling you the truth. A blank `CTX` almost always means Claude
+isn't running in that tab.
 
 **`cached` is reported separately and never folded into a total.** Cache reads
 are repeat billing on the same prompt - they run to millions of tokens while
