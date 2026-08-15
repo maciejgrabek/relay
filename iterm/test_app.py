@@ -130,6 +130,13 @@ class _TestApp(appmod.RelayApp):
     def __init__(self, sessions, **k):
         super().__init__(**k)
         self._stub = sessions
+        # Every acquire/release the app asks for, in order. Overriding the one
+        # door also means the suite no longer spawns a real caffeinate child
+        # per run_test() block, which it silently did before.
+        self.caffeinate_calls = []
+
+    def _set_caffeinate(self, want):
+        self.caffeinate_calls.append(bool(want))
 
     async def _connect(self):
         self.watcher = StubWatcher(self._stub)
@@ -547,6 +554,52 @@ async def go():
         await pilot.press("q")
         await pilot.pause()
     chk("idle q quits instantly (guard never armed)", not ai._quit_armed)
+
+    # --- c: hold / release the Mac without quitting --------------------------
+    cf = _TestApp(_one(), dry_run=True)
+    async with cf.run_test() as pilot:
+        await pilot.pause()
+        chk("mount acquires the assertion", cf.caffeinate_calls[:1] == [True])
+        chk("mount starts held", cf._power is not None and cf._power.held)
+
+        cf.caffeinate_calls.clear()
+        await pilot.press("c")
+        await pilot.pause()
+        chk("c releases", cf._power.held is False)
+        chk("a c release is manual", cf._power.manual is True)
+        chk("c reconciles the child", False in cf.caffeinate_calls)
+
+        # The whole point of the manual flag: work resuming must not undo it.
+        for i in cf.watcher.sessions.values():
+            i.state = "working"
+        cf._refresh()
+        await pilot.pause()
+        chk("a manual release survives a session going to work",
+            cf._power.held is False)
+
+        await pilot.press("c")
+        await pilot.pause()
+        chk("c takes the assertion back", cf._power.held is True)
+        chk("taking it back clears manual", cf._power.manual is False)
+
+        # An armed timer over an idle fleet puts a countdown in the header.
+        cf._power.release_after = 30.0
+        for i in cf.watcher.sessions.values():
+            i.state = "idle"
+        cf._refresh()
+        await pilot.pause()
+        sub = str(cf.query_one("#subtitle", appmod.Static).render())
+        chk("header carries the countdown", "releases in" in sub)
+
+        # ...and says nothing at all when the timer is off.
+        cf._power.release_after = 0.0
+        cf._refresh()
+        await pilot.pause()
+        sub = str(cf.query_one("#subtitle", appmod.Static).render())
+        chk("silent when the timer is off", "releases in" not in sub)
+
+    chk("help text covers c", "caffeinate" in appmod.help_text().lower())
+    chk("keybar covers c", "caffeinate" in appmod.KEYBAR.lower())
 
     # --- mascot barometer: cleared tally + earned reactions -------------------
     from app import mascot_face_big, effective_mascot_state

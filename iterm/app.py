@@ -28,6 +28,7 @@ from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 import audit  # noqa: E402
 import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
+import power as powermod  # noqa: E402
 import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
 import usage as usagemod  # noqa: E402
@@ -250,7 +251,8 @@ KEYBAR = (
            ("E×2", "extreme")])
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("p", "pause"), ("!", "stop/tell"), (",", "settings"), ("R×2", "restore"),
+             ("p", "pause"), ("!", "stop/tell"), ("c", "caffeinate"),
+             (",", "settings"), ("R×2", "restore"),
              ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
 
 
@@ -916,6 +918,7 @@ def help_text() -> str:
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
         row("m", "mascot: float the creature on your desktop, above other apps"),
+        row("c", "caffeinate: let the Mac sleep now, or take the assertion back"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
         row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
         row("!", "INTERVENE: stop running sessions and/or broadcast to them"),
@@ -1287,6 +1290,7 @@ class RelayApp(App):
         Binding("d", "none", "Disarm"),
         Binding("x", "hide", "Hide"),
         Binding("m", "mascot", "Mascot"),
+        Binding("c", "caffeinate", "Caffeinate"),
         Binding("v", "audit_view", "Audit view", show=False),
         Binding("f", "toggle_preview", "Feed on/off", show=False),
         Binding("t", "timers", "Timers", show=False),
@@ -1307,6 +1311,10 @@ class RelayApp(App):
         self.watcher: Watcher | None = None
         self._connection = None
         self._caffeinate = None
+        self._power = None         # power.Power, built at mount from config
+        # Checked once. With this set relay never acquires at all, and `c`
+        # says so rather than pretending to toggle something that isn't there.
+        self._no_caffeinate = bool(os.environ.get("RELAY_NO_CAFFEINATE"))
         self._mascot_proc = None   # the floating mascot window, if launched
         self._row_sids: list[str] = []
         self._temp = 0.0          # reactor temperature (integrates toward pressure)
@@ -1442,14 +1450,16 @@ class RelayApp(App):
         except Exception:
             self._preview_visible = True
         self._apply_preview()
-        # Keep the Mac awake while open.
-        if not os.environ.get("RELAY_NO_CAFFEINATE"):
-            try:
-                self._caffeinate = subprocess.Popen(
-                    ["caffeinate", "-dimsu", "-w", str(os.getpid())],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+        # Keep the Mac awake while open - and, if the operator opted in with
+        # [power] release_after, let it go once the whole fleet is quiet.
+        # Releasing is not sleeping: it hands the decision back to macOS, which
+        # knows from real HID input whether anyone is here.
+        try:
+            _after = cfgmod.load()[0].power_release_after
+        except Exception:
+            _after = 0.0
+        self._power = powermod.Power(release_after=_after)
+        self._set_caffeinate(True)
         # The floating mascot, when the operator has asked for it always-on.
         # 'm' toggles it either way; this is only the launch-with-relay switch.
         try:
@@ -1699,6 +1709,16 @@ class RelayApp(App):
         # Attention counts: only the parts that are non-zero earn header space.
         # Own panel row excluded - it can never legitimately await a human.
         others = [i for i in sess if i.session_id != self._own_sid]
+        # Power: hold the assertion while anything is working, release when the
+        # fleet has been quiet for [power] release_after minutes. Own row
+        # excluded, same as the attention counts - relay is not the fleet.
+        pow_tag = ""
+        if self._power is not None:
+            _now = time.time()
+            self._set_caffeinate(
+                self._power.tick(_now,
+                                 any(i.state == "working" for i in others)))
+            pow_tag = self._power.status(_now)
         # prompting AND blocked: the header must never contradict the strip.
         awaiting = sum(1 for i in others
                        if i.state in ("prompting", "blocked"))
@@ -1725,6 +1745,11 @@ class RelayApp(App):
             attn += f" [{DIM}]·[/] [{CYAN}]{queued_n} msgs queued[/]"
         if parked_n:
             attn += f" [{DIM}]·[/] [{CYAN}]{parked_n} parked[/]"
+        if pow_tag:
+            # DIM once released: a steady state, not news. The countdown is
+            # CYAN because it is a thing actively about to happen.
+            attn += (f" [{DIM}]·[/] "
+                     f"[{CYAN if self._power.held else DIM}]{pow_tag}[/]")
         # The canary. Placed FIRST in the pause slot rather than appended to
         # the attention strip, because it does not describe the swarm - it
         # says relay's reading of the swarm is not to be trusted, which
@@ -2115,6 +2140,11 @@ class RelayApp(App):
             # The reactor tick would pick it up within 0.5s; redraw now so the
             # creature changes under the user's hand, not a beat later.
             self._tick_reactor()
+        elif field == "power_release_after":
+            # The app owns the assertion, so the editor's new duration takes
+            # effect on the next tick without a restart.
+            if self._power is not None:
+                self._power.release_after = value
 
     def _settings_play(self) -> None:
         if self._working_cfg is None:
@@ -3750,6 +3780,30 @@ class RelayApp(App):
         self._kill_stray_mascots()
         widgetmod.clear_state()
 
+    def _set_caffeinate(self, want: bool) -> None:
+        """Reconcile the caffeinate child against `want`. THE single door for
+        the assertion - mount, the idle tick, `c` and quit all come through
+        here, so they cannot drift apart. Idempotent: asking for what is
+        already true does nothing. RELAY_NO_CAFFEINATE is honored here rather
+        than at each call site."""
+        if want:
+            if self._caffeinate is not None or self._no_caffeinate:
+                return
+            try:
+                self._caffeinate = subprocess.Popen(
+                    ["caffeinate", "-dimsu", "-w", str(os.getpid())],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            return
+        if self._caffeinate is None:
+            return
+        try:
+            self._caffeinate.terminate()
+        except Exception:
+            pass
+        self._caffeinate = None
+
     def action_mascot(self) -> None:
         # The timers overlay binds 'm' to its mode cycle and stops the event,
         # so this should be unreachable while it is open. Guarding anyway:
@@ -3766,6 +3820,28 @@ class RelayApp(App):
         err = self._start_mascot()
         log.write_line("mascot widget opened"
                        if not err else f"mascot widget: {err}")
+
+    def action_caffeinate(self) -> None:
+        """Release the Mac to sleep by hand, or take the assertion back. A
+        manual release is sticky: a session waking at 3am will not undo it,
+        which is the difference between this and the idle timer."""
+        # Same guard as 'm', for the same reason - a plain letter key should
+        # not act behind an open overlay, and correctness here should not rest
+        # on Textual's dispatch order.
+        if self._any_overlay_open():
+            return
+        if self._no_caffeinate:
+            self.query_one(Log).write_line(
+                "caffeinate: disabled this run (RELAY_NO_CAFFEINATE)")
+            return
+        if self._power is None:
+            return
+        self._power.toggle(time.time())
+        self._set_caffeinate(self._power.held)
+        self.query_one(Log).write_line(
+            "caffeinate: held - the Mac stays awake" if self._power.held
+            else "caffeinate: released - macOS may now sleep this Mac")
+        self._refresh()
 
     async def action_quit(self) -> None:
         # Double-press guard, but ONLY when quitting abandons something live
@@ -3798,11 +3874,7 @@ class RelayApp(App):
             except Exception:
                 pass
         self._stop_mascot()
-        if self._caffeinate:
-            try:
-                self._caffeinate.terminate()
-            except Exception:
-                pass
+        self._set_caffeinate(False)
         self.exit()
 
 
