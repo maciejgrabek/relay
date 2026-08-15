@@ -74,7 +74,11 @@ consumers can render relay's state without asking it anything.
 - **Inject is narrow.** Only in sessions you've armed, and only when both gates
   below pass.
 - While the TUI is open it runs **`caffeinate`** so your Mac (and the armed
-  sessions) don't sleep. Quitting releases it. Opt out with `RELAY_NO_CAFFEINATE=1`.
+  sessions) don't sleep. Quitting releases it, `c` releases it by hand, and
+  `[power] release_after` releases it automatically once the whole fleet has
+  been idle that many minutes (default `0`, never). Opt out entirely with
+  `RELAY_NO_CAFFEINATE=1`. Releasing is not sleeping - relay stops *preventing*
+  sleep and hands the decision back to macOS, which knows whether you're here.
 
 **Why this exists:** Claude Code's built-in command-shape / obfuscation detector
 fires permission prompts that **hooks cannot suppress** (they trigger even on
@@ -442,13 +446,14 @@ can't silently auto-approve.)
 | `v` | **Audit view**: the selected session's record of unattended decisions (approvals, escalations, deliveries) in the feed pane; `v` again returns to the live feed |
 | `t` | **Timers overlay**: the selected session's timers (see [Session timers](#session-timers)); `t` again or `esc` closes it |
 | `m` | **Mascot widget**: open / close the floating desktop creature (see [The desktop widget](#the-desktop-widget)). Inert while an overlay is open, where `m` belongs to that overlay |
+| `c` | **Caffeinate**: release the assertion so the Mac may sleep, or take it back. A release you make by hand is **sticky** - a session waking at 3am won't undo it - where an automatic one (`[power] release_after`) re-acquires the moment anything starts working. The header shows the countdown while it runs, and says so once released. Inert behind an open overlay, like `m` |
 | `?` | Help overlay: key map + arm-level cheat sheet |
 | `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
 | `Z` `Z` | **Press twice:** ZAP the whole project - all tasks, sessions and messages (`relay wipe --project <p> --all`). Refuses to guess when several projects exist |
 | `E` `E` | **Press twice:** arm EXTREME on an INSANE session - configure the push prompt (double-press to confirm). Requires session already in INSANE mode |
-| `q` | Quit (tears down the iTerm2 connection, releases `caffeinate`). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
+| `q` | Quit (tears down the iTerm2 connection, releases `caffeinate` if it is still held - `c` releases it without quitting). Instant when idle; when sessions are armed or swarm work is live (queued messages, `doing` tasks) it asks for a **second `q`** within 5s - same confirm pattern as `R`/`W`, because quitting stops auto-approval and delivery |
 
 `R` and `W` only act when a worker's tab has closed while it still owned tasks;
 the panel shows a red hint and the count when that happens. The double-press is
@@ -1165,7 +1170,7 @@ Environment variables (set before launching `relay`):
 | `RELAY_AUDIT_LOG`            | `~/.relay/audit.jsonl`     | Where the audit trail is written          |
 | `RELAY_AUDIT_RETENTION_DAYS` | `7`                        | Days of audit history kept at launch      |
 | `RELAY_NOTIFY_COOLDOWN`      | `30`                       | Min seconds between alerts per session    |
-| `RELAY_NO_CAFFEINATE`        | unset                      | Set to `1` to not keep the Mac awake      |
+| `RELAY_NO_CAFFEINATE`        | unset                      | Set to `1` to never keep the Mac awake (see `[power] release_after` to release it on an idle fleet instead) |
 | `RELAY_NO_REACTOR`           | unset                      | Set to `1` to hide the reactor meter      |
 | `RELAY_DB`                   | `~/.relay/relay.db`        | Swarm SQLite file (sessions/messages/tasks) |
 | `RELAY_LOCK`                 | `~/.relay/relay.lock`      | Single-instance lock (one panel at a time) |
@@ -1255,6 +1260,18 @@ name = crt             ; which creature watches the fleet - crt | invader | owl
 [layout]
 preview = true         ; show the live-feed pane under the list (default true);
                        ; toggle live with f, or here in the settings editor
+
+[power]
+release_after = 0      ; minutes of a FULLY IDLE fleet (nothing in the working
+                       ; state) before relay releases caffeinate. 0 = never,
+                       ; the default, which keeps today's behaviour. Releasing
+                       ; is not sleeping: relay stops preventing sleep and
+                       ; hands the decision back to macOS, which knows from
+                       ; real HID input whether you are at the machine - so a
+                       ; 30 here cannot sleep a Mac you are sitting in front
+                       ; of. A blocked session counts as idle (it is going
+                       ; nowhere until a human arrives). Release by hand with
+                       ; c, which is sticky where the timer's release is not
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
