@@ -3793,8 +3793,17 @@ class RelayApp(App):
                 self._caffeinate = subprocess.Popen(
                     ["caffeinate", "-dimsu", "-w", str(os.getpid())],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            except Exception as e:
+                # Latch off. This used to be a once-at-mount spawn; now that
+                # the idle tick can ask again every second, a missing or
+                # unspawnable caffeinate would retry forever in silence.
+                self._no_caffeinate = True
+                try:
+                    self.query_one(Log).write_line(
+                        f"caffeinate unavailable ({e.__class__.__name__}) - "
+                        f"the Mac will sleep on its own schedule")
+                except Exception:
+                    pass
             return
         if self._caffeinate is None:
             return

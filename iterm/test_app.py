@@ -601,6 +601,35 @@ async def go():
     chk("help text covers c", "caffeinate" in appmod.help_text().lower())
     chk("keybar covers c", "caffeinate" in appmod.KEYBAR.lower())
 
+    # A spawn that cannot work must latch off, not retry every tick forever.
+    # This is the ONE test that exercises the real _set_caffeinate body, so it
+    # subclasses past the recording override the rest of the suite uses.
+    class _RealDoor(_TestApp):
+        _set_caffeinate = appmod.RelayApp._set_caffeinate
+
+    rd = _RealDoor(_one(), dry_run=True)
+    async with rd.run_test() as pilot:
+        await pilot.pause()
+        rd._no_caffeinate = False
+        rd._caffeinate = None
+        real_popen = appmod.subprocess.Popen
+        calls = []
+
+        def _boom(*a, **k):
+            calls.append(a)
+            raise FileNotFoundError("caffeinate")
+
+        appmod.subprocess.Popen = _boom
+        try:
+            rd._set_caffeinate(True)
+            rd._set_caffeinate(True)
+            rd._set_caffeinate(True)
+        finally:
+            appmod.subprocess.Popen = real_popen
+        chk("an unspawnable caffeinate is tried once, not every tick",
+            len(calls) == 1)
+        chk("...and latches off", rd._no_caffeinate is True)
+
     # --- mascot barometer: cleared tally + earned reactions -------------------
     from app import mascot_face_big, effective_mascot_state
 
