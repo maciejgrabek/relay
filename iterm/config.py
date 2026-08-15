@@ -21,6 +21,10 @@
     [widget]
     enabled = false        ; the floating desktop mascot (a second process)
 
+    [power]
+    release_after = 0      ; minutes of a fully idle fleet before caffeinate is
+                           ; released. 0 = never (today's behaviour)
+
 Precedence: defaults < config file < environment variable. Env always wins,
 so existing setups keep working. A missing file, section, or key silently
 yields defaults; a malformed file or value yields defaults plus a warning
@@ -84,6 +88,10 @@ class Config:
     # desktop until you ask for one. Turn it on with 'm' in the panel, or
     # [widget] enabled = true here to have it start with relay.
     widget_enabled: bool = False
+    # 0 = never release, which is today's behaviour and stays the default:
+    # README:76 promises the Mac stays awake while the panel is open, and the
+    # unattended overnight run depends on it. Opt in per machine.
+    power_release_after: float = 0.0
 
 
 def default_path() -> str:
@@ -218,6 +226,11 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     t_recon = _get_float(cp, "timers", "reconfirm_days",
                          d.timers_reconfirm_days, warns)
 
+    # Clamped at 0 rather than warned about: a negative duration has exactly
+    # one sane reading ("never"), which is the default anyway.
+    release_after = max(0.0, _get_float(cp, "power", "release_after",
+                                        d.power_release_after, warns))
+
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
     if env_stale is not None:
@@ -257,6 +270,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         timers_require_armed=t_armed,
         timers_autostart=t_auto,
         timers_reconfirm_days=t_recon,
+        power_release_after=release_after,
     ), warns
 
 
@@ -296,6 +310,8 @@ def dump(cfg: Config) -> str:
         f"require_armed  = {'true' if cfg.timers_require_armed else 'false'}\n"
         f"autostart      = {'true' if cfg.timers_autostart else 'false'}\n"
         f"reconfirm_days = {cfg.timers_reconfirm_days:g}\n"
+        "\n[power]\n"
+        f"release_after = {cfg.power_release_after:g}\n"
     )
 
 

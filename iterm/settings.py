@@ -36,6 +36,9 @@ SETTINGS = [
     ("TIMERS", "timers_require_armed", "toggle", None),
     ("TIMERS", "timers_autostart", "toggle", None),
     ("TIMERS", "timers_reconfirm_days", "number", (0.0, 1.0)),
+    # 0 = never release, and that is the default: relay has always kept the
+    # Mac awake for as long as the panel is open.
+    ("POWER", "power_release_after", "number", (0.0, 5.0)),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
@@ -43,7 +46,7 @@ SETTINGS = [
 # app, not the watcher, is where the change lands.
 _LIVE = {"sounds_enabled", "alert_sound", "done_sound", "danger_sound",
          "message_sound"}
-_APP_LIVE = {"preview_panel", "mascot"}
+_APP_LIVE = {"preview_panel", "mascot", "power_release_after"}
 
 
 def is_live(field: str) -> bool:
@@ -140,7 +143,11 @@ def render(working, running, cursor, width):
         if not is_live(f) and getattr(working, f) != getattr(running, f):
             tag = "   restart to apply"
         label = f.replace("_", " ")
-        lines.append(f" {mark} {label:<18} {val}{tag}")
+        # 21 = the longest label ("timers reconfirm days"). It was 18, which
+        # the three TIMERS rows already overflowed - their values sat one or
+        # more columns out of line with every other row, and 'timers require
+        # armed off' ran straight into its value with no gap at all.
+        lines.append(f" {mark} {label:<21} {val}{tag}")
     lines.append("")
     lines.append("  up/down move   left/right change   p play sound   , close")
     return "\n".join(lines)

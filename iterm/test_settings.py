@@ -107,6 +107,39 @@ def run():
                 is False
                 and not settings.is_live("respect_draft"))
 
+    # --- power release_after is editable in the panel and applies live -------
+    ok &= check("release_after has a settings row",
+                any(r[1] == "power_release_after" for r in settings.SETTINGS))
+    ok &= check("release_after steps by 5 minutes",
+                settings.change(c, "power_release_after", +1)
+                .power_release_after == 5.0)
+    ok &= check("release_after cannot go below 0",
+                settings.change(c, "power_release_after", -1)
+                .power_release_after == 0.0)
+    ok &= check("release_after is app-live (no restart tag)",
+                settings.is_app_live("power_release_after")
+                and "restart" not in settings.render(
+                    settings.change(c, "power_release_after", +1), c, 0, 60))
+    # The overlay pads every label to a fixed column; a longer one pushes its
+    # own value out of line with the rest. This caught a pre-existing break:
+    # the three TIMERS labels overflowed the old 18-wide column.
+    ok &= check("every settings label fits the value column",
+                all(len(r[1].replace("_", " ")) <= 21
+                    for r in settings.SETTINGS))
+    # ...and prove it on the rendered text: every value must begin in the same
+    # column, whatever the length of the label to its left.
+    rendered = settings.render(c, c, 0, 70).splitlines()
+    starts = set()
+    for _g, field, _kind, _spec in settings.SETTINGS:
+        label = field.replace("_", " ")
+        for ln in rendered:
+            if ln[3:].startswith(label):          # 3 = " " + cursor mark + " "
+                rest = ln[3 + len(label):]
+                starts.add(3 + len(label) + len(rest) - len(rest.lstrip()))
+                break
+    ok &= check("every value starts in the same column",
+                len(starts) == 1 and starts == {25})
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

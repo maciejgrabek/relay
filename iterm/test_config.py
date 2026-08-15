@@ -269,6 +269,31 @@ def run():
                 cfg.sounds_enabled is True
                 and any("[sounds] enabled" in w for w in warns))
 
+    # --- [power] release_after -----------------------------------------------
+    import dataclasses
+    ok &= check("power release_after defaults to 0 (never release)",
+                config.Config().power_release_after == 0.0)
+
+    cfg, warns = config.load(_write("[power]\nrelease_after = 45\n"))
+    ok &= check("reads [power] release_after", cfg.power_release_after == 45.0)
+    ok &= check("a good value warns about nothing", not warns)
+
+    cfg, warns = config.load(_write("[power]\nrelease_after = soon\n"))
+    ok &= check("a non-numeric release_after falls back to 0",
+                cfg.power_release_after == 0.0)
+    ok &= check("and says so", any("release_after" in w for w in warns))
+
+    cfg, _ = config.load(_write("[power]\nrelease_after = -5\n"))
+    ok &= check("a negative release_after clamps to 0",
+                cfg.power_release_after == 0.0)
+
+    pw_path = os.path.join(tempfile.mkdtemp(), "power-cfg")
+    config.save(dataclasses.replace(config.Config(),
+                                    power_release_after=30.0), pw_path)
+    back, _ = config.load(pw_path)
+    ok &= check("release_after round-trips through dump/load",
+                back.power_release_after == 30.0)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
