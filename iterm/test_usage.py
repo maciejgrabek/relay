@@ -17,6 +17,12 @@ ROOT = tempfile.mkdtemp(prefix="relay-test-projects-")
 os.environ["RELAY_CLAUDE_PROJECTS"] = ROOT
 SESS_ROOT = tempfile.mkdtemp(prefix="relay-test-sessions-")
 os.environ["RELAY_CLAUDE_SESSIONS"] = SESS_ROOT
+# The settings file names the context window. Pointed at a temp path that does
+# NOT exist yet, so the default case under test is "no configured model" and
+# the developer's own ~/.claude/settings.json can never leak into a result.
+SETT = os.path.join(tempfile.mkdtemp(prefix="relay-test-settings-"),
+                    "settings.json")
+os.environ["RELAY_CLAUDE_SETTINGS"] = SETT
 
 import usage  # noqa: E402
 
@@ -85,18 +91,73 @@ def main():
           u["ctx"] == 7 + 3000 + 20)
     check("the model is recorded", u["model"] == "claude-opus-5")
 
-    # --- context window inference ----------------------------------------
-    # The 1M variants report the same model string as the 200k ones, so the
-    # window cannot be read off the transcript.
-    check("a small session is measured against the 200k window",
-          u["window"] == 200_000)
+    # --- the context window -------------------------------------------------
+    # The 1M variants report the SAME model string as the 200k ones, so the
+    # window is never in the transcript. Three ways it can be settled, and the
+    # difference between them is the whole correctness story here.
+    check("with no configured model and nothing observed, the window is only "
+          "ASSUMED", u["window"] == 200_000
+          and u["window_source"] == "assumed" and u["window_known"] is False)
+
+    # 1. OBSERVED. A reading above 200k is proof: that session is not a 200k
+    #    model. This is the only route that needs no outside information.
     usage.reset_cache()
     _write("-p", "cccc-3333", [_assistant(out=1, cache_read=303_591)])
     u2 = usage.read("cccc-3333")
     check("a session seen above 200k is measured against the 1M window - it "
           "is demonstrably not a 200k model", u2["window"] == 1_000_000)
+    check("and that window is KNOWN, not assumed - it was demonstrated",
+          u2["window_source"] == "observed" and u2["window_known"] is True)
     check("and its percentage is computed against that wider window",
           u2["pct"] == 30)
+
+    # 2. CONFIGURED. The `[1m]` suffix is stripped from the transcript but
+    #    survives in the settings file, which is where the operator chose it.
+    check("no settings file means no configured window",
+          usage.configured_window() == 0)
+    with open(SETT, "w") as fh:
+        json.dump({"model": "claude-opus-5[1m]"}, fh)
+    usage.reset_cache()
+    check("a `[1m]` model in settings names the 1M window",
+          usage.configured_window() == 1_000_000)
+    _write("-p", "wwww-1m11", [_assistant(out=1, cache_read=48_063)])
+    u1m = usage.read("wwww-1m11")
+    check("a session under 200k on a configured 1M model is measured against "
+          "1M, not against the 200k default",
+          u1m["window"] == 1_000_000 and u1m["pct"] == 5)
+    check("a configured window counts as known - the operator named it",
+          u1m["window_source"] == "config" and u1m["window_known"] is True)
+    with open(SETT, "w") as fh:
+        json.dump({"model": "claude-opus-5"}, fh)
+    usage.reset_cache()
+    check("a model with no `[1m]` suffix names the 200k window",
+          usage.configured_window() == 200_000)
+    # An in-session /model switch is invisible to relay, so the observed route
+    # must still be able to overrule the configured one - in the safe
+    # direction only (a reading is proof; the settings file is a default).
+    _write("-p", "xxxx-obs1", [_assistant(out=1, cache_read=303_591)])
+    check("an observed reading above 200k overrules a 200k settings file",
+          usage.read("xxxx-obs1")["window_source"] == "observed")
+    with open(SETT, "w") as fh:
+        fh.write("{ not json")
+    usage.reset_cache()
+    check("a malformed settings file names nothing, it does not crash",
+          usage.configured_window() == 0)
+    os.remove(SETT)
+    usage.reset_cache()
+
+    # 3. ASSUMED - and this is the regression that prompted the rewrite.
+    #    A live 1M session sitting at 187,021 tokens (18.7% full) was rendered
+    #    as 94% in DANGER red, because the old code divided by 200k on no
+    #    evidence at all. A healthy session painted as about to die is worse
+    #    than no cell: it trains the operator to ignore the column.
+    _write("-p", "yyyy-1870", [_assistant(out=1, cache_read=187_021)])
+    ubad = usage.read("yyyy-1870")
+    check("a big reading on an UNKNOWN window is not reported as a "
+          "percentage of 200k", usage.ctx_cell(ubad) == "187k")
+    check("and it raises no alarm, because there is nothing to be alarmed "
+          "about yet", usage.ctx_level(ubad) == "")
+
     usage.reset_cache()
     _write("-p", "dddd-4444", [_assistant(out=1, cache_read=150_000)])
     check("a percentage is a whole number of the window",
@@ -226,27 +287,65 @@ def main():
     check("fmt_tokens abbreviates millions",
           usage.fmt_tokens(1_200_000) == "1.2M")
 
-    check("the CTX cell is a bare percentage",
-          usage.ctx_cell({"pct": 62}) == "62%")
+    def _u(**kw):
+        d = {"pct": 62, "ctx": 124_000, "window": 200_000,
+             "window_source": "observed", "window_known": True,
+             "out": 48_200, "in": 3100, "cached": 1_200_000, "turns": 41,
+             "model": "claude-opus-5"}
+        d.update(kw)
+        return d
+
+    check("the CTX cell is a bare percentage when the window is known",
+          usage.ctx_cell(_u()) == "62%")
+    # When the window is only assumed, the percentage would be an invented
+    # denominator on a panel whose whole argument is that it tells the truth.
+    # The token level is a number relay actually read off disk.
+    check("an unknown window renders the LEVEL, not a made-up percentage",
+          usage.ctx_cell(_u(window_known=False, window_source="assumed",
+                            ctx=48_063)) == "48.1k")
+    check("and it carries no color band, because there is no threshold to be "
+          "past without a window",
+          usage.ctx_level(_u(window_known=False, pct=95)) == "")
     # The whole point of the placement decision: no data must render as an
     # EMPTY cell, never a zero. A tab relay cannot read is not a tab at 0%.
     check("no data renders as an empty cell, not 0%", usage.ctx_cell(None) == "")
     check("no data has no color band", usage.ctx_level(None) == "")
-    check("a low percentage is quiet", usage.ctx_level({"pct": 20}) == "ok")
-    check("a high percentage warns", usage.ctx_level({"pct": 80}) == "warn")
-    check("a nearly full context is loud", usage.ctx_level({"pct": 95}) == "high")
+    check("a low percentage is quiet", usage.ctx_level(_u(pct=20)) == "ok")
+    check("a high percentage warns", usage.ctx_level(_u(pct=80)) == "warn")
+    check("a nearly full context is loud", usage.ctx_level(_u(pct=95)) == "high")
     check("the bands do not overlap or leave a gap",
-          usage.ctx_level({"pct": usage.CTX_WARN}) == "warn"
-          and usage.ctx_level({"pct": usage.CTX_WARN - 1}) == "ok"
-          and usage.ctx_level({"pct": usage.CTX_HIGH}) == "high")
+          usage.ctx_level(_u(pct=usage.CTX_WARN)) == "warn"
+          and usage.ctx_level(_u(pct=usage.CTX_WARN - 1)) == "ok"
+          and usage.ctx_level(_u(pct=usage.CTX_HIGH)) == "high")
 
-    lines = usage.preview_lines(
-        {"pct": 62, "ctx": 124_000, "window": 200_000, "out": 48_200,
-         "in": 3100, "cached": 1_200_000, "turns": 41,
-         "model": "claude-opus-5"}, registered=True)
+    lines = usage.preview_lines(_u(), registered=True)
     body = "\n".join(lines)
     check("the preview leads with the number the operator acts on",
           "62% of context" in body and "124k/200k" in body)
+    # ctx is the prompt size of the LAST completed turn: the turn in flight,
+    # and every tool result since, are not in it yet.
+    check("the preview says the level is as of the last turn, not live",
+          "last turn" in body)
+    check("an observed window is stated plainly, with no hedge - it was "
+          "demonstrated", "settings" not in body and "unknown" not in body)
+
+    cfg = "\n".join(usage.preview_lines(
+        _u(window_source="config", window=1_000_000, pct=5), registered=True))
+    check("a window taken from settings says so, so the operator knows which "
+          "number is read and which is assumed", "from settings" in cfg)
+
+    noscale = "\n".join(usage.preview_lines(
+        _u(window_known=False, window_source="assumed", ctx=48_063),
+        registered=True))
+    check("an unknown window reports the level and names the window as the "
+          "unknown", "48.1k" in noscale and "window unknown" in noscale)
+    check("it never prints a percentage it cannot stand behind",
+          "%" not in noscale)
+    check("and it says exactly what would fix it",
+          "settings.json" in noscale and "model" in noscale)
+    check("the breakdown is still there - an unknown window costs the "
+          "percentage, not the whole block",
+          "out 48.2k" in noscale and "41 turns" in noscale)
     check("the preview breaks the total down", "out 48.2k" in body
           and "in 3.1k" in body and "cached 1.2M" in body)
     check("the preview names the model and turn count",
@@ -260,8 +359,7 @@ def main():
     # unregistered tab the same as a registered one, so an unregistered tab
     # with a resolved id must be treated identically.
     unreg = "\n".join(usage.preview_lines(
-        {"pct": 5, "ctx": 10_000, "window": 200_000, "out": 1, "in": 1,
-         "cached": 1, "turns": 1, "model": "m"}, registered=False))
+        _u(pct=5, ctx=10_000), registered=False))
     check("an UNREGISTERED tab with a resolved id reports numbers like any "
           "other - registration is no longer the gate",
           "5% of context" in unreg and "relay join" not in unreg)

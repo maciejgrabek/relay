@@ -1610,9 +1610,11 @@ class RelayApp(App):
                 tcolor = WARN if not act and pend else CYAN
                 tcell = f"[{DIM}]{tcell}[/]" if dim else f"[{tcolor}]{tcell}[/]"
             # CTX: how full this session's context is, read off its own Claude
-            # Code transcript. Blank when relay cannot tie the tab to one -
-            # an unregistered tab has no session id to join on, and a blank
-            # cell is never a wrong number where an invented one would be.
+            # Code transcript. Blank when relay cannot tie the tab to one, and
+            # a bare token level rather than a percentage when it can read the
+            # tokens but cannot establish the context window (see ctx_cell).
+            # Both degrade the same way on purpose: a blank or a plain number
+            # is never wrong where an invented denominator would be.
             u = self._usage_for(info.session_id)
             ctext = usagemod.ctx_cell(u)
             if ctext:
@@ -1925,9 +1927,10 @@ class RelayApp(App):
         push = extreme_push_line(
             info, getattr(self.watcher, "extreme_dwell", 45.0), time.time(), w)
         # TOKENS: the CTX column's number, with what is behind it. The roster
-        # cell is a percentage because it has to be scannable across the fleet;
-        # this is where the operator finds out whether that percentage is a
-        # long conversation or one enormous turn.
+        # cell is terse because it has to be scannable across the fleet; this
+        # is where the operator finds out whether a percentage is a long
+        # conversation or one enormous turn - and, when the cell shows a bare
+        # token level, that the window is unknown and how to name it.
         # `has_id` is now "relay found this tab's session id by ANY route",
         # so a tab resolved through the process tree is never told to run
         # `relay join` - it does not need to.

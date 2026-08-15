@@ -32,16 +32,76 @@ import os
 import subprocess
 from typing import Optional
 
-# Every model relay is likely to watch ships a 200k context window. The 1M
-# variants report the SAME model string (a session observed at 303,591 tokens
-# reported plain "claude-opus-5"), so the window cannot be read off the
-# transcript and is inferred instead: once a session is seen above 200k it is
-# demonstrably not a 200k model. Self-correcting and never overstates - the
-# worst case is one turn shown against the smaller window before the first
-# reading above it arrives, and a percentage that reads high is the safe
-# direction to be wrong in.
+# The context window is NEVER in the transcript: the 1M variants report the
+# same model string as the 200k ones (a session observed at 303,591 tokens
+# reported plain "claude-opus-5"). So relay settles it one of three ways, and
+# which one it used is reported alongside the number:
+#
+#   observed - a reading above 200k. Proof: that session is not a 200k model.
+#   config   - the `[1m]` suffix survives in ~/.claude/settings.json, where the
+#              operator chose it. A default, not a fact, but a named one.
+#   assumed  - neither. 200k is used to compute a percentage, but the
+#              percentage is NOT shown; see ctx_cell().
+#
+# The original build had only the first route and treated 200k as the default
+# denominator. That is a 5x error on every 1M session below 200k, and it does
+# not self-correct: such a session may never cross the line. A live one at
+# 187,021 tokens (18.7% of its real window) rendered as 94% in danger red - a
+# healthy session painted as about to die, which is exactly the kind of wrong
+# number this module's opening argument says it will not print.
 _BASE_WINDOW = 200_000
 _WIDE_WINDOW = 1_000_000
+
+
+def settings_path() -> str:
+    """Claude Code's user settings file, where the chosen model is recorded.
+    Overridable for tests like projects_root() / sessions_root()."""
+    return os.environ.get(
+        "RELAY_CLAUDE_SETTINGS",
+        os.path.expanduser("~/.claude/settings.json"))
+
+
+# {"mtime": float, "window": int} - the settings file is read on every panel
+# tick otherwise, for a value that changes when the operator changes it.
+_SETTINGS = {"mtime": -1.0, "window": 0}
+
+
+def configured_window() -> int:
+    """The window implied by the CONFIGURED model, or 0 when none is set.
+
+    Claude Code strips the `[1m]` suffix from the transcript but keeps it in
+    settings.json ("claude-opus-5[1m]"), and that suffix is the whole of the
+    question: with it, the 1M variant; without it, the standard 200k one. The
+    rule is the suffix, not a table of model names, so a model relay has never
+    heard of still resolves correctly.
+
+    Deliberately the GLOBAL settings file only. A project-level
+    .claude/settings.json or an in-session `/model` is not seen - reading those
+    would need the session's cwd threaded through here, and the observed route
+    still overrules this one in the dangerous direction (a session that turns
+    out to be bigger than configured is corrected the first time it proves it).
+    The reverse - configured 1M, session switched down to 200k - understates
+    the percentage until the operator fixes the setting, which is why the
+    preview names this window as coming from settings rather than from a
+    reading.
+    """
+    try:
+        mtime = os.path.getmtime(settings_path())
+    except OSError:
+        _SETTINGS["mtime"], _SETTINGS["window"] = -1.0, 0
+        return 0
+    if mtime == _SETTINGS["mtime"]:
+        return _SETTINGS["window"]
+    window = 0
+    try:
+        with open(settings_path()) as fh:
+            model = str((json.load(fh) or {}).get("model") or "")
+        if model:
+            window = _WIDE_WINDOW if model.endswith("[1m]") else _BASE_WINDOW
+    except (OSError, ValueError, TypeError, AttributeError):
+        window = 0
+    _SETTINGS["mtime"], _SETTINGS["window"] = mtime, window
+    return window
 
 
 def sessions_root() -> str:
@@ -214,11 +274,12 @@ def reset_cache() -> None:
     _PID_INDEX.clear()
     _PID_INDEX_MTIME[0] = -1.0
     _PID_WALK.clear()
+    _SETTINGS["mtime"], _SETTINGS["window"] = -1.0, 0
 
 
 def _blank(path: str) -> dict:
     return {"path": path, "offset": 0, "out": 0, "in": 0, "cached": 0,
-            "turns": 0, "ctx": 0, "model": "", "window": _BASE_WINDOW}
+            "turns": 0, "ctx": 0, "model": "", "wide": False}
 
 
 def read(claude_session_id: str) -> Optional[dict]:
@@ -228,7 +289,12 @@ def read(claude_session_id: str) -> Optional[dict]:
       ctx     - tokens in the model's context as of the LAST turn. This is the
                 number the operator acts on, and it is a level, not a sum:
                 prompt tokens for one turn, which is what a compaction resets.
-      window  - the inferred context window (see _BASE_WINDOW).
+                It lags: the turn in flight, and every tool result since the
+                last one completed, are not in it yet.
+      window  - the context window (see _BASE_WINDOW for the three routes).
+      window_source - 'observed', 'config' or 'assumed'.
+      window_known  - False for 'assumed', where pct is a guess at a
+                denominator and callers must not render it as a percentage.
       pct     - ctx as a percentage of window, clamped to 100.
       out/in  - cumulative output and real (uncached) input tokens.
       cached  - cumulative cache reads. Enormous by design and NOT added to the
@@ -284,15 +350,26 @@ def read(claude_session_id: str) -> Optional[dict]:
                              + int(u.get("cache_creation_input_tokens") or 0))
                 if msg.get("model"):
                     st["model"] = str(msg["model"])
-                if st["ctx"] > st["window"]:
-                    st["window"] = _WIDE_WINDOW
+                if st["ctx"] > _BASE_WINDOW:
+                    # Proof, and it sticks: a compaction drops the level back
+                    # under 200k but does not turn the model into a 200k one.
+                    st["wide"] = True
     except OSError:
         return None
     _STATE[path] = st
     if not st["turns"]:
         return None
-    pct = min(100, int(round(100.0 * st["ctx"] / max(1, st["window"]))))
-    return {"ctx": st["ctx"], "window": st["window"], "pct": pct,
+    # Resolved per read rather than frozen at first sight, so editing
+    # settings.json is picked up by a running panel. A reading always beats the
+    # settings file: it is the only route that observed THIS session.
+    if st["wide"]:
+        window, source = _WIDE_WINDOW, "observed"
+    else:
+        cfg = configured_window()
+        window, source = (cfg, "config") if cfg else (_BASE_WINDOW, "assumed")
+    pct = min(100, int(round(100.0 * st["ctx"] / max(1, window))))
+    return {"ctx": st["ctx"], "window": window, "pct": pct,
+            "window_source": source, "window_known": source != "assumed",
             "out": st["out"], "in": st["in"], "cached": st["cached"],
             "turns": st["turns"], "model": st["model"]}
 
@@ -309,12 +386,22 @@ def fmt_tokens(n: int) -> str:
 
 
 def ctx_cell(u: Optional[dict]) -> str:
-    """The roster's CTX column: a bare percentage, or '' when there is nothing
-    honest to show. Empty, NOT a zero or a dash-with-a-number: an unregistered
-    tab has no transcript to read and must not render as a session using no
-    context."""
+    """The roster's CTX column. Three states, because relay knows three
+    different amounts about a tab:
+
+      ''      - nothing to show. Empty, NOT a zero or a dash-with-a-number: a
+                tab relay cannot tie to a transcript is not a session at 0%.
+      '48.1k' - the level, when the window is only assumed. A percentage here
+                would be a denominator relay invented; the level is a number it
+                read off disk. Costs the at-a-glance comparison and keeps the
+                cell true, which is the trade this panel exists to make.
+      '62%'   - the window was observed or configured, so the fraction means
+                something.
+    """
     if not u:
         return ""
+    if not u.get("window_known"):
+        return fmt_tokens(u.get("ctx", 0))
     return f"{u['pct']}%"
 
 
@@ -328,8 +415,15 @@ CTX_HIGH = 90
 def ctx_level(u: Optional[dict]) -> str:
     """'', 'ok', 'warn' or 'high' - the color band for the CTX cell. Kept
     separate from the text so the palette stays in app.py with every other
-    color decision."""
-    if not u:
+    color decision.
+
+    No band without a known window: a threshold needs a denominator, and a red
+    cell that turns out to be a session at 18% is how an operator learns to
+    stop reading the column. Note this can only ever suppress a band below
+    200k - past that the window is observed, so a genuinely full session still
+    goes red.
+    """
+    if not u or not u.get("window_known"):
         return ""
     if u["pct"] >= CTX_HIGH:
         return "high"
@@ -364,11 +458,22 @@ def preview_lines(u: Optional[dict], registered: bool,
     if not u:
         return ["TOKENS  no transcript yet - this session has not",
                 "        taken a turn."]
-    return [
-        f"TOKENS  {u['pct']}% of context · {fmt_tokens(u['ctx'])}"
-        f"/{fmt_tokens(u['window'])}",
+    if not u.get("window_known"):
+        # The roster cell had room for the level and nothing else. This is
+        # where the operator finds out why there is no percentage, and that it
+        # is one line of config away from being one.
+        head = [f"TOKENS  {fmt_tokens(u['ctx'])} in context · window unknown",
+                "        a 1M model reports the same name as a 200k one - set",
+                "        `model` in ~/.claude/settings.json for a percentage."]
+    else:
+        head = [f"TOKENS  {u['pct']}% of context · {fmt_tokens(u['ctx'])}"
+                f"/{fmt_tokens(u['window'])}"
+                + (" · window from settings"
+                   if u.get("window_source") == "config" else "")]
+    return head + [
         f"        out {fmt_tokens(u['out'])} · in {fmt_tokens(u['in'])}"
         f" · cached {fmt_tokens(u['cached'])}",
         f"        {u['turns']} turns"
-        + (f" · {u['model']}" if u["model"] else ""),
+        + (f" · {u['model']}" if u["model"] else "")
+        + " · as of the last turn",
     ]
