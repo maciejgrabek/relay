@@ -140,6 +140,22 @@ def run():
     ok &= check("every value starts in the same column",
                 len(starts) == 1 and starts == {25})
 
+    # --- burn window is editable in the panel and applies live ---------------
+    ok &= check("burn window has a settings row",
+                any(r[1] == "burn_window" for r in settings.SETTINGS))
+    ok &= check("burn window steps by 5 minutes",
+                settings.change(c, "burn_window", +1).burn_window == 20.0)
+    ok &= check("burn window can be stepped down to 0 (off)",
+                settings.change(
+                    settings.change(
+                        settings.change(c, "burn_window", -1),
+                        "burn_window", -1),
+                    "burn_window", -1).burn_window == 0.0)
+    ok &= check("burn window is app-live (no restart tag)",
+                settings.is_app_live("burn_window")
+                and "restart" not in settings.render(
+                    settings.change(c, "burn_window", +1), c, 0, 60))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

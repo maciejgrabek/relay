@@ -25,6 +25,10 @@
     release_after = 0      ; minutes of a fully idle fleet before caffeinate is
                            ; released. 0 = never (today's behaviour)
 
+    [burn]
+    window = 15            ; minutes of an unchanged tree, unattended, before a
+                           ; working session is badged. 0 = off
+
 Precedence: defaults < config file < environment variable. Env always wins,
 so existing setups keep working. A missing file, section, or key silently
 yields defaults; a malformed file or value yields defaults plus a warning
@@ -92,6 +96,11 @@ class Config:
     # README:76 promises the Mac stays awake while the panel is open, and the
     # unattended overnight run depends on it. Opt in per machine.
     power_release_after: float = 0.0
+    # ON by default at 15 minutes, unlike [power] release_after. That key
+    # changed what the machine does, so it had to be opted into; this one draws
+    # a badge and nothing else, and a diagnostic nobody enables is a diagnostic
+    # that is off on the night it was needed.
+    burn_window: float = 15.0
 
 
 def default_path() -> str:
@@ -230,6 +239,8 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     # one sane reading ("never"), which is the default anyway.
     release_after = max(0.0, _get_float(cp, "power", "release_after",
                                         d.power_release_after, warns))
+    burn_window = max(0.0, _get_float(cp, "burn", "window", d.burn_window,
+                                      warns))
 
     # Env wins over the file for the two mirrored keys.
     env_stale = os.environ.get("RELAY_STALE_MINUTES")
@@ -271,6 +282,7 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         timers_autostart=t_auto,
         timers_reconfirm_days=t_recon,
         power_release_after=release_after,
+        burn_window=burn_window,
     ), warns
 
 
@@ -312,6 +324,8 @@ def dump(cfg: Config) -> str:
         f"reconfirm_days = {cfg.timers_reconfirm_days:g}\n"
         "\n[power]\n"
         f"release_after = {cfg.power_release_after:g}\n"
+        "\n[burn]\n"
+        f"window = {cfg.burn_window:g}\n"
     )
 
 

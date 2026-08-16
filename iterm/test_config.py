@@ -294,6 +294,29 @@ def run():
     ok &= check("release_after round-trips through dump/load",
                 back.power_release_after == 30.0)
 
+    # --- [burn] window --------------------------------------------------------
+    ok &= check("burn window defaults to 15 minutes",
+                config.Config().burn_window == 15.0)
+
+    cfg, warns = config.load(_write("[burn]\nwindow = 25\n"))
+    ok &= check("reads [burn] window", cfg.burn_window == 25.0)
+    ok &= check("a good burn value warns about nothing", not warns)
+
+    cfg, warns = config.load(_write("[burn]\nwindow = later\n"))
+    ok &= check("a non-numeric window falls back to the default",
+                cfg.burn_window == 15.0)
+    ok &= check("and says so", any("window" in w for w in warns))
+
+    cfg, _ = config.load(_write("[burn]\nwindow = -5\n"))
+    ok &= check("a negative window clamps to 0 (off)", cfg.burn_window == 0.0)
+
+    bw_path = os.path.join(tempfile.mkdtemp(), "burn-cfg")
+    config.save(dataclasses.replace(config.Config(), burn_window=40.0),
+                bw_path)
+    back, _ = config.load(bw_path)
+    ok &= check("burn window round-trips through dump/load",
+                back.burn_window == 40.0)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

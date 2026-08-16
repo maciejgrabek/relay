@@ -39,6 +39,7 @@ SETTINGS = [
     # 0 = never release, and that is the default: relay has always kept the
     # Mac awake for as long as the panel is open.
     ("POWER", "power_release_after", "number", (0.0, 5.0)),
+    ("POWER", "burn_window", "number", (0.0, 5.0)),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
@@ -46,7 +47,7 @@ SETTINGS = [
 # app, not the watcher, is where the change lands.
 _LIVE = {"sounds_enabled", "alert_sound", "done_sound", "danger_sound",
          "message_sound"}
-_APP_LIVE = {"preview_panel", "mascot", "power_release_after"}
+_APP_LIVE = {"preview_panel", "mascot", "power_release_after", "burn_window"}
 
 
 def is_live(field: str) -> bool:
