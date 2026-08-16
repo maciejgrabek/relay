@@ -924,6 +924,43 @@ status/screen hasn't moved in that long. Relay does not auto-reassign the
 task or re-prompt the worker - deciding what to do with a stuck worker is
 your call; Relay's job is just telling you in time.
 
+### Burn: working, unattended, going nowhere
+
+Staleness catches the session that went **quiet**. The expensive failure is the
+one that stays loud: a session retrying the same failing test for four hours
+reads `working` on every tick, so the panel reports a calm fleet while it
+spends. Every other signal relay has is a snapshot of what a session is
+*doing*; none measures what it *achieved*.
+
+So relay watches the **git working tree** in each tab's directory. A session
+that has been working for `[burn] window` minutes (default 15), while you were
+not in its tab, with turns completing and the tree never moving, gets `◈ BURN`
+in STATUS, a `n burning` count in the header, and an evidence line in the
+preview:
+
+    ◈ BURN  22m unchanged, 18 turns, 85.2k out
+
+**Informational only.** Relay never acts on it - no interrupt, no message, no
+notification. `▲ STALE` outranks it in the cell, because a session relay has
+lost is worse news than one merely going nowhere.
+
+Tokens are shown but are **not** the trigger. A retry loop emits short tool
+calls over a huge cached context, so it can spend heavily while producing less
+output than a productive session - calibrated against real transcripts, an
+output-token threshold fired on ordinary work and missed the loop it was for.
+Time is the signal; the turn count is the floor that separates a loop from one
+long thinking turn.
+
+Relay stays quiet where it cannot be sure, and the preview says which:
+
+- **the tab you have selected** - your clock is held at zero while you are in
+  it, because if you are watching the loop you do not need to be told about it;
+- **a directory with more than one live session** - the normal case for sibling
+  tabs, and there the tree cannot say which session moved it;
+- **no readable git tree, or no transcript yet** - nothing to measure.
+
+Set `[burn] window = 0` to switch it off.
+
 ### TAB: the swarm view
 
 `TAB` toggles a second, full-width view:
@@ -1272,6 +1309,16 @@ release_after = 0      ; minutes of a FULLY IDLE fleet (nothing in the working
                        ; of. A blocked session counts as idle (it is going
                        ; nowhere until a human arrives). Release by hand with
                        ; c, which is sticky where the timer's release is not
+
+[burn]
+window = 15            ; minutes with an UNCHANGED git tree, while working and
+                       ; while you are not in the tab, before relay badges the
+                       ; session ◈ BURN. 0 = off. On by default, because it
+                       ; only draws a badge - it never acts. Tokens are shown
+                       ; as evidence but are NOT the trigger: a retry loop
+                       ; emits short tool calls over a huge cached context, so
+                       ; it can spend heavily while producing less output than
+                       ; a productive session
 ```
 
 Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
