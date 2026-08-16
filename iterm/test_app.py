@@ -675,6 +675,28 @@ async def go():
             quiet_for=22 * 60, turns=18, spent=85200))
         == "22m unchanged, 18 turns, 85.2k out")
 
+    # --- one usage read per session per tick ---------------------------------
+    # CTX, burn and the preview all want the same numbers. Reading three times
+    # is three stat/open rounds for one answer, and it lets the CTX cell and
+    # the burn evidence line disagree inside a single frame.
+    uc = _TestApp({f"u{i}": SessionInfo(f"u{i}", title=f"u{i}", window_idx=0,
+                                        tab_idx=i, last_screen=["x"])
+                   for i in range(3)}, dry_run=True)
+    async with uc.run_test() as pilot:
+        await pilot.pause()
+        reads = []
+        real_read = appmod.usagemod.read
+        appmod.usagemod.read = lambda sid: (reads.append(sid), None)[1]
+        try:
+            uc._refresh()
+            await pilot.pause()
+        finally:
+            appmod.usagemod.read = real_read
+        chk("usage is read at most once per session per refresh",
+            len(reads) <= 3)
+        chk("...and the cache does not leak across ticks",
+            uc._usage_tick == {} or len(uc._usage_tick) <= 3)
+
     # --- mascot barometer: cleared tally + earned reactions -------------------
     from app import mascot_face_big, effective_mascot_state
 

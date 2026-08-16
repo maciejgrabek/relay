@@ -1342,6 +1342,9 @@ class RelayApp(App):
         self._burn = {}            # sid -> burn.Track (the anchors)
         self._burning = {}         # sid -> burn.Verdict (this tick's judgement)
         self._tree = {}            # normalized workdir -> (fingerprint, ts)
+        # One usage read per session per repaint, shared by the CTX column,
+        # the burn evaluator and the preview. Cleared at the top of _refresh.
+        self._usage_tick = {}
         self._burn_window = 15.0
         # Checked once. With this set relay never acquires at all, and `c`
         # says so rather than pretending to toggle something that isn't there.
@@ -1546,6 +1549,11 @@ class RelayApp(App):
     def _refresh(self) -> None:
         if not self.watcher:
             return
+        # New frame, new numbers. Everything painted below shares ONE read per
+        # session, so the CTX cell and the burn evidence line cannot disagree
+        # inside a single frame, and three consumers cost one round of
+        # stat/open instead of three.
+        self._usage_tick = {}
         table = self.query_one(DataTable)
         prev_sid = self._selected_sid()   # track by IDENTITY, not row index
         prev_row = table.cursor_row       # ...nearest occurrence wins (dups)
@@ -1921,13 +1929,24 @@ class RelayApp(App):
         Guarded whole: a missing transcript, a half-written line or an
         unreadable projects directory must cost this session its number, not
         take the roster down mid-render.
+
+        Memoized for the frame. usage.read is incremental, but it still costs a
+        stat, an open and a seek per call even when the transcript has not
+        grown - and three consumers ask for the same session in one repaint
+        (the CTX column, the burn evaluator, the preview). _refresh clears the
+        cache at the top of each frame, so the numbers are never older than the
+        frame that is being painted, and every consumer in it agrees.
         """
         if not self.watcher:
             return None
+        if sid in self._usage_tick:
+            return self._usage_tick[sid]
         try:
-            return usagemod.read(self._claude_sid_for(sid))
+            u = usagemod.read(self._claude_sid_for(sid))
         except Exception:
-            return None
+            u = None
+        self._usage_tick[sid] = u
+        return u
 
     def _claude_sid_for(self, sid: str) -> str:
         """This tab's Claude session id, by the most trustworthy route available.
