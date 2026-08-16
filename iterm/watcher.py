@@ -105,6 +105,7 @@ class SessionInfo:
     _stale_notified: bool = field(default=False, repr=False)
     _iterm_session: object = field(default=None, repr=False)
     _last_prompt_id: Optional[str] = field(default=None, repr=False)
+    selected_at: float = 0.0     # last time iTerm2 had THIS tab selected
     _last_notify_ts: float = field(default=0.0, repr=False)  # notify cooldown
     _raw_title: str = field(default="", repr=False)  # unstripped on-screen title
 
@@ -482,6 +483,19 @@ class Watcher:
 
     async def _sync_sessions(self, app) -> None:
         seen = set()
+        # Which tab is the operator actually in? The burn badge holds its clock
+        # at zero for the selected tab, so this is the difference between
+        # "unattended and going nowhere" and "you are typing into it".
+        # Guarded whole: no window, a detached session or an API shape change
+        # must cost the stamp, not take the sync down.
+        selected = ""
+        try:
+            win = app.current_terminal_window
+            if win is not None and win.current_tab is not None:
+                cur = win.current_tab.current_session
+                selected = getattr(cur, "session_id", "") or ""
+        except Exception:
+            selected = ""
         for wi, w in enumerate(app.windows):
             for ti, tab in enumerate(w.tabs):
                 for s in tab.sessions:
@@ -537,6 +551,12 @@ class Watcher:
                         info.job = job
                         info.workdir = path
                         info.job_pid = jpid
+                    # Stamped for both paths (new tab and known tab), and only
+                    # ever written when this IS the selection: it is the time
+                    # you were last here, so a deselected tab keeps its value
+                    # and a caller can measure how long ago you left.
+                    if sid == selected:
+                        info.selected_at = time.time()
         # Drop sessions whose tabs closed.
         for sid in list(self.sessions):
             if sid not in seen:

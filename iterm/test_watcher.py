@@ -765,8 +765,68 @@ class FakeIT2Window:
 
 
 class FakeIT2App:
-    def __init__(self, windows):
+    def __init__(self, windows, selected=None):
         self.windows = windows
+        # iTerm2 exposes the focused session through this chain. `selected` is
+        # the session_id the operator is sitting in, or None for "no window".
+        self.current_terminal_window = (
+            _FakeCurrentWindow(selected) if selected is not None else None)
+
+
+class _FakeCurrentSession:
+    def __init__(self, sid):
+        self.session_id = sid
+
+
+class _FakeCurrentTab:
+    def __init__(self, sid):
+        self.current_session = _FakeCurrentSession(sid)
+
+
+class _FakeCurrentWindow:
+    def __init__(self, sid):
+        self.current_tab = _FakeCurrentTab(sid)
+
+
+async def selected_tab_tests():
+    """The burn badge holds its clock at zero for the tab you are sitting in,
+    so _sync_sessions has to stamp which session iTerm2 has selected. A
+    timestamp rather than a flag: a deselected tab keeps its last value, so a
+    caller can ask how long ago you left."""
+    from watcher import Watcher
+    import config as C
+
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    w = Watcher(connection=None, dry_run=False, cfg=C.Config())
+    w._db = object()
+    w.registry = {}
+    s0 = FakeIT2Session("S0", path="/work/a", job="node")
+    s1 = FakeIT2Session("S1", path="/work/b", job="node")
+    tabs = [FakeIT2Tab([s0]), FakeIT2Tab([s1])]
+
+    await w._sync_sessions(FakeIT2App([FakeIT2Window(tabs)], selected="S1"))
+    chk("the selected session is stamped", w.sessions["S1"].selected_at > 0)
+    chk("an unselected session is not", w.sessions["S0"].selected_at == 0.0)
+    t1 = w.sessions["S1"].selected_at
+
+    await w._sync_sessions(FakeIT2App([FakeIT2Window(tabs)], selected="S0"))
+    chk("the stamp moves with the selection", w.sessions["S0"].selected_at > 0)
+    chk("a deselected tab KEEPS its stamp (timestamp, not flag)",
+        w.sessions["S1"].selected_at == t1)
+
+    # No window at all (every terminal closed but relay still running) must
+    # cost the stamp, not the sync.
+    await w._sync_sessions(FakeIT2App([FakeIT2Window(tabs)], selected=None))
+    chk("no current window does not raise", w.sessions["S0"].selected_at > 0)
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
 
 
 async def sync_sessions_workdir_persist_tests():
@@ -1994,6 +2054,7 @@ if __name__ == "__main__":
     r3 = asyncio.run(title_tests())
     r3b = asyncio.run(session_path_tests())
     r3c = asyncio.run(sync_sessions_workdir_persist_tests())
+    r3d = asyncio.run(selected_tab_tests())
     r4 = arm_request_tests()
     r5 = closed_tests()
     r6 = asyncio.run(own_tab_name_tests())
@@ -2007,6 +2068,7 @@ if __name__ == "__main__":
     r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
     r_thr = close_threads_tests()
-    sys.exit(0 if (r1 and r2 and r3 and r3b and r3c and r4 and r5 and r6 and r7
+    sys.exit(0 if (r1 and r2 and r3 and r3b and r3c and r3d and r4 and r5
+                   and r6 and r7
                    and r8 and r8b and r9 and r10 and r11 and r12 and r13
                    and r_timer and r_thr) else 1)
