@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import hashlib
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from textual.containers import Vertical  # noqa: E402
 from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 
 import audit  # noqa: E402
+import burn as burnmod  # noqa: E402
 import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
 import power as powermod  # noqa: E402
@@ -254,6 +256,31 @@ KEYBAR = (
              ("p", "pause"), ("!", "stop/tell"), ("c", "caffeinate"),
              (",", "settings"), ("R×2", "restore"),
              ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
+
+
+def _tree_fingerprint(workdir: str) -> str:
+    """A hash of the working tree's state: `git status --porcelain` plus HEAD.
+
+    Porcelain alone would miss a session that commits and keeps going - the
+    tree goes clean, which reads as a change, which is correct - but HEAD keeps
+    "committed then carried on" legible as progress rather than as a return to
+    a previous state.
+
+    Returns "" for anything that is not a readable git repo, which the
+    evaluator turns into an honest silence rather than a claim.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=workdir, timeout=5.0,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=workdir, timeout=5.0,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except Exception:
+        return ""
+    if out.returncode != 0:
+        return ""          # not a repo, or git unavailable
+    return hashlib.sha1(out.stdout + b"|" + head.stdout).hexdigest()
 
 
 def relay_self_panel(width, *, units, armed, approvals, escalations, orphans,
@@ -1312,6 +1339,10 @@ class RelayApp(App):
         self._connection = None
         self._caffeinate = None
         self._power = None         # power.Power, built at mount from config
+        self._burn = {}            # sid -> burn.Track (the anchors)
+        self._burning = {}         # sid -> burn.Verdict (this tick's judgement)
+        self._tree = {}            # normalized workdir -> (fingerprint, ts)
+        self._burn_window = 15.0
         # Checked once. With this set relay never acquires at all, and `c`
         # says so rather than pretending to toggle something that isn't there.
         self._no_caffeinate = bool(os.environ.get("RELAY_NO_CAFFEINATE"))
@@ -1460,6 +1491,14 @@ class RelayApp(App):
             _after = 0.0
         self._power = powermod.Power(release_after=_after)
         self._set_caffeinate(True)
+        # Burn: is anything working, unattended, and getting nowhere? Sampled
+        # on its own slow interval - a git call per distinct workdir has no
+        # business on the 1s repaint.
+        try:
+            self._burn_window = cfgmod.load()[0].burn_window
+        except Exception:
+            self._burn_window = 15.0
+        self.set_interval(30.0, self._sample_trees)
         # The floating mascot, when the operator has asked for it always-on.
         # 'm' toggles it either way; this is only the launch-with-relay switch.
         try:
@@ -1542,6 +1581,12 @@ class RelayApp(App):
 
         def add(info, dim=False, attention=False):
             label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", BRIGHT))
+            _b = self._burning.get(info.session_id)
+            if _b is not None and _b.burning:
+                label, color = "◈ BURN", WARN
+            # stale LAST, deliberately: a session relay has lost is worse news
+            # than one merely going nowhere, and the cell must never
+            # contradict the attention strip.
             if getattr(info, "stale", False):
                 label, color = "▲ STALE", WARN
             glyph, mlabel, mcolor = MODE_STYLE.get(info.mode, (" ", "MANUAL", DIM))
@@ -1719,6 +1764,37 @@ class RelayApp(App):
                 self._power.tick(_now,
                                  any(i.state == "working" for i in others)))
             pow_tag = self._power.status(_now)
+        # Burn: working, unattended, and the tree has not moved. Evaluated here
+        # because this is where the usage read for the CTX column already
+        # happens, so the turn counter costs nothing extra.
+        # The reset lives INSIDE the guard: with the feature off there is
+        # nothing to recompute, and _apply_app_live clears the dict when the
+        # window is turned down to 0, so a switched-off feature cannot leave a
+        # badge lit.
+        if self._burn_window > 0:
+            fresh = {}
+            now_b = time.time()
+            occupants = {}
+            for i in sess:
+                wd = swarmlogic.real_workdir(getattr(i, "workdir", ""))
+                if wd:
+                    occupants[wd] = occupants.get(wd, 0) + 1
+            for i in others:
+                sid = i.session_id
+                wd = swarmlogic.real_workdir(getattr(i, "workdir", ""))
+                fp = (self._tree.get(wd) or ("", 0))[0]
+                u = self._usage_for(sid) or {}
+                track, verdict = burnmod.sample(
+                    self._burn.get(sid) or burnmod.Track(),
+                    now_b, fp,
+                    u.get("turns"), u.get("out"),
+                    i.state == "working",
+                    occupants.get(wd, 0) > 1,
+                    now_b - getattr(i, "selected_at", 0.0) <= 60.0,
+                    self._burn_window)
+                self._burn[sid] = track
+                fresh[sid] = verdict
+            self._burning = fresh
         # prompting AND blocked: the header must never contradict the strip.
         awaiting = sum(1 for i in others
                        if i.state in ("prompting", "blocked"))
@@ -1750,6 +1826,9 @@ class RelayApp(App):
             # CYAN because it is a thing actively about to happen.
             attn += (f" [{DIM}]·[/] "
                      f"[{CYAN if self._power.held else DIM}]{pow_tag}[/]")
+        burning_n = sum(1 for v in self._burning.values() if v.burning)
+        if burning_n:
+            attn += f" [{DIM}]·[/] [{WARN}]{burning_n} burning[/]"
         # The canary. Placed FIRST in the pause slot rather than appended to
         # the attention strip, because it does not describe the swarm - it
         # says relay's reading of the swarm is not to be trusted, which
@@ -1963,11 +2042,29 @@ class RelayApp(App):
             line[:w] for line in
             usagemod.preview_lines(self._usage_for(sid), True,
                                    bool(self._claude_sid_for(sid)))) + "\n"
+        # Burn explains a SILENCE as readily as a badge. A feature that is
+        # correctly quiet must not read as a broken one, so the two cases where
+        # relay deliberately refuses to judge say so by name.
+        _bv = self._burning.get(sid)
+        if _bv is None or not self._burn_window:
+            burn_line = ""
+        elif _bv.burning:
+            burn_line = f" ◈ BURN  {burnmod.evidence(_bv)}\n"
+        elif _bv.reason == "shared":
+            burn_line = (" ◈ burn: sessions share this dir - relay cannot "
+                         "attribute changes\n")
+        elif _bv.reason == "attended":
+            burn_line = " ◈ burn: this is your selected tab - clock held\n"
+        elif _bv.reason == "no-git":
+            burn_line = " ◈ burn: no readable git tree here\n"
+        else:
+            burn_line = ""
         header = (f"╔{bar}╗\n"
                   f" ▓ LIVE FEED // {info.title[:w-16]}\n"
                   f" MODE:{mode}  LINK:{loc}  "
                   f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
                   f"{tok}"
+                  f"{burn_line}"
                   f"{push}"
                   f"{tsum_line}"
                   f"{why}"
@@ -2145,6 +2242,12 @@ class RelayApp(App):
             # effect on the next tick without a restart.
             if self._power is not None:
                 self._power.release_after = value
+        elif field == "burn_window":
+            self._burn_window = value
+            if not value:
+                # Turned off mid-run: drop the verdicts too, or the last badge
+                # stays lit forever with nothing left to clear it.
+                self._burning = {}
 
     def _settings_play(self) -> None:
         if self._working_cfg is None:
@@ -3779,6 +3882,36 @@ class RelayApp(App):
         # creature on screen rather than leaving one relay cannot reach.
         self._kill_stray_mascots()
         widgetmod.clear_state()
+
+    def _sample_trees(self) -> None:
+        """Refresh the git fingerprint for every distinct workdir on screen.
+        Fire-and-forget: the result lands in self._tree for the next _refresh
+        to read, and a failure leaves the previous entry alone."""
+        if not self.watcher or self._burn_window <= 0:
+            return
+        dirs = set()
+        for info in self.watcher.sessions.values():
+            wd = swarmlogic.real_workdir(getattr(info, "workdir", ""))
+            if wd:
+                dirs.add(wd)
+        if dirs:
+            self.run_worker(self._sample_trees_worker(dirs), exclusive=False)
+
+    async def _sample_trees_worker(self, dirs) -> None:
+        """One git call per DISTINCT workdir, off the UI thread. Sibling tabs
+        in one directory are the normal case, so deduping here is the
+        difference between one subprocess and N."""
+        for wd in dirs:
+            try:
+                fp = await asyncio.to_thread(_tree_fingerprint, wd)
+            except Exception:
+                fp = ""
+            if fp:
+                self._tree[wd] = (fp, time.time())
+            else:
+                # Unreadable now: drop it so the evaluator reports no-git
+                # rather than measuring against a stale hash forever.
+                self._tree.pop(wd, None)
 
     def _set_caffeinate(self, want: bool) -> None:
         """Reconcile the caffeinate child against `want`. THE single door for

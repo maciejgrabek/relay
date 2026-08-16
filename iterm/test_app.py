@@ -630,6 +630,51 @@ async def go():
             len(calls) == 1)
         chk("...and latches off", rd._no_caffeinate is True)
 
+    # --- burn: the badge, the count, and what outranks it --------------------
+    bn = _TestApp(_one(), dry_run=True)
+    async with bn.run_test() as pilot:
+        await pilot.pause()
+        info = bn.watcher.sessions["s0"]
+        info.state = "working"
+        info.workdir = "/tmp/burn-test-repo"
+        # Freeze the evaluator, then plant a verdict: the git sampler and the
+        # transcript reader are not what this case is about, and driving them
+        # here would test the stubs rather than the render. _refresh only
+        # recomputes when the window is > 0, so a planted verdict survives.
+        bn._burn_window = 0
+        bn._burning = {"s0": appmod.burnmod.Verdict(
+            burning=True, quiet_for=22 * 60, turns=18, spent=85200)}
+        bn._refresh()
+        await pilot.pause()
+        row = bn.query_one(appmod.DataTable).get_row_at(
+            bn._row_sids.index("s0"))
+        chk("STATUS shows the burn badge",
+            any("BURN" in str(c) for c in row))
+        sub = str(bn.query_one("#subtitle", appmod.Static).render())
+        chk("header counts it", "1 burning" in sub)
+
+        # stale is worse news and must win the cell.
+        info.stale = True
+        bn._refresh()
+        await pilot.pause()
+        row = bn.query_one(appmod.DataTable).get_row_at(
+            bn._row_sids.index("s0"))
+        chk("stale outranks burn in STATUS",
+            any("STALE" in str(c) for c in row)
+            and not any("BURN" in str(c) for c in row))
+
+        info.stale = False
+        bn._burning = {}
+        bn._refresh()
+        await pilot.pause()
+        sub = str(bn.query_one("#subtitle", appmod.Static).render())
+        chk("no count when nothing is burning", "burning" not in sub)
+
+    chk("evidence line names all three numbers",
+        appmod.burnmod.evidence(appmod.burnmod.Verdict(
+            quiet_for=22 * 60, turns=18, spent=85200))
+        == "22m unchanged, 18 turns, 85.2k out")
+
     # --- mascot barometer: cleared tally + earned reactions -------------------
     from app import mascot_face_big, effective_mascot_state
 
