@@ -72,6 +72,46 @@ class Decision:
     is_proceed: bool = False
 
 
+# The arm ladder, least to most permissive. Ordering is the safety property:
+# each rung must approve a SUPERSET of the one below it, and test_gates.py
+# enumerates every Decision shape to prove it still does.
+ARM_ORDER = ("off", "safe", "wild", "insane", "extreme")
+
+
+def mode_approves(mode: str, decision: "Decision") -> bool:
+    """Would a session armed at `mode` auto-approve this decision?
+
+    THE arm-level policy, in one place. It used to live inline in the watcher's
+    prompt handler, which meant the ladder's ordering - the property the whole
+    arm model rests on - was four lines buried in an async method with nothing
+    asserting it.
+
+      off / shadow - never. shadow observes and records; it must not act.
+      safe         - only what the gate itself cleared (Action.INJECT), i.e. a
+                     command lib/danger.sh classified non-catastrophic.
+      wild         - any permission prompt with the cursor on the affirmative
+                     default, WITHOUT classifying the command. Note what that
+                     means: a DANGEROUS verdict is approved like any other.
+                     Wild is not "safe plus a bit", it is "insane minus one
+                     case".
+      insane       - any tool-permission prompt at all, including the fail-safe
+                     ones (cursor off option 1, unparseable command).
+      extreme      - identical to insane here; the idle-push behaviour that
+                     distinguishes it lives in the dwell logic, not in this
+                     policy.
+
+    A real question has is_permission=False, so NO mode auto-answers one. That
+    is the floor under the whole ladder.
+    """
+    if mode in ("insane", "extreme"):
+        return decision.is_permission
+    if mode == "wild":
+        return decision.is_proceed
+    if mode == "safe":
+        return decision.action == Action.INJECT
+    return False
+
+
 # Signals that a Claude Code session is actively working (spinner / interrupt
 # hint), seen in the live screens. Matched against the sanitized tail.
 # NOTE: do NOT include "⏵⏵ accept edits on" - that's a persistent footer shown

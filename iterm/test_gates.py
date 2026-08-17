@@ -13,7 +13,8 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 from gates import (  # noqa: E402
     classify, Action, sanitize, extract_command, reconstruct_lines,
-    _cursor_on_first_option,
+    _cursor_on_first_option, mode_approves, Decision, DANGEROUS_COMMAND,
+    ARM_ORDER,
 )
 
 # Derived at runtime so the fixtures carry this machine's real home path
@@ -281,6 +282,63 @@ def run():
     # reconstruct_lines re-joins soft wraps
     joined = reconstruct_lines(["foo bar ", "baz qux"], hard_eols=[False, True])
     ok &= check("soft-wrap rejoin", joined == ["foo bar baz qux"])
+
+    # --- the arm ladder is a ladder ------------------------------------------
+    # THE safety invariant: a more cautious mode must never approve something a
+    # less cautious one refuses. Enumerated over every Decision shape classify()
+    # can emit, against the REAL mapping the watcher uses - a table copied into
+    # this file would agree with itself forever and prove nothing.
+    SHAPES = [
+        ("actively working",
+         Decision(Action.NONE, "actively working")),
+        ("no actionable prompt",
+         Decision(Action.NONE, "no actionable prompt")),
+        ("prompt still rendering",
+         Decision(Action.NONE, "prompt still rendering")),
+        ("real question",
+         Decision(Action.NOTIFY, "real question - hands off")),
+        ("cursor not on option 1",
+         Decision(Action.NOTIFY, "cursor not on option 1 - fail safe",
+                  is_permission=True)),
+        ("command too large",
+         Decision(Action.NOTIFY, "command too large to verify",
+                  is_permission=True, is_proceed=True)),
+        ("dangerous command",
+         Decision(Action.NOTIFY, DANGEROUS_COMMAND,
+                  is_permission=True, is_proceed=True)),
+        ("unclassifiable command",
+         Decision(Action.NOTIFY, "danger.sh could not classify - fail safe",
+                  is_permission=True, is_proceed=True)),
+        ("safe command",
+         Decision(Action.INJECT, "safe permission prompt",
+                  is_permission=True, is_proceed=True)),
+    ]
+    approved = {m: {n for n, d in SHAPES if mode_approves(m, d)}
+                for m in ARM_ORDER}
+
+    ok &= check("off approves nothing at all", approved["off"] == set())
+    for lower, higher in zip(ARM_ORDER, ARM_ORDER[1:]):
+        ok &= check(f"{lower} approves a subset of {higher}",
+                    approved[lower] <= approved[higher])
+    ok &= check("extreme matches insane exactly",
+                mode_approves("extreme", SHAPES[4][1])
+                == mode_approves("insane", SHAPES[4][1]))
+    ok &= check("shadow never approves (dry-run arm level)",
+                not any(mode_approves("shadow", d) for _, d in SHAPES))
+
+    # The specific boundaries, named - so a change that keeps the ladder
+    # ordered but moves a rung still has to be deliberate.
+    ok &= check("a real question is refused by EVERY mode",
+                not any(mode_approves(m, SHAPES[3][1]) for m in ARM_ORDER))
+    ok &= check("only insane acts with the cursor off option 1",
+                approved["insane"] - approved["wild"] ==
+                {"cursor not on option 1"})
+    ok &= check("safe refuses every command it could not clear",
+                approved["safe"] == {"safe command"})
+    # Documented so nobody mistakes wild for a cautious mode: it ignores the
+    # classifier, so a DANGEROUS verdict is approved just like any other.
+    ok &= check("wild approves a DANGEROUS command (by design, not by bug)",
+                mode_approves("wild", SHAPES[6][1]) is True)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

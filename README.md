@@ -94,9 +94,22 @@ allowlisted commands). Because `relay` acts at the terminal layer, it
   classifies safe; escalates dangerous or unreadable ones to you.
 - **wild** (`▲ WILD`) - approves **any** genuine `Do you want to proceed?` prompt
   (cursor on Yes) without classifying the command. Heredocs and obfuscation-
-  detector prompts `safe` can't read get cleared.
+  detector prompts `safe` can't read get cleared. Read that literally: wild does
+  not consult `lib/danger.sh` at all, so a command the classifier calls
+  **DANGEROUS** is approved like any other. Wild is not "safe plus a bit" - it
+  is insane minus one case (below).
 - **insane** (`✦ INSANE`) - approves **any** tool-permission prompt at all, even
-  the fail-safe cases (cursor not on option 1, unparseable command).
+  the fail-safe cases (cursor not on option 1, unparseable command). In practice
+  that is wild plus exactly one case: acting when the cursor is **not** on the
+  affirmative default.
+
+The ladder's ordering is a safety property, not a description: every rung
+approves a superset of the rung below it, so a more cautious mode can never
+clear something a less cautious one refuses. `gates.mode_approves` is the whole
+policy, and `test_gates.py` enumerates every decision the classifier can emit
+to prove the ordering still holds. No mode auto-answers a real multi-choice
+question - those carry `is_permission=False`, which is the floor under all of
+it.
 
 A fifth level sits above insane and is armed only via `E E` in the TUI:
 

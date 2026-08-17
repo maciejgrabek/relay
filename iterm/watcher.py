@@ -700,20 +700,13 @@ class Watcher:
             return
         info._last_prompt_id = decision.prompt_id
 
-        # Decide whether to APPROVE, by mode (decreasing caution):
-        #   safe    - only INJECT (command classified non-catastrophic)
-        #   wild    - any proceed-prompt (cursor on Yes), command ignored
-        #   insane  - any permission prompt at all, even fail-safe cases
-        #   extreme - insane superset (permission-prompt handling is
-        #             identical; the push behavior lives in _fire_timers-
-        #             adjacent idle-dwell logic, not here)
-        # Real questions have is_permission=False, so NONE of these touch them.
-        if info.mode in ("insane", "extreme"):
-            approve = decision.is_permission
-        elif info.mode == "wild":
-            approve = decision.is_proceed
-        else:  # safe
-            approve = decision.action == Action.INJECT
+        # Decide whether to APPROVE, by mode. The policy and the reasoning live
+        # in gates.mode_approves, beside the classifier whose output it reads -
+        # the ladder's ordering (each rung a superset of the one below) is a
+        # safety property, and test_gates.py enumerates every Decision shape to
+        # prove it holds. Real questions have is_permission=False, so no mode
+        # ever auto-answers one.
+        approve = gates.mode_approves(info.mode, decision)
 
         if not approve:
             # Cooldown backstop: even if the prompt_id churns (e.g. you're typing

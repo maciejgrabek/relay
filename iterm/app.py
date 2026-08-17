@@ -962,8 +962,14 @@ def help_text() -> str:
         "",
         row("○ MANUAL", "never acts - watch and notify only"),
         row("◉ SAFE", "auto-approves commands classified safe; escalates rest"),
-        row("▲ WILD", "approves any 'Do you want to proceed?' unclassified"),
-        row("✦ INSANE", "approves ANY tool prompt, even fail-safe cases"),
+        # "unclassified" used to sit at the end of the WILD line, which read as
+        # "approves only the ones it could not classify" - the opposite of what
+        # it does. Wild does not classify AT ALL, so a DANGEROUS command with
+        # the cursor on Yes is approved like any other.
+        row("▲ WILD", "approves ANY proceed-prompt (cursor on Yes) WITHOUT "
+                      "classifying - dangerous commands included"),
+        row("✦ INSANE", "wild + the fail-safe cases (cursor off option 1, "
+                        "unparseable command)"),
         row("✷ EXTREME", "insane + pushes your prompt into an idle tab; budget-capped, gone on restart"),
         row("◌ SHADOW", "dry-run - records would-approve/would-escalate, never acts"),
         "",
