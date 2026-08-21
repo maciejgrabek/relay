@@ -68,7 +68,13 @@ def configure(*, file_enabled: bool = True, post_url: str = "",
               post_body: str = "minimal",
               retention_days: Optional[float] = None) -> None:
     """Apply the [events] config once, at TUI start. Not live-reloadable in v1:
-    a mid-run config edit takes effect on the next relay start."""
+    a mid-run config edit takes effect on the next relay start.
+
+    This is a FULL REPLACE, not a patch: every argument you omit is reset to
+    its default, so configure(post_body="full") also clears any configured
+    post_url. Pass all of them, as app.py does. The one exception is
+    retention_days, whose None means "leave RETENTION_DAYS alone" - it is the
+    only setting an env var (RELAY_EVENTS_RETENTION_DAYS) can also own."""
     global _file_enabled, _post_url, _post_body, RETENTION_DAYS
     try:
         _file_enabled = bool(file_enabled)

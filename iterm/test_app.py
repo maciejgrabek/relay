@@ -2386,6 +2386,16 @@ def lock_tests():
     chk("W hint points at Z for a whole-project clear",
         "Z" in inspect.getsource(appmod.RelayApp.action_wipe))
 
+    # Startup wiring for the event seam: configure() unconditionally (the
+    # module has to learn the file channel is OFF), but prune only when the
+    # file channel is on - otherwise an operator who set events_file = false
+    # still gets their old events.jsonl rewritten on every launch.
+    _boot = inspect.getsource(appmod.RelayApp._connect)
+    chk("startup configures the event seam", "events.configure(" in _boot)
+    chk("startup prunes the event log only when the file channel is on",
+        "if cfg.events_file:" in _boot
+        and _boot.index("if cfg.events_file:") < _boot.index("events.prune_old("))
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 

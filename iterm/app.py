@@ -1552,7 +1552,11 @@ class RelayApp(App):
                                  post_url=cfg.events_post_url,
                                  post_body=cfg.events_post_body,
                                  retention_days=cfg.events_retention_days)
-                events.prune_old()
+                # Only when the file channel is on: an operator who set
+                # events_file = false has not asked relay to keep rewriting
+                # the events.jsonl they stopped appending to.
+                if cfg.events_file:
+                    events.prune_old()
             except Exception:
                 pass
             # One poll loop reads every visible/armed session every 2s.
