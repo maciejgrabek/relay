@@ -160,8 +160,33 @@ def _write_file(entry: dict) -> None:
 
 
 def _post(entry: dict) -> None:
-    """Fire-and-forget POST. Filled in by Task 5 - no-op until then."""
-    return
+    """Fire-and-forget POST, exactly how notify_mac already launches
+    terminal-notifier and afplay (watcher.py:163, watcher.py:178). Popen and
+    walk away: this runs inside the watcher tick and must never block it.
+
+    No retry, no queue - a queue is a daemon wearing a hat, and the file
+    channel is the durable record. A lost POST is a lost ping, nothing more.
+
+    The URL is a separate argv element and the argv is fixed: nothing the
+    operator configures is ever interpreted as a command."""
+    if not _post_url:
+        return
+    try:
+        if _post_body == "full":
+            body = entry
+        else:
+            # minimal: enough to know WHICH session wants you, and nothing
+            # about what it wanted to run. gate.escalated messages carry real
+            # command text - paths, connection strings, occasionally a secret
+            # in an argument - and POSTing that publishes it to a third party.
+            body = {k: entry[k] for k in ("v", "ts", "kind", "session")}
+        subprocess.Popen(
+            ["curl", "-fsS", "-m", "5", "-X", "POST",
+             "-H", "Content-Type: application/json",
+             "-d", json.dumps(body), _post_url],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def prune_old(now: Optional[float] = None) -> int:

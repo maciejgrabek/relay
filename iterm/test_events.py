@@ -175,6 +175,83 @@ def run():
     events.configure(file_enabled=True, post_url="", post_body="minimal",
                      retention_days=7.0)
 
+    # --- the POST channel ---------------------------------------------------
+    calls = []
+
+    class _FakeSub:
+        """Stands in for the `subprocess` module inside events' namespace.
+
+        Deliberately NOT `events.subprocess.Popen = fake` - that would mutate
+        the real stdlib module object, which every other import in the process
+        shares. Replacing the name in events' namespace touches only events."""
+        DEVNULL = -3
+
+        @staticmethod
+        def Popen(argv, **kw):
+            calls.append(argv)
+
+    real_sub = events.subprocess
+    events.subprocess = _FakeSub
+    try:
+        events.configure(file_enabled=False, post_url="", post_body="minimal")
+        events.emit("gate.escalated", session="api-worker",
+                    message="terraform apply -auto-approve", now=NOW)
+        check("no post_url fires no subprocess", calls == [])
+
+        events.configure(file_enabled=False,
+                         post_url="https://ntfy.test/fleet",
+                         post_body="minimal")
+        events.emit("gate.escalated", session="api-worker",
+                    title="Relay - api-worker",
+                    message="terraform apply -auto-approve",
+                    data={"secret": 1}, now=NOW)
+        check("post_url fires exactly one subprocess", len(calls) == 1)
+        argv = calls[0]
+        check("argv is a fixed curl, no shell",
+              argv[0] == "curl" and "-X" in argv and "POST" in argv)
+        check("url is its own argv element, never interpolated",
+              argv[-1] == "https://ntfy.test/fleet")
+        check("a timeout is set", "-m" in argv)
+        body = json.loads(argv[argv.index("-d") + 1])
+        check("minimal carries v/ts/kind/session only",
+              set(body) == {"v", "ts", "kind", "session"})
+        check("minimal leaks no command text",
+              "terraform" not in json.dumps(body))
+
+        calls.clear()
+        events.configure(file_enabled=False,
+                         post_url="https://ntfy.test/fleet",
+                         post_body="full")
+        events.emit("gate.escalated", session="api-worker",
+                    title="Relay - api-worker",
+                    message="terraform apply -auto-approve", now=NOW)
+        full = json.loads(calls[0][calls[0].index("-d") + 1])
+        check("full carries the whole envelope",
+              set(full) == {"v", "ts", "kind", "session", "session_id",
+                            "title", "message", "data"})
+        check("full does carry command text",
+              "terraform" in full["message"])
+
+        # a POST that explodes must not cost the file channel
+        class _BoomSub:
+            DEVNULL = -3
+
+            @staticmethod
+            def Popen(argv, **kw):
+                raise OSError("curl missing")
+
+        os.environ["RELAY_EVENTS_LOG"] = os.path.join(tmp, "both.jsonl")
+        importlib.reload(events)          # reload resets events.subprocess
+        events.subprocess = _BoomSub
+        events.configure(file_enabled=True, post_url="https://ntfy.test/x",
+                         post_body="minimal")
+        events.emit("task.done", session="survivor", now=NOW)
+        check("a failed POST does not cost the file write",
+              "survivor" in open(events.EVENTS_PATH).read())
+    finally:
+        events.subprocess = real_sub
+        events.configure(file_enabled=True, post_url="", post_body="minimal")
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
