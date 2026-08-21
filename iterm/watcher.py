@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional
 import iterm2
 
 import audit
+import events
 import db as swarmdb
 import swarm
 import statusbar as statusbar_mod
@@ -140,14 +141,24 @@ _TERMINAL_NOTIFIER = shutil.which("terminal-notifier")
 
 
 def notify_mac(title: str, message: str, sound: Optional[str],
-               session_id: Optional[str] = None) -> None:
-    """Fire a macOS notification + optional sound. Best-effort, never raises.
+               session_id: Optional[str] = None, *,
+               kind: str, session: str = "") -> None:
+    """Fire a macOS notification + optional sound, and record the event.
+
+    `kind` is keyword-only and REQUIRED: a call site that forgets it is a
+    TypeError at the call rather than an untyped event at runtime. Same
+    can't-forget construction as _gated_sound below, for the same reason.
+
+    The emit comes first and can never raise (events.emit swallows everything
+    and returns None), so notifying is unaffected by the state of the log.
 
     With terminal-notifier installed the notification shows as iTerm and, when a
     `session_id` is given, clicking it focuses that iTerm session (the tab the
     alert is about) via focus_session.sh; without a session_id the click just
     activates iTerm. When terminal-notifier is absent we fall back to a plain
     osascript notification (shows Script Editor, no click action)."""
+    events.emit(kind, session=session, session_id=session_id or "",
+                title=title, message=message)
     try:
         if _TERMINAL_NOTIFIER:
             cmd = [_TERMINAL_NOTIFIER,
@@ -729,7 +740,8 @@ class Watcher:
                        _notify_sound(decision.reason,
                                      danger=self.danger_sound,
                                      alert=self.alert_sound),
-                       session_id=info.session_id)
+                       session_id=info.session_id,
+                       kind="gate.escalated", session=info.title)
             return
 
         # --- approve path ---
@@ -764,7 +776,8 @@ class Watcher:
             self._note(f"AUDIT-FAIL {info.title}: not injecting (log write failed)")
             notify_mac(f"Relay - {info.title}",
                        "audit log write failed - NOT auto-approving",
-                       self.alert_sound, session_id=info.session_id)
+                       self.alert_sound, session_id=info.session_id,
+                       kind="audit.failed", session=info.title)
             return
         await info._iterm_session.async_send_text("\r")
         info.state = "cleared"
@@ -831,13 +844,15 @@ class Watcher:
                         self._note(f"ARMED {d['name']} -> {req} (spawn request)")
                         notify_mac(f"Relay - {d['name']}",
                                    f"armed {req} on spawn", self.alert_sound,
-                                   session_id=sid)
+                                   session_id=sid,
+                                   kind="arm.changed", session=d['name'])
                     else:
                         self._note(f"REFUSED arm escalation {d['name']} -> {req}")
                         notify_mac(f"Relay - {d['name']}",
                                    f"refused arm escalation to {req} "
                                    f"(request outside spawn window)",
-                                   self.alert_sound, session_id=sid)
+                                   self.alert_sound, session_id=sid,
+                                   kind="arm.refused", session=d['name'])
                 # Restore a persisted arm level after a restart: only at first
                 # sight, only if no fresh spawn arm_request took precedence, and
                 # only once (later ticks must not re-apply a stale stored value
@@ -998,7 +1013,8 @@ class Watcher:
                 info._last_notify_ts = now
                 self._note(f"AUDIT-FAIL: not delivering msg {m['id']}")
                 notify_mac("Relay - swarm", "audit log write failed - "
-                           "NOT delivering message", self.alert_sound)
+                           "NOT delivering message", self.alert_sound,
+                           kind="audit.failed")
             return
         # Send body then a STANDALONE Enter (bracketed-paste lesson): the TUI
         # treats the body as a paste and waits for a discrete \r.
@@ -1178,7 +1194,8 @@ class Watcher:
             self._note(f"EXTREME exhausted on {info.title} - back to INSANE")
             notify_mac(f"Relay - {info.title}",
                        "extreme budget exhausted - back to insane",
-                       self.done_sound, session_id=info.session_id)
+                       self.done_sound, session_id=info.session_id,
+                       kind="extreme.exhausted", session=info.title)
 
     def _load_timers_on_start(self) -> None:
         """Restore gate: unless [timers] autostart, every saved timer starts
@@ -1262,12 +1279,14 @@ class Watcher:
             first = fresh[0]
             if len(fresh) == 1:
                 notify_mac(f"Relay - escalation from {first['from_name']}",
-                           first["body"][:120], self.message_sound)
+                           first["body"][:120], self.message_sound,
+                           kind="escalation.received",
+                           session=first['from_name'])
             else:
                 notify_mac("Relay - escalations",
                            f"{len(fresh)} pending, first from "
                            f"{first['from_name']}: {first['body'][:80]}",
-                           self.message_sound)
+                           self.message_sound, kind="escalation.received")
         except Exception as e:
             # Never let a bad row escape into start()'s tick loop (it has no
             # per-tick except; an escape would kill the watcher outright).
@@ -1286,7 +1305,7 @@ class Watcher:
                     self._last_event = ("done", time.time())
                     notify_mac("Relay - done",
                                f"{len(new_done)} task(s) completed",
-                               self.done_sound)
+                               self.done_sound, kind="task.done")
             self._done_seen = done_ids
             self._done_seen_init = True
         except Exception:
@@ -1320,7 +1339,8 @@ class Watcher:
                 info._stale_notified = True
                 self._note(f"STALE {reg['name']}: {reason}")
                 notify_mac(f"Relay - {reg['name']} STALE", reason,
-                           self.alert_sound, session_id=info.session_id)
+                           self.alert_sound, session_id=info.session_id,
+                           kind="session.stale", session=reg['name'])
         else:
             info.stale = False
             info._stale_notified = False
@@ -1377,7 +1397,7 @@ class Watcher:
                            f"messages queued")
                 notify_mac(f"Relay - {name} STALE",
                            "session gone or unreachable, messages queued",
-                           self.alert_sound)
+                           self.alert_sound, kind="session.stale", session=name)
 
     # --- tab-title prefixes -------------------------------------------------
 

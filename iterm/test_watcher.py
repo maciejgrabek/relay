@@ -1556,6 +1556,46 @@ async def shadow_tests():
     return ok
 
 
+def notify_mac_kind_parity_tests():
+    """Every notify_mac call site in watcher.py carries a valid kind=.
+
+    A source-level test on purpose: it fails for a call site added LATER
+    without a kind, which a behavioural test would never see. The required
+    keyword-only arg makes forgetting it a TypeError; this makes a WRONG
+    kind a test failure too."""
+    ok = True
+
+    def chk(name, cond):
+        nonlocal ok
+        print(("PASS" if cond else "FAIL"), name)
+        ok = ok and cond
+
+    import ast
+    import events as _events
+    src = os.path.join(os.path.dirname(__file__), "watcher.py")
+    tree = ast.parse(open(src).read())
+    sites, bad = 0, []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", None) != "notify_mac":
+            continue
+        sites += 1
+        kw = [k for k in node.keywords if k.arg == "kind"]
+        if len(kw) != 1:
+            bad.append((node.lineno, "missing kind="))
+            continue
+        v = kw[0].value
+        if not isinstance(v, ast.Constant) or v.value not in _events.VALID_KINDS:
+            bad.append((node.lineno, "kind is not a VALID_KINDS literal"))
+    chk("found all eleven notify_mac call sites", sites == 11)
+    chk(f"every call site has a literal kind in VALID_KINDS (bad: {bad})",
+        not bad)
+
+    print("\nALL PASS" if ok else "\nFAILURES ABOVE")
+    return ok
+
+
 def notify_mac_tests():
     """notify_mac routes through terminal-notifier (attributed to iTerm, click
     jumps to the session) when it's on PATH, and falls back to osascript
@@ -1581,7 +1621,8 @@ def notify_mac_tests():
         # --- terminal-notifier present, with a session_id -> click jumps ---
         W._TERMINAL_NOTIFIER = "/opt/tn"
         calls.clear()
-        W.notify_mac("Relay - w1", "danger", None, session_id="ABC-123")
+        W.notify_mac("Relay - w1", "danger", None, session_id="ABC-123",
+                     kind="gate.escalated", session="w1")
         argv = calls[0]
         chk("uses terminal-notifier binary", argv[0] == "/opt/tn")
         chk("attributed to iTerm via -sender",
@@ -1595,7 +1636,7 @@ def notify_mac_tests():
 
         # --- terminal-notifier present, no session_id -> just activate iTerm ---
         calls.clear()
-        W.notify_mac("Relay - done", "1 task", None)
+        W.notify_mac("Relay - done", "1 task", None, kind="task.done")
         argv = calls[0]
         chk("global notify activates iTerm generally",
             "-activate" in argv
@@ -1604,14 +1645,16 @@ def notify_mac_tests():
 
         # --- sound still fires afplay alongside the notification ---
         calls.clear()
-        W.notify_mac("Relay - w1", "x", "/S.aiff", session_id="ABC")
+        W.notify_mac("Relay - w1", "x", "/S.aiff", session_id="ABC",
+                     kind="gate.escalated", session="w1")
         chk("sound spawns afplay too",
             any(c[:1] == ["afplay"] and "/S.aiff" in c for c in calls))
 
         # --- terminal-notifier absent -> osascript fallback (no click) ---
         W._TERMINAL_NOTIFIER = None
         calls.clear()
-        W.notify_mac("Relay - w1", 'has "quote" and \\ back', None)
+        W.notify_mac("Relay - w1", 'has "quote" and \\ back', None,
+                     kind="gate.escalated", session="w1")
         argv = calls[0]
         chk("falls back to osascript", argv[0] == "osascript")
         chk("osascript neutralizes the message's double quotes",
@@ -2064,11 +2107,12 @@ if __name__ == "__main__":
     r9 = legible_spine_tests()
     r10 = asyncio.run(pause_tests())
     r11 = asyncio.run(shadow_tests())
+    r11b = notify_mac_kind_parity_tests()
     r12 = notify_mac_tests()
     r13 = mute_tests()
     r_timer = asyncio.run(timer_tests())
     r_thr = close_threads_tests()
     sys.exit(0 if (r1 and r2 and r3 and r3b and r3c and r3d and r4 and r5
                    and r6 and r7
-                   and r8 and r8b and r9 and r10 and r11 and r12 and r13
-                   and r_timer and r_thr) else 1)
+                   and r8 and r8b and r9 and r10 and r11 and r11b and r12
+                   and r13 and r_timer and r_thr) else 1)
