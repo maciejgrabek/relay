@@ -360,8 +360,28 @@ def run():
     ok &= check("a percent-encoded post_url survives intact",
                 raised is None and cfg.events_post_url.endswith("msg=a%20b"))
 
-    # a non-http value (the visible symptom of truncation at a '#') is
-    # disabled with a warn rather than silently POSTing nowhere
+    # inline comments truncate a post_url only when the '#' or ';' is PRECEDED
+    # BY WHITESPACE - that is configparser's actual rule, and the README used
+    # to claim a '#' anywhere in the URL was fatal. A fragment or a ';' inside
+    # the URL survives; one after a space starts a comment.
+    with open(p, "w") as f:
+        f.write("[events]\npost_url = https://ntfy.sh/topic#frag\n")
+    cfg, _ = config.load(p)
+    ok &= check("a '#' inside a post_url survives",
+                cfg.events_post_url == "https://ntfy.sh/topic#frag")
+    with open(p, "w") as f:
+        f.write("[events]\npost_url = https://ntfy.sh/topic ;note\n")
+    cfg, _ = config.load(p)
+    ok &= check("a ';' after a space truncates the post_url",
+                cfg.events_post_url == "https://ntfy.sh/topic")
+    with open(p, "w") as f:
+        f.write("[events]\npost_url = https://ntfy.sh/topic #note\n")
+    cfg, _ = config.load(p)
+    ok &= check("a '#' after a space truncates the post_url",
+                cfg.events_post_url == "https://ntfy.sh/topic")
+
+    # a non-http value (the visible symptom of a truncated or hand-typed URL)
+    # is disabled with a warn rather than silently POSTing nowhere
     with open(p, "w") as f:
         f.write("[events]\npost_url = ntfy.sh/no-scheme\n")
     cfg, warns = config.load(p)

@@ -1374,9 +1374,11 @@ post_body      = minimal   ; minimal | full
 retention_days = 7
 ```
 
-A `post_url` must start with `http://` or `https://` and **cannot contain a
-`#`** - the config parser treats `#` as the start of an inline comment and
-strips the rest of the line. `relay doctor` shows the URL it actually parsed.
+A `post_url` must start with `http://` or `https://`. A `#` or `;` **preceded by
+a space** starts an inline comment and truncates the value - `post_url =
+https://ntfy.sh/t #note` parses as `https://ntfy.sh/t`. One inside the URL is
+kept, so fragments and query strings are fine. `relay doctor` shows the host it
+will POST to.
 
 `post_body = minimal` (the default) sends only `v`, `ts`, `kind` and `session`:
 you learn *which* session wants you, not what it wanted to run. `full` sends the

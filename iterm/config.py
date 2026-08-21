@@ -223,9 +223,11 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     ev_url = cp.get("events", "post_url", fallback=d.events_post_url,
                     raw=True).strip()
     if ev_url and not ev_url.startswith(("http://", "https://")):
-        # Also the visible symptom of a URL truncated at a '#': this parser
-        # sets inline_comment_prefixes=("#", ";"), so everything from a '#'
-        # onward is stripped as a comment before we ever see it.
+        # Also the visible symptom of a URL truncated by an inline comment:
+        # this parser sets inline_comment_prefixes=("#", ";"), and configparser
+        # honours those only when PRECEDED BY WHITESPACE. A '#' or ';' inside
+        # the URL survives; one after a space starts a comment and everything
+        # from it is stripped before we ever see the value.
         warns.append(f"config: [events] post_url = {ev_url!r} is not an "
                      f"http(s) URL - disabling the POST channel")
         ev_url = ""
