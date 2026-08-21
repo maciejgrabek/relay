@@ -1907,6 +1907,39 @@ def run():
                     _config.Config(events_post_url=secret,
                                    events_post_body="full")))
 
+    # Embedded userinfo is the same secret wearing a different hat:
+    # user:token@host is a documented ntfy auth method, so the credential can
+    # ride in the authority rather than the path.
+    ok &= check("userinfo is stripped from the host",
+                cli._host_only("https://user:s3cr3t@ntfy.sh/mytopic")
+                == "https://ntfy.sh/…")
+    out_ev = _events_block(_config.Config(
+        events_post_url="https://user:s3cr3t@ntfy.sh/mytopic"))
+    ok &= check("doctor prints neither the user nor the token",
+                "s3cr3t" not in out_ev and "user" not in out_ev
+                and "ntfy.sh" in out_ev)
+    # split on the LAST '@': a password may legitimately contain one
+    ok &= check("a password containing '@' is still fully stripped",
+                cli._host_only("https://u:p@ss@w0rd@ntfy.sh/t")
+                == "https://ntfy.sh/…")
+    # ... and only inside the authority: an '@' in the path or query must not
+    # eat the host
+    ok &= check("an '@' in the path does not eat the host",
+                cli._host_only("https://ntfy.sh/mail@example.test")
+                == "https://ntfy.sh/…")
+    ok &= check("an '@' in the query does not eat the host",
+                cli._host_only("https://ntfy.sh?to=mail@example.test")
+                .startswith("https://ntfy.sh")
+                and "example.test" not in
+                cli._host_only("https://ntfy.sh?to=mail@example.test"))
+    # the no-userinfo shapes must render exactly as they did before
+    ok &= check("a plain URL with a path still renders host + ellipsis",
+                cli._host_only(secret) == "https://hooks.example.test/…")
+    ok &= check("a bare host still renders with no ellipsis",
+                cli._host_only("https://ntfy.sh") == "https://ntfy.sh")
+    ok &= check("a schemeless value renders as nothing but the ellipsis",
+                cli._host_only("ntfy.sh/topic") == "…")
+
     # A corrupt byte in the event log must not crash the command whose whole
     # job is to report on that file. UnicodeDecodeError is a ValueError, not
     # an OSError, and cmd_doctor has no outer guard.

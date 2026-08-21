@@ -1705,8 +1705,18 @@ def _host_only(url: str) -> str:
         if len(rest) != 2:
             return "…"
         scheme, tail = rest
-        host = tail.split("/", 1)[0]
-        return f"{scheme}://{host}/…" if "/" in tail else f"{scheme}://{host}"
+        # The authority ends at the first '/', '?' or '#'. Cut there first, so
+        # an '@' in the path or query can never be mistaken for userinfo and
+        # eat the host along with it.
+        cut = min((i for i in (tail.find(c) for c in "/?#") if i != -1),
+                  default=len(tail))
+        authority, remainder = tail[:cut], tail[cut:]
+        # user:token@host is a documented ntfy auth method, so the credential
+        # rides in the authority for that shape rather than the path - strip
+        # it exactly like the path. Split on the LAST '@': a password may
+        # legitimately contain one.
+        host = authority.rsplit("@", 1)[-1]
+        return f"{scheme}://{host}/…" if remainder else f"{scheme}://{host}"
     except Exception:
         return "…"
 
