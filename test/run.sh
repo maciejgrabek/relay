@@ -9,6 +9,12 @@ set -uo pipefail
 # Defense-in-depth: no test (present or future) should ever be able to write
 # the developer's real ~/.relay/config. A throwaway path for the whole suite.
 export RELAY_CONFIG="$(mktemp -d)/relay-test-config"
+# Same defense for the two append-only logs. notify_mac() emits an event on
+# every call, and any suite that drives a real execution path calls
+# audit.record() - without these, a test run appends to the developer's real
+# ~/.relay/events.jsonl and ~/.relay/audit.jsonl.
+export RELAY_EVENTS_LOG="$(mktemp -d)/relay-test-events.jsonl"
+export RELAY_AUDIT_LOG="$(mktemp -d)/relay-test-audit.jsonl"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"

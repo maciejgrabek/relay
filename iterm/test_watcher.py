@@ -15,6 +15,12 @@ import time as _time
 sys.path.insert(0, os.path.dirname(__file__))
 # Hermetic: never read the developer's real ~/.relay/config in tests.
 os.environ["RELAY_CONFIG"] = "/nonexistent/relay-test-config"
+# Same for the event log: these tests call the real notify_mac(), which emits.
+# events.py resolves EVENTS_PATH at import time, so this MUST be set before
+# 'import watcher' (which imports events) or the fallback ~/.relay/events.jsonl
+# wins and the suite writes into the developer's live log. An unwritable path
+# is deliberate - it exercises emit()'s never-raises path and writes nothing.
+os.environ["RELAY_EVENTS_LOG"] = "/nonexistent/relay-test-events.jsonl"
 import watcher as W  # noqa: E402
 
 
