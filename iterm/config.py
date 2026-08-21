@@ -55,6 +55,7 @@ THEME_NAMES = ("phosphor", "amber", "ice")
 MASCOT_NAMES = ("crt", "invader", "owl", "cat", "core", "beacon", "ghost",
                 "crab", "droid", "bug", "skull", "toaster", "atom", "moth",
                 "tank")
+POST_BODIES = ("minimal", "full")
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,16 @@ class Config:
     # a badge and nothing else, and a diagnostic nobody enables is a diagnostic
     # that is off on the night it was needed.
     burn_window: float = 15.0
+    # The outbound event seam. `file` is on by default because a local
+    # append-only log costs nothing and is the durable record; `post_url` is
+    # off by default because sending anywhere is a decision only the operator
+    # can make. `post_body` defaults to minimal so command text - which is what
+    # a gate.escalated message contains - does not leave the machine unless
+    # asked for. See docs/specs/2026-08-21-event-seam-design.md section 4.
+    events_file: bool = True
+    events_post_url: str = ""
+    events_post_body: str = "minimal"
+    events_retention_days: float = 7.0
 
 
 def default_path() -> str:
@@ -198,6 +209,37 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(DANGER_PRESETS)} - using 'default'")
         preset = "default"
 
+    try:
+        ev_file = cp.getboolean("events", "file", fallback=d.events_file)
+    except ValueError:
+        warns.append("config: [events] file must be true/false - using true")
+        ev_file = True
+
+    # raw=True is load-bearing, not stylistic. ConfigParser defaults to
+    # BasicInterpolation, so a '%' in a URL (routine: percent-encoding) raises
+    # InterpolationSyntaxError - and the try/except above wraps only cp.read(),
+    # not the cp.get() calls, so it would propagate out of a function whose
+    # docstring promises "Never raises" and kill the TUI at startup.
+    ev_url = cp.get("events", "post_url", fallback=d.events_post_url,
+                    raw=True).strip()
+    if ev_url and not ev_url.startswith(("http://", "https://")):
+        # Also the visible symptom of a URL truncated at a '#': this parser
+        # sets inline_comment_prefixes=("#", ";"), so everything from a '#'
+        # onward is stripped as a comment before we ever see it.
+        warns.append(f"config: [events] post_url = {ev_url!r} is not an "
+                     f"http(s) URL - disabling the POST channel")
+        ev_url = ""
+
+    ev_body = cp.get("events", "post_body",
+                     fallback=d.events_post_body).strip().lower()
+    if ev_body not in POST_BODIES:
+        warns.append(f"config: [events] post_body = {ev_body!r} is not one of "
+                     f"{'/'.join(POST_BODIES)} - using 'minimal'")
+        ev_body = "minimal"
+
+    ev_days = _get_float(cp, "events", "retention_days",
+                         d.events_retention_days, warns)
+
     theme = cp.get("theme", "name", fallback=d.theme).strip().lower()
     if theme not in THEME_NAMES:
         warns.append(f"config: [theme] name = {theme!r} is not one of "
@@ -283,6 +325,10 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         timers_reconfirm_days=t_recon,
         power_release_after=release_after,
         burn_window=burn_window,
+        events_file=ev_file,
+        events_post_url=ev_url,
+        events_post_body=ev_body,
+        events_retention_days=ev_days,
     ), warns
 
 
@@ -326,6 +372,11 @@ def dump(cfg: Config) -> str:
         f"release_after = {cfg.power_release_after:g}\n"
         "\n[burn]\n"
         f"window = {cfg.burn_window:g}\n"
+        "\n[events]\n"
+        f"file           = {'true' if cfg.events_file else 'false'}\n"
+        f"post_url       = {cfg.events_post_url}\n"
+        f"post_body      = {cfg.events_post_body}\n"
+        f"retention_days = {cfg.events_retention_days:g}\n"
     )
 
 

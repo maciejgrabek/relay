@@ -317,6 +317,81 @@ def run():
     ok &= check("burn window round-trips through dump/load",
                 back.burn_window == 40.0)
 
+    # --- [events] section ---------------------------------------------------
+    import events as _events
+    ok &= check("config.POST_BODIES matches events.POST_BODIES",
+                config.POST_BODIES == _events.POST_BODIES)
+
+    d = config.Config()
+    ok &= check("events_file defaults on", d.events_file is True)
+    ok &= check("events_post_url defaults empty", d.events_post_url == "")
+    ok &= check("events_post_body defaults minimal",
+                d.events_post_body == "minimal")
+    ok &= check("events_retention_days defaults 7",
+                d.events_retention_days == 7.0)
+
+    p = os.path.join(tempfile.mkdtemp(), "cfg")
+    with open(p, "w") as f:
+        f.write("[events]\n"
+                "file = false\n"
+                "post_url = https://ntfy.sh/my-fleet\n"
+                "post_body = full\n"
+                "retention_days = 3\n")
+    cfg, warns = config.load(p)
+    ok &= check("[events] file parsed", cfg.events_file is False)
+    ok &= check("[events] post_url parsed",
+                cfg.events_post_url == "https://ntfy.sh/my-fleet")
+    ok &= check("[events] post_body parsed", cfg.events_post_body == "full")
+    ok &= check("[events] retention_days parsed",
+                cfg.events_retention_days == 3.0)
+    ok &= check("valid [events] section warns about nothing",
+                not [w for w in warns if "events" in w])
+
+    # a '%' in a URL must not raise out of load() - ConfigParser's default
+    # BasicInterpolation would, and load() promises it never raises
+    with open(p, "w") as f:
+        f.write("[events]\npost_url = https://ntfy.sh/t?msg=a%20b\n")
+    raised = None
+    try:
+        cfg, warns = config.load(p)
+    except Exception as exc:          # noqa: BLE001 - the point of the test
+        raised = exc
+    ok &= check("a percent-encoded post_url does not raise", raised is None)
+    ok &= check("a percent-encoded post_url survives intact",
+                raised is None and cfg.events_post_url.endswith("msg=a%20b"))
+
+    # a non-http value (the visible symptom of truncation at a '#') is
+    # disabled with a warn rather than silently POSTing nowhere
+    with open(p, "w") as f:
+        f.write("[events]\npost_url = ntfy.sh/no-scheme\n")
+    cfg, warns = config.load(p)
+    ok &= check("a non-http post_url is disabled", cfg.events_post_url == "")
+    ok &= check("a non-http post_url warns",
+                any("post_url" in w for w in warns))
+
+    with open(p, "w") as f:
+        f.write("[events]\npost_body = telegram\n")
+    cfg, warns = config.load(p)
+    ok &= check("bogus post_body falls back to minimal",
+                cfg.events_post_body == "minimal")
+    ok &= check("bogus post_body warns",
+                any("post_body" in w for w in warns))
+
+    # dump() round-trips every [events] field
+    src = config.Config(events_file=False,
+                        events_post_url="https://example.test/hook",
+                        events_post_body="full",
+                        events_retention_days=2.0)
+    p2 = os.path.join(tempfile.mkdtemp(), "cfg2")
+    with open(p2, "w") as f:
+        f.write(config.dump(src))
+    back, _ = config.load(p2)
+    ok &= check("dump/load round-trips [events]",
+                back.events_file == src.events_file
+                and back.events_post_url == src.events_post_url
+                and back.events_post_body == src.events_post_body
+                and back.events_retention_days == src.events_retention_days)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
