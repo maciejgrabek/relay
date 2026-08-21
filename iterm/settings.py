@@ -40,6 +40,13 @@ SETTINGS = [
     # Mac awake for as long as the panel is open.
     ("POWER", "power_release_after", "number", (0.0, 5.0)),
     ("POWER", "burn_window", "number", (0.0, 5.0)),
+    # post_url is absent on purpose: the descriptor kinds are
+    # sound | enum | toggle | number, there is no string kind, and adding one
+    # means new editing, cursor and validation code in the overlay for a single
+    # field. It stays config-file-only; `relay doctor` reports whether it is set.
+    ("EVENTS", "events_file", "toggle", None),
+    ("EVENTS", "events_post_body", "enum", _config.POST_BODIES),
+    ("EVENTS", "events_retention_days", "number", (0.0, 1.0)),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to

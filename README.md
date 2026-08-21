@@ -1340,6 +1340,50 @@ Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
 rules (own home), and the title glyph/word vocabulary (it doubles as the
 strip-parser - a configurable vocabulary would double the bug surface).
 
+### Events
+
+Relay appends everything it would notify you about to `~/.relay/events.jsonl`,
+one JSON object per line, so something other than this Mac's speaker can react:
+
+```json
+{"v":1,"ts":1755640000.1,"kind":"gate.escalated","session":"api-worker",
+ "session_id":"w0t1","title":"Relay - api-worker",
+ "message":"DANGEROUS_COMMAND: terraform apply -auto-approve","data":{}}
+```
+
+Kinds: `gate.escalated`, `arm.changed`, `arm.refused`, `audit.failed`,
+`session.stale`, `escalation.received`, `task.done`, `extreme.exhausted`.
+
+Relay does not run hooks. It never executes anything from this seam - a session
+relay supervises can write files, and relay must not run code `lib/danger.sh`
+never saw. You get the same power from a process **you** started:
+
+```sh
+tail -f ~/.relay/events.jsonl | while read -r ev; do
+  case "$ev" in *gate.escalated*) say "relay needs you" ;; esac
+done
+```
+
+To get a ping off the desk without running anything, set a `post_url`:
+
+```ini
+[events]
+file           = true
+post_url       = https://ntfy.sh/your-topic
+post_body      = minimal   ; minimal | full
+retention_days = 7
+```
+
+A `post_url` must start with `http://` or `https://` and **cannot contain a
+`#`** - the config parser treats `#` as the start of an inline comment and
+strips the rest of the line. `relay doctor` shows the URL it actually parsed.
+
+`post_body = minimal` (the default) sends only `v`, `ts`, `kind` and `session`:
+you learn *which* session wants you, not what it wanted to run. `full` sends the
+whole envelope, including command text, to whatever host you configured - opt in
+knowingly. `post_url` is config-file-only; `relay doctor` shows whether one is
+set.
+
 ### Sounds and the settings editor
 
 Relay uses four distinct sounds so your ear can triage without looking, all set

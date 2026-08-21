@@ -156,6 +156,25 @@ def run():
                 and "restart" not in settings.render(
                     settings.change(c, "burn_window", +1), c, 0, 60))
 
+    # --- [events] in the settings overlay -----------------------------------
+    fields = [f for _g, f, _k, _s in settings.SETTINGS]
+    ok &= check("events_file is editable in the overlay",
+                "events_file" in fields)
+    ok &= check("events_post_body is editable in the overlay",
+                "events_post_body" in fields)
+    ok &= check("events_retention_days is editable in the overlay",
+                "events_retention_days" in fields)
+    ok &= check("events_post_url is deliberately NOT in the overlay "
+                "(settings.py has no string kind)",
+                "events_post_url" not in fields)
+
+    # every descriptor field must be a real Config field, or the editor's
+    # dataclasses.replace blows up at runtime
+    import dataclasses
+    cfg_fields = {f.name for f in dataclasses.fields(config.Config)}
+    ok &= check("every settings descriptor names a real Config field",
+                all(f in cfg_fields for f in fields))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

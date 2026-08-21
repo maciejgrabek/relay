@@ -1671,6 +1671,7 @@ def cmd_doctor(args) -> int:
               f"{swarm.fmt_age(time.time() - th['created_at']):>5} old")
 
     _doctor_notify()
+    _doctor_events(cfg)
     _doctor_statusbar(cfg)
     return 0
 
@@ -1692,6 +1693,34 @@ def _doctor_notify() -> None:
         print(f"    {no} terminal-notifier not installed - notifications show "
               f"'Script Editor' and click won't focus the tab")
         print("        -> brew install terminal-notifier")
+
+
+def _doctor_events(cfg) -> None:
+    """Report the outbound event seam. post_url is not editable in the settings
+    overlay, so this is where an operator finds out whether one is set - and
+    whether command text is leaving the machine."""
+    import events
+    ok = "\033[32m✓\033[0m"
+    no = "\033[31m✗\033[0m"
+    print("  events:")
+    if cfg.events_file:
+        n = 0
+        try:
+            with open(events.EVENTS_PATH) as f:
+                n = sum(1 for _ in f)
+        except OSError:
+            pass
+        print(f"    {ok} {events.EVENTS_PATH} ({n} lines, "
+              f"kept {cfg.events_retention_days:g} days)")
+    else:
+        print(f"    {no} file off - [events] file = false")
+    if cfg.events_post_url:
+        warn = ("  WARNING: full bodies carry command text off this machine"
+                if cfg.events_post_body == "full" else "")
+        print(f"    {ok} POST -> {cfg.events_post_url} "
+              f"({cfg.events_post_body}){warn}")
+    else:
+        print(f"    {no} no post_url - nothing leaves this machine")
 
 
 def cmd_recap(args) -> int:
