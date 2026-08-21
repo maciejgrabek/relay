@@ -1881,6 +1881,52 @@ def run():
                 "refused call", still_there is not None
                 and still_there["parked"] == 1)
 
+    # --- doctor's [events] block -------------------------------------------
+    import config as _config
+    import events as _events
+
+    def _events_block(cfg):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli._doctor_events(cfg)
+        return buf.getvalue()
+
+    # A post_url is a bearer secret: an ntfy topic or a webhook token is the
+    # whole credential, and doctor output is what operators paste into bug
+    # reports. Show enough to confirm WHERE it goes, never the path.
+    secret = "https://hooks.example.test/services/T00/B11/sUpErSeCrEtToKeN"
+    out_ev = _events_block(_config.Config(events_post_url=secret,
+                                          events_post_body="minimal"))
+    ok &= check("doctor does not print the post_url path",
+                "sUpErSeCrEtToKeN" not in out_ev and "B11" not in out_ev)
+    ok &= check("doctor still names the host it POSTs to",
+                "https://hooks.example.test" in out_ev)
+    ok &= check("doctor says the path is hidden", "…" in out_ev)
+    ok &= check("doctor still warns about full bodies",
+                "WARNING" in _events_block(
+                    _config.Config(events_post_url=secret,
+                                   events_post_body="full")))
+
+    # A corrupt byte in the event log must not crash the command whose whole
+    # job is to report on that file. UnicodeDecodeError is a ValueError, not
+    # an OSError, and cmd_doctor has no outer guard.
+    _bad = os.path.join(tempfile.mkdtemp(), "events.jsonl")
+    with open(_bad, "wb") as f:
+        f.write(b'{"kind": "task.done"}\n\xff\xfe not utf-8\n')
+    _real_path = _events.EVENTS_PATH
+    try:
+        _events.EVENTS_PATH = _bad
+        raised = None
+        try:
+            out_ev = _events_block(_config.Config(events_file=True))
+        except Exception as exc:      # noqa: BLE001 - the point of the test
+            raised = exc
+        ok &= check("doctor survives a corrupt event log", raised is None)
+        ok &= check("doctor still reports the corrupt log's path",
+                    raised is None and _bad in out_ev)
+    finally:
+        _events.EVENTS_PATH = _real_path
+
     conn.close()
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")

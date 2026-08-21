@@ -1695,6 +1695,22 @@ def _doctor_notify() -> None:
         print("        -> brew install terminal-notifier")
 
 
+def _host_only(url: str) -> str:
+    """scheme://host + an ellipsis for the rest. An ntfy topic or a webhook
+    token IS the credential - the path is the secret, not the host - and
+    doctor output is what operators paste into bug reports. The host is enough
+    to answer the question doctor is asked: where does this go, if anywhere."""
+    try:
+        rest = url.split("://", 1)
+        if len(rest) != 2:
+            return "…"
+        scheme, tail = rest
+        host = tail.split("/", 1)[0]
+        return f"{scheme}://{host}/…" if "/" in tail else f"{scheme}://{host}"
+    except Exception:
+        return "…"
+
+
 def _doctor_events(cfg) -> None:
     """Report the outbound event seam. post_url is not editable in the settings
     overlay, so this is where an operator finds out whether one is set - and
@@ -1706,9 +1722,13 @@ def _doctor_events(cfg) -> None:
     if cfg.events_file:
         n = 0
         try:
-            with open(events.EVENTS_PATH) as f:
+            # errors="replace" and a bare Exception on purpose: a corrupt byte
+            # raises UnicodeDecodeError (a ValueError, not an OSError), and
+            # cmd_doctor has no outer guard - doctor would traceback on the
+            # very file it exists to report on.
+            with open(events.EVENTS_PATH, errors="replace") as f:
                 n = sum(1 for _ in f)
-        except OSError:
+        except Exception:
             pass
         print(f"    {ok} {events.EVENTS_PATH} ({n} lines, "
               f"kept {cfg.events_retention_days:g} days)")
@@ -1717,7 +1737,7 @@ def _doctor_events(cfg) -> None:
     if cfg.events_post_url:
         warn = ("  WARNING: full bodies carry command text off this machine"
                 if cfg.events_post_body == "full" else "")
-        print(f"    {ok} POST -> {cfg.events_post_url} "
+        print(f"    {ok} POST -> {_host_only(cfg.events_post_url)} "
               f"({cfg.events_post_body}){warn}")
     else:
         print(f"    {no} no post_url - nothing leaves this machine")
