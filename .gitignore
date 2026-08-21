@@ -19,3 +19,4 @@ docs/superpowers/
 
 # graphify knowledge-graph output (local, regenerable)
 graphify-out/
+.superpowers/
