@@ -142,7 +142,8 @@ _TERMINAL_NOTIFIER = shutil.which("terminal-notifier")
 
 def notify_mac(title: str, message: str, sound: Optional[str],
                session_id: Optional[str] = None, *,
-               kind: str, session: str = "") -> None:
+               kind: str, session: str = "",
+               data: Optional[dict] = None) -> None:
     """Fire a macOS notification + optional sound, and record the event.
 
     `kind` is keyword-only and REQUIRED: a call site that forgets it is a
@@ -152,13 +153,17 @@ def notify_mac(title: str, message: str, sound: Optional[str],
     The emit comes first and can never raise (events.emit swallows everything
     and returns None), so notifying is unaffected by the state of the log.
 
+    `data` is the structured detail for this kind - the arm level, the task
+    count. It matters because post_body = minimal drops `message`, so anything
+    only the prose says is invisible to a POST reader.
+
     With terminal-notifier installed the notification shows as iTerm and, when a
     `session_id` is given, clicking it focuses that iTerm session (the tab the
     alert is about) via focus_session.sh; without a session_id the click just
     activates iTerm. When terminal-notifier is absent we fall back to a plain
     osascript notification (shows Script Editor, no click action)."""
     events.emit(kind, session=session, session_id=session_id or "",
-                title=title, message=message)
+                title=title, message=message, data=data)
     try:
         if _TERMINAL_NOTIFIER:
             cmd = [_TERMINAL_NOTIFIER,
@@ -845,7 +850,8 @@ class Watcher:
                         notify_mac(f"Relay - {d['name']}",
                                    f"armed {req} on spawn", self.alert_sound,
                                    session_id=sid,
-                                   kind="arm.changed", session=d['name'])
+                                   kind="arm.changed", session=d['name'],
+                                   data={"level": req})
                     else:
                         self._note(f"REFUSED arm escalation {d['name']} -> {req}")
                         notify_mac(f"Relay - {d['name']}",
@@ -1305,7 +1311,8 @@ class Watcher:
                     self._last_event = ("done", time.time())
                     notify_mac("Relay - done",
                                f"{len(new_done)} task(s) completed",
-                               self.done_sound, kind="task.done")
+                               self.done_sound, kind="task.done",
+                               data={"count": len(new_done)})
             self._done_seen = done_ids
             self._done_seen_init = True
         except Exception:

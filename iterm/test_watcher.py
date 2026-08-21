@@ -1598,6 +1598,23 @@ def notify_mac_kind_parity_tests():
     chk(f"every call site has a literal kind in VALID_KINDS (bad: {bad})",
         not bad)
 
+    # The kinds whose event is useless without a detail: post_body = minimal
+    # strips `message`, so arm.changed that cannot say WHICH level, and
+    # task.done that cannot say HOW MANY, are the extension point shipping
+    # empty. Source-level for the same reason as the kind check above.
+    with_data = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", None) != "notify_mac":
+            continue
+        kinds = [k.value.value for k in node.keywords
+                 if k.arg == "kind" and isinstance(k.value, ast.Constant)]
+        if any(k.arg == "data" for k in node.keywords):
+            with_data.update(kinds)
+    chk("arm.changed carries data=", "arm.changed" in with_data)
+    chk("task.done carries data=", "task.done" in with_data)
+
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
 
@@ -1648,6 +1665,28 @@ def notify_mac_tests():
             "-activate" in argv
             and argv[argv.index("-activate") + 1] == W.ITERM_BUNDLE_ID
             and "-execute" not in argv)
+
+        # --- data reaches events.emit unchanged -----------------------
+        # notify_mac is the only path to emit(), so a `data` that stops here
+        # is a `data` no reader ever sees.
+        emitted = []
+
+        class _FakeEvents:
+            @staticmethod
+            def emit(kind, **kw):
+                emitted.append((kind, kw))
+
+        real_events = W.events
+        try:
+            W.events = _FakeEvents
+            W.notify_mac("Relay - w1", "armed insane on spawn", None,
+                         session_id="ABC", kind="arm.changed", session="w1",
+                         data={"level": "insane"})
+        finally:
+            W.events = real_events
+        chk("data round-trips from notify_mac into events.emit",
+            emitted and emitted[0][0] == "arm.changed"
+            and emitted[0][1].get("data") == {"level": "insane"})
 
         # --- sound still fires afplay alongside the notification ---
         calls.clear()
