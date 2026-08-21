@@ -149,6 +149,32 @@ def run():
     check("valid configure sets post_body", events._post_body == "full")
     check("valid configure sets RETENTION_DAYS", events.RETENTION_DAYS == 14.0)
 
+    # --- configure() applies a Config's [events] fields ---------------------
+    os.environ["RELAY_EVENTS_LOG"] = os.path.join(tmp, "configured.jsonl")
+    importlib.reload(events)
+    import config
+    cfg = config.Config(events_file=True, events_post_url="",
+                        events_post_body="full", events_retention_days=2.0)
+    events.configure(file_enabled=cfg.events_file,
+                     post_url=cfg.events_post_url,
+                     post_body=cfg.events_post_body,
+                     retention_days=cfg.events_retention_days)
+    check("configure applied retention_days", events.RETENTION_DAYS == 2.0)
+    events.emit("task.done", session="cfg", now=NOW)
+    check("configure(file_enabled=True) still writes",
+          os.path.exists(events.EVENTS_PATH))
+    # 3 days old with a 2-day retention -> pruned
+    events.emit("task.done", session="stale", now=NOW - 3 * 86400)
+    check("prune honours the configured retention",
+          events.prune_old(now=NOW) == 1)
+
+    # a bogus retention_days must not blow up configure()
+    events.configure(retention_days="not a number")
+    check("bogus retention_days leaves the previous value",
+          events.RETENTION_DAYS == 2.0)
+    events.configure(file_enabled=True, post_url="", post_body="minimal",
+                     retention_days=7.0)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

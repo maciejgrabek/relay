@@ -30,6 +30,7 @@ import audit  # noqa: E402
 import burn as burnmod  # noqa: E402
 import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
+import events  # noqa: E402
 import power as powermod  # noqa: E402
 import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
@@ -1540,6 +1541,20 @@ class RelayApp(App):
             )
             self._running_cfg = self.watcher.cfg
             self._working_cfg = self.watcher.cfg
+            # Apply [events] once, here: this is the first moment the loaded
+            # config is in hand, and the seam is not live-reloadable in v1, so
+            # a config edit lands on the next relay start. Prune AFTER
+            # configuring, so the operator's retention_days is the one that
+            # applies rather than the module default.
+            try:
+                cfg = self.watcher.cfg
+                events.configure(file_enabled=cfg.events_file,
+                                 post_url=cfg.events_post_url,
+                                 post_body=cfg.events_post_body,
+                                 retention_days=cfg.events_retention_days)
+                events.prune_old()
+            except Exception:
+                pass
             # One poll loop reads every visible/armed session every 2s.
             await self.watcher.start(interval=2.0)
         except Exception as e:
