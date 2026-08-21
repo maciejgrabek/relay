@@ -69,9 +69,18 @@ def configure(*, file_enabled: bool = True, post_url: str = "",
     """Apply the [events] config once, at TUI start. Not live-reloadable in v1:
     a mid-run config edit takes effect on the next relay start."""
     global _file_enabled, _post_url, _post_body, RETENTION_DAYS
-    _file_enabled = bool(file_enabled)
-    _post_url = (post_url or "").strip()
-    _post_body = post_body if post_body in POST_BODIES else "minimal"
+    try:
+        _file_enabled = bool(file_enabled)
+    except Exception:
+        pass
+    try:
+        _post_url = str(post_url or "").strip()
+    except Exception:
+        pass
+    try:
+        _post_body = post_body if post_body in POST_BODIES else "minimal"
+    except Exception:
+        pass
     if retention_days is not None:
         try:
             RETENTION_DAYS = float(retention_days)

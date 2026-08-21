@@ -122,6 +122,33 @@ def run():
     check("file=false writes nothing", not os.path.exists(events.EVENTS_PATH))
     events.configure(file_enabled=True)
 
+    # --- configure never raises, even with bad input -------------------------
+    # configure(post_url=42): non-string truthy value should not raise
+    try:
+        events.configure(post_url=42)
+        reached_post_url_int = True
+    except Exception:
+        reached_post_url_int = False
+    check("configure(post_url=42) does not raise", reached_post_url_int)
+    check("configure(post_url=42) coerces to string", isinstance(events._post_url, str))
+
+    # configure(post_body=None): should not raise and should default to minimal
+    try:
+        events.configure(post_body=None)
+        reached_post_body_none = True
+    except Exception:
+        reached_post_body_none = False
+    check("configure(post_body=None) does not raise", reached_post_body_none)
+    check("configure(post_body=None) yields 'minimal'", events._post_body == "minimal")
+
+    # configure with valid inputs should still apply all fields correctly
+    events.configure(file_enabled=False, post_url="http://example.com",
+                     post_body="full", retention_days=14.0)
+    check("valid configure sets file_enabled", events._file_enabled is False)
+    check("valid configure sets post_url", events._post_url == "http://example.com")
+    check("valid configure sets post_body", events._post_body == "full")
+    check("valid configure sets RETENTION_DAYS", events.RETENTION_DAYS == 14.0)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
