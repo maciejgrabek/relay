@@ -392,6 +392,31 @@ def run():
                 and back.events_post_body == src.events_post_body
                 and back.events_retention_days == src.events_retention_days)
 
+    # a negative retention_days clamps to 0.0 rather than being stored
+    # negative - a negative value would push prune_old()'s cutoff into the
+    # future and silently wipe the whole event log on the next prune.
+    with open(p, "w") as f:
+        f.write("[events]\nretention_days = -3\n")
+    cfg, warns = config.load(p)
+    ok &= check("a negative retention_days clamps to 0.0",
+                cfg.events_retention_days == 0.0)
+
+    # a non-numeric retention_days falls back to the default and warns,
+    # without raising - the one invalid-input path the other new [events]
+    # fields already cover and this one had not.
+    with open(p, "w") as f:
+        f.write("[events]\nretention_days = abc\n")
+    raised = None
+    try:
+        cfg, warns = config.load(p)
+    except Exception as exc:          # noqa: BLE001 - the point of the test
+        raised = exc
+    ok &= check("a non-numeric retention_days does not raise", raised is None)
+    ok &= check("a non-numeric retention_days falls back to the default",
+                raised is None and cfg.events_retention_days == 7.0)
+    ok &= check("a non-numeric retention_days warns",
+                raised is None and any("retention_days" in w for w in warns))
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

@@ -237,8 +237,13 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
                      f"{'/'.join(POST_BODIES)} - using 'minimal'")
         ev_body = "minimal"
 
-    ev_days = _get_float(cp, "events", "retention_days",
-                         d.events_retention_days, warns)
+    # Clamped at 0 rather than warned about, matching power.release_after and
+    # burn.window above: a negative duration has exactly one sane reading
+    # ("keep nothing"), and a negative RETENTION_DAYS reaching prune_old()'s
+    # cutoff = now - RETENTION_DAYS * 86400 pushes the cutoff into the future,
+    # wiping the entire event log on the next prune. Not cosmetic.
+    ev_days = max(0.0, _get_float(cp, "events", "retention_days",
+                                  d.events_retention_days, warns))
 
     theme = cp.get("theme", "name", fallback=d.theme).strip().lower()
     if theme not in THEME_NAMES:
