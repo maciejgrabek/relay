@@ -393,8 +393,9 @@ def run():
                 and back.events_retention_days == src.events_retention_days)
 
     # a negative retention_days clamps to 0.0 rather than being stored
-    # negative - a negative value would push prune_old()'s cutoff into the
-    # future and silently wipe the whole event log on the next prune.
+    # negative: 0 and below both read as "never prune" (prune_old() returns
+    # early on RETENTION_DAYS <= 0), so the clamp just normalises the value
+    # the rest of relay - doctor, the overlay - has to display.
     with open(p, "w") as f:
         f.write("[events]\nretention_days = -3\n")
     cfg, warns = config.load(p)

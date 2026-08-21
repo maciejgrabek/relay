@@ -164,6 +164,19 @@ def run():
                 "events_post_body" in fields)
     ok &= check("events_retention_days is editable in the overlay",
                 "events_retention_days" in fields)
+    # The overlay must not be able to reach a degenerate 0. It is a legal
+    # config value meaning "never prune", but three left-presses from the
+    # default 7 is not how an operator should discover it - same reasoning
+    # that gives stale_minutes a minimum of 1.0.
+    _ev = [d for d in settings.SETTINGS if d[1] == "events_retention_days"][0]
+    ok &= check("events_retention_days cannot be stepped below 1 day",
+                _ev[3][0] == 1.0)
+    _lowest = c
+    for _ in range(20):
+        _lowest = settings.change(_lowest, "events_retention_days", -1)
+    ok &= check("stepping events_retention_days left bottoms out at 1 day",
+                _lowest.events_retention_days == 1.0)
+
     ok &= check("events_post_url is deliberately NOT in the overlay "
                 "(settings.py has no string kind)",
                 "events_post_url" not in fields)

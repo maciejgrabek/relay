@@ -168,6 +168,36 @@ def run():
     check("prune honours the configured retention",
           events.prune_old(now=NOW) == 1)
 
+    # --- retention_days = 0 means NEVER PRUNE, not "wipe everything" -------
+    # Every sibling duration in relay reads 0 as off (power.release_after = 0
+    # is "never release", burn.window = 0 is off). Without the guard in
+    # prune_old(), 0 gives cutoff == now and the arithmetic drops the entire
+    # log, including rows written seconds ago.
+    os.environ["RELAY_EVENTS_LOG"] = os.path.join(tmp, "never-prune.jsonl")
+    importlib.reload(events)
+    events.configure(file_enabled=True, post_url="", post_body="minimal",
+                     retention_days=0.0)
+    events.emit("task.done", session="ancient", now=NOW - 900 * 86400)
+    events.emit("task.done", session="fresh", now=NOW)
+    check("retention_days = 0 prunes nothing", events.prune_old(now=NOW) == 0)
+    survivors = [json.loads(l).get("session")
+                 for l in open(events.EVENTS_PATH).read().strip().splitlines()]
+    check("retention_days = 0 keeps the ancient entry",
+          "ancient" in survivors)
+    check("retention_days = 0 keeps the fresh entry", "fresh" in survivors)
+
+    # a negative value is the same story - config.py clamps it to 0, but the
+    # module must be safe on its own for a direct RELAY_EVENTS_RETENTION_DAYS.
+    events.configure(retention_days=-3.0)
+    check("a negative retention_days prunes nothing too",
+          events.prune_old(now=NOW) == 0
+          and len(open(events.EVENTS_PATH).read().strip().splitlines()) == 2)
+
+    os.environ["RELAY_EVENTS_LOG"] = os.path.join(tmp, "configured.jsonl")
+    importlib.reload(events)
+    events.configure(file_enabled=True, post_url="", post_body="minimal",
+                     retention_days=2.0)
+
     # a bogus retention_days must not blow up configure()
     events.configure(retention_days="not a number")
     check("bogus retention_days leaves the previous value",

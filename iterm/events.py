@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover
 
 EVENTS_PATH = os.path.expanduser(
     os.environ.get("RELAY_EVENTS_LOG", "~/.relay/events.jsonl"))
+# 0 (or less) = never prune - see prune_old().
 RETENTION_DAYS = float(os.environ.get("RELAY_EVENTS_RETENTION_DAYS", "7"))
 
 ENVELOPE_VERSION = 1
@@ -193,7 +194,15 @@ def prune_old(now: Optional[float] = None) -> int:
     """Drop entries older than RETENTION_DAYS. Returns how many were removed.
     Unparseable / non-JSON lines are KEPT (corruption is evidence). Entries
     missing a numeric ts are kept (we can't prove they're old). Atomic replace
-    under the lock; never raises."""
+    under the lock; never raises.
+
+    RETENTION_DAYS <= 0 means NEVER PRUNE, matching every other duration in
+    relay (power.release_after = 0 is "never release", burn.window = 0 is off).
+    Without this guard the arithmetic reads 0 as "keep nothing": cutoff lands
+    on now, every ts fails ts >= cutoff, and the whole log goes - including
+    rows written seconds earlier."""
+    if RETENTION_DAYS <= 0:
+        return 0
     if not os.path.exists(EVENTS_PATH):
         return 0
     cutoff = (now if now is not None else time.time()) - RETENTION_DAYS * 86400

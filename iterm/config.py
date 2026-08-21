@@ -238,10 +238,13 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         ev_body = "minimal"
 
     # Clamped at 0 rather than warned about, matching power.release_after and
-    # burn.window above: a negative duration has exactly one sane reading
-    # ("keep nothing"), and a negative RETENTION_DAYS reaching prune_old()'s
-    # cutoff = now - RETENTION_DAYS * 86400 pushes the cutoff into the future,
-    # wiping the entire event log on the next prune. Not cosmetic.
+    # burn.window above: a negative duration has exactly one sane reading, and
+    # here that reading is "off" - 0 and below mean NEVER PRUNE, which is what
+    # prune_old() enforces with its own RETENTION_DAYS <= 0 early return. The
+    # clamp alone would not save the log (0 puts prune_old()'s cutoff on now
+    # and drops every entry); the guard in prune_old() is what does. This just
+    # normalises a negative to the same "off" the rest of relay reads it as.
+    # settings.py keeps 0 out of the overlay's reach with a minimum of 1.0.
     ev_days = max(0.0, _get_float(cp, "events", "retention_days",
                                   d.events_retention_days, warns))
 

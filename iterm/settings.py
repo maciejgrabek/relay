@@ -46,7 +46,10 @@ SETTINGS = [
     # field. It stays config-file-only; `relay doctor` reports whether it is set.
     ("EVENTS", "events_file", "toggle", None),
     ("EVENTS", "events_post_body", "enum", _config.POST_BODIES),
-    ("EVENTS", "events_retention_days", "number", (0.0, 1.0)),
+    # min 1.0, like stale_minutes: 0 is a legal config value (never prune),
+    # but it must not be three left-presses from the default in an overlay
+    # that saves immediately.
+    ("EVENTS", "events_retention_days", "number", (1.0, 1.0)),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
