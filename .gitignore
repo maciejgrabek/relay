@@ -14,8 +14,13 @@ __pycache__/
 widget/src-tauri/target/
 widget/src-tauri/gen/
 
-# Internal design/planning docs - kept locally, not published
-docs/superpowers/
+# Internal design/planning docs - kept locally, never published.
+# The whole directory: specs, plans and drafts are working notes for this
+# repo's own development, not documentation for anyone installing relay.
+# NOTE: `git clean -fdx` deletes ignored files - docs/ included. Recovery is
+# ~/Work/relay-notes/relay-pre-docs-purge-2026-08-22.bundle, which still
+# carries the full pre-purge history of this directory.
+docs/
 
 # graphify knowledge-graph output (local, regenerable)
 graphify-out/
