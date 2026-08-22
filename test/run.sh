@@ -15,6 +15,9 @@ export RELAY_CONFIG="$(mktemp -d)/relay-test-config"
 # ~/.relay/events.jsonl and ~/.relay/audit.jsonl.
 export RELAY_EVENTS_LOG="$(mktemp -d)/relay-test-events.jsonl"
 export RELAY_AUDIT_LOG="$(mktemp -d)/relay-test-audit.jsonl"
+# The boot screen intentionally eats the first keypress ("any key skips"), so
+# any suite driving a Textual pilot must run with it off.
+export RELAY_NO_BOOT=1
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"

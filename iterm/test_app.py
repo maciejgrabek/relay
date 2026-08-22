@@ -23,6 +23,12 @@ os.environ["RELAY_CONFIG"] = os.path.join(
 os.environ["RELAY_AUDIT_LOG"] = os.path.join(
     tempfile.mkdtemp(prefix="relay-test-audit-"), "audit.jsonl")
 
+# The boot screen swallows the first keypress on purpose - that is how "any
+# key skips" works for a real operator. A pilot that presses keys would spend
+# its first press dismissing it, so every suite here runs with it off. Boot
+# rendering is covered frame-by-frame in test_boot.py instead.
+os.environ["RELAY_NO_BOOT"] = "1"
+
 # Same idea again for RELAY_DB - db.py reads it lazily (at call time, not
 # import time - see db.py's _db_path), but swarmdb.connect() is reached from
 # inside run_test() blocks throughout this file, well before the assignment

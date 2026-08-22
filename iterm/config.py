@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import configparser
 import os
+
+import boot as _boot
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -49,6 +51,11 @@ TITLE_STYLES = ("off", "glyphs", "words", "hybrid")
 SPAWN_ARM_MODES = ("off", "safe", "wild", "insane")
 DANGER_PRESETS = ("default", "paranoid")
 THEME_NAMES = ("phosphor", "amber", "ice")
+# Imported, never re-declared: boot.py owns the registry of boot styles, so a
+# style added there is instantly valid here and in the settings overlay with no
+# edit to this file. boot.py deliberately has no heavy imports, which is what
+# makes depending on it from config free.
+BOOT_STYLES = _boot.BOOT_STYLES
 # The creature that watches the fleet. Every skin is the SAME state machine
 # (moods, tick, colors) - only the body drawn around the eyes changes. `crt`
 # is the default and stays relay's brand mark.
@@ -102,6 +109,12 @@ class Config:
     # a badge and nothing else, and a diagnostic nobody enables is a diagnostic
     # that is off on the night it was needed.
     burn_window: float = 15.0
+    # The boot screen. ON by default: it fills startup latency that is going
+    # to pass anyway, and every line it shows is a subsystem reporting real
+    # state, so a stalled boot names the subsystem that stalled. Turn it off
+    # with [boot] enabled = false, or 'b' in the settings overlay.
+    boot_enabled: bool = True
+    boot_style: str = _boot.DEFAULT_STYLE
     # The outbound event seam. `file` is on by default because a local
     # append-only log costs nothing and is the durable record; `post_url` is
     # off by default because sending anywhere is a decision only the operator
@@ -250,6 +263,20 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
     ev_days = max(0.0, _get_float(cp, "events", "retention_days",
                                   d.events_retention_days, warns))
 
+    try:
+        boot_on = cp.getboolean("boot", "enabled", fallback=d.boot_enabled)
+    except ValueError:
+        warns.append("config: [boot] enabled must be true/false - using true")
+        boot_on = True
+
+    boot_style = cp.get("boot", "style",
+                        fallback=d.boot_style).strip().lower()
+    if boot_style not in BOOT_STYLES:
+        warns.append(f"config: [boot] style = {boot_style!r} is not one of "
+                     f"{'/'.join(BOOT_STYLES)} - using "
+                     f"{_boot.DEFAULT_STYLE!r}")
+        boot_style = _boot.DEFAULT_STYLE
+
     theme = cp.get("theme", "name", fallback=d.theme).strip().lower()
     if theme not in THEME_NAMES:
         warns.append(f"config: [theme] name = {theme!r} is not one of "
@@ -335,6 +362,8 @@ def load(path: Optional[str] = None) -> Tuple[Config, List[str]]:
         timers_reconfirm_days=t_recon,
         power_release_after=release_after,
         burn_window=burn_window,
+        boot_enabled=boot_on,
+        boot_style=boot_style,
         events_file=ev_file,
         events_post_url=ev_url,
         events_post_body=ev_body,
@@ -382,6 +411,9 @@ def dump(cfg: Config) -> str:
         f"release_after = {cfg.power_release_after:g}\n"
         "\n[burn]\n"
         f"window = {cfg.burn_window:g}\n"
+        "\n[boot]\n"
+        f"enabled = {'true' if cfg.boot_enabled else 'false'}\n"
+        f"style   = {cfg.boot_style}\n"
         "\n[events]\n"
         f"file           = {'true' if cfg.events_file else 'false'}\n"
         f"post_url       = {cfg.events_post_url}\n"

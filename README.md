@@ -1340,6 +1340,54 @@ Deliberately not configurable here: bootstrap paths (`RELAY_DB`,
 rules (own home), and the title glyph/word vocabulary (it doubles as the
 strip-parser - a configurable vocabulary would double the bug surface).
 
+### Boot screen
+
+Relay's startup is not instant - the iTerm2 handshake and the first sweep of
+every session cost real time - so it fills that time with a full-screen POST
+instead of a blank panel:
+
+```
+                    ██████╗ ███████╗██╗      █████╗ ██╗   ██╗
+                    ██╔══██╗██╔════╝██║     ██╔══██╗╚██╗ ██╔╝
+                    ██████╔╝█████╗  ██║     ███████║ ╚████╔╝
+                    ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝
+                    ██║  ██║███████╗███████╗██║  ██║   ██║
+                    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝
+                         S E S S I O N   C O N T R O L
+
+     ──────────────────────────────────────────────────────────
+       Memory Test       : 262144K  OK
+       Config            : phosphor · gate=default
+       Safety Classifier : lib/danger.sh · preset=default
+       Audit Log         : 1204 entries · pruned 3
+       Event Seam        : ~/.relay/events.jsonl · 24 rows
+       iTerm2 Link       : established · 0.42s
+       Sessions          : 4 found · 2 armed
+
+                          WELCOME, OPERATOR █
+```
+
+Every line except the memory test is a subsystem reporting its real state, so
+a boot that stalls tells you **which** part stalled. It never outlives the
+work: the screen dismisses as soon as the last line reports, and **any key
+skips it**.
+
+```ini
+[boot]
+enabled = true    ; false to go straight to the panel
+style   = bios    ; see boot.BOOT_STYLES
+```
+
+Both are editable in the settings overlay (`,`). `RELAY_NO_BOOT=1` disables it
+for a single run without touching config - which is how the test suite runs,
+since a pilot pressing keys would spend its first press dismissing the screen.
+
+Boot styles are a plug point: `iterm/boot.py` maps a name to a renderer, and
+adding one is an entry in that dict plus a function in that file. Nothing in
+`app.py`, `config.py` or `settings.py` learns the new name. The module is pure
+- no Textual, no iTerm2, no clock, palette passed in - so frames are tested
+directly at any terminal size, and deleting it leaves relay starting normally.
+
 ### Events
 
 Relay appends everything it would notify you about to `~/.relay/events.jsonl`,

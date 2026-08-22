@@ -30,6 +30,10 @@ from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 import audit  # noqa: E402
 import burn as burnmod  # noqa: E402
 import chrome  # noqa: E402
+try:                                   # the boot screen is a plugin: relay
+    import boot as bootmod  # noqa: E402   # must start without it
+except Exception:                      # pragma: no cover - defensive
+    bootmod = None
 import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
 import events  # noqa: E402
@@ -91,6 +95,35 @@ TH = _active_theme()
 BRIGHT, ACCENT, DIM, DIMMER = (TH["bright"], TH["accent"], TH["dim"],
                                TH["dimmer"])
 WARN, DANGER, CYAN, EMBER = TH["warn"], TH["danger"], TH["cyan"], TH["ember"]
+
+# The active palette as a plain name -> hex dict. boot.py takes this rather
+# than importing app.py, which is what lets it stay a dependency-free plugin
+# and still strike in amber or ice without knowing those themes exist.
+PALETTE = {"bright": BRIGHT, "accent": ACCENT, "dim": DIM, "dimmer": DIMMER,
+           "warn": WARN, "danger": DANGER, "cyan": CYAN,
+           "hot": TH.get("hot", BRIGHT)}
+
+
+def _count_lines(path: str) -> int:
+    """Line count for a log the boot screen reports on. Never raises: a
+    missing or unreadable log reports 0, it does not stop the boot."""
+    try:
+        with open(path, errors="replace") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def _events_line(cfg) -> str:
+    """What the boot screen says about the event seam: where it writes, or
+    that it is switched off."""
+    if not getattr(cfg, "events_file", True):
+        return "file off"
+    try:
+        import events as _ev
+        return f"{_ev.EVENTS_PATH} · {_count_lines(_ev.EVENTS_PATH)} rows"
+    except Exception:
+        return "unavailable"
 
 
 def _theme_css(tpl: str) -> str:
@@ -1359,6 +1392,13 @@ class RelayApp(App):
         background: $bg_deep; color: $accent;
     }
     #keybar { height: 2; background: $bg_head; padding: 0 2; }
+    /* The boot screen covers the whole panel while relay wakes up. It is a
+       sibling that hides every other region rather than a floating layer, so
+       it follows the same show/hide grammar as the other overlays. */
+    #bootview {
+        display: none; height: 1fr;
+        background: $bg_deep; color: $accent;
+    }
     """)
     BINDINGS = [
         Binding("up,k", "cursor_up", "Up", show=False),
@@ -1432,6 +1472,10 @@ class RelayApp(App):
         self._parked_visible = False
         self._parked_cursor = 0
         self._parked_scope = "dir"     # "dir" | "all"
+        # Boot screen state, or None when it is off / already dismissed.
+        # Holds its own steps, tick and timer so nothing else in the app has
+        # to know the boot screen exists.
+        self._boot = None
         # ids in on-screen order, set by the last _render_parked - the source
         # of truth for "which item is highlighted" for d/ENTER. The overlay
         # can sit open arbitrarily long while another session claims or drops
@@ -1517,16 +1561,143 @@ class RelayApp(App):
             yield Static("", id="settingsview")
             yield Static("", id="timersview")
             yield Static("", id="parkedview")
+            yield Static("", id="bootview")
             yield Log(id="log", max_lines=200)
         yield Static(KEYBAR, id="keybar")
         yield Static("", id="modal", markup=False)
 
-    def on_mount(self) -> None:
-        # Prune audit entries older than the retention window, once, at launch.
+    # --- boot screen ------------------------------------------------------
+    # Everything the boot screen needs lives in these five methods and
+    # self._boot. Deleting iterm/boot.py, or [boot] enabled = false, leaves
+    # every one of them a no-op and relay starts exactly as it did before.
+
+    def _boot_start(self, pruned: int) -> None:
+        """Show the boot screen, if it is enabled and available. Reads config
+        directly: the watcher does not exist yet, same as the preview pane and
+        the theme do at this point in startup."""
+        if bootmod is None or os.environ.get("RELAY_NO_BOOT"):
+            return
         try:
-            audit.prune_old()
+            cfg = cfgmod.load()[0]
+            if not cfg.boot_enabled:
+                return
+            steps = [
+                bootmod.Step("Memory Test"),
+                bootmod.Step("Config", f"{cfg.theme} · gate={cfg.danger_preset}",
+                             "bright"),
+                bootmod.Step("Safety Classifier",
+                             f"lib/danger.sh · preset={cfg.danger_preset}"),
+                bootmod.Step("Audit Log",
+                             f"{_count_lines(audit.AUDIT_PATH)} entries · "
+                             f"pruned {pruned}"),
+                bootmod.Step("Event Seam", _events_line(cfg)),
+                bootmod.Step("iTerm2 Link"),      # filled by _connect
+                bootmod.Step("Sessions"),         # filled after the first sweep
+            ]
+            self._boot = {"steps": steps, "tick": 0, "mem": 0,
+                          "style": cfg.boot_style, "done_at": None,
+                          "timer": None}
+            for wid in ("#banner", "#subtitle", "#reactor", "#middle",
+                        "#log", "#keybar"):
+                try:
+                    self.query_one(wid).styles.display = "none"
+                except Exception:
+                    pass
+            self.query_one("#bootview").styles.display = "block"
+            self._boot["timer"] = self.set_interval(0.06, self._boot_tick)
+            self._boot_tick()
+        except Exception:
+            self._boot = None
+
+    def _boot_tick(self) -> None:
+        """One frame. The memory count is the only thing this advances on its
+        own - every other line waits for its subsystem to actually report."""
+        b = self._boot
+        if not b:
+            return
+        try:
+            b["tick"] += 1
+            mem = b["steps"][0]
+            if not mem.done:
+                b["mem"] = min(262144, b["mem"] + 26215)
+                mem.value = (f"{b['mem']}K" if b["mem"] < 262144
+                             else "262144K  OK")
+                if b["mem"] < 262144:
+                    mem.value = f"{b['mem']}K"
+                    mem.color = "bright"
+                else:
+                    mem.color = "accent"
+            size = self.size
+            self.query_one("#bootview", Static).update(
+                bootmod.render(b["steps"], tick=b["tick"],
+                               cols=size.width, rows=size.height,
+                               pal=PALETTE, style=b["style"]))
+            if bootmod.finished(b["steps"]):
+                now = time.time()
+                if b["done_at"] is None:
+                    b["done_at"] = now
+                elif now - b["done_at"] >= 0.75:   # let the welcome be read
+                    self._boot_finish()
+        except Exception:
+            self._boot_finish()
+
+    def _boot_report(self, label: str, value: str, color: str = "accent") -> None:
+        """A subsystem reporting in. Silently ignored when the boot screen is
+        off or already gone, so callers never guard."""
+        b = self._boot
+        if not b:
+            return
+        for step in b["steps"]:
+            if step.label == label:
+                step.value = value
+                step.color = color
+                break
+
+    def _boot_finish(self) -> None:
+        """Dismiss and hand the terminal to the panel. Idempotent."""
+        b, self._boot = self._boot, None
+        if not b:
+            return
+        try:
+            if b["timer"] is not None:
+                b["timer"].stop()
         except Exception:
             pass
+        for wid in ("#banner", "#subtitle", "#reactor", "#middle",
+                    "#log", "#keybar"):
+            try:
+                self.query_one(wid).styles.display = "block"
+            except Exception:
+                pass
+        try:
+            self.query_one("#bootview").styles.display = "none"
+        except Exception:
+            pass
+        try:
+            self.query_one(DataTable).focus()
+        except Exception:
+            pass
+
+    def on_key(self, event) -> None:
+        """Any key skips the boot screen. Inert once it is gone, so normal key
+        handling is untouched for the whole rest of the session."""
+        if self._boot is not None:
+            self._boot_finish()
+            try:
+                event.stop()
+            except Exception:
+                pass
+
+    def on_mount(self) -> None:
+        # Prune audit entries older than the retention window, once, at launch.
+        # The count is kept: the boot screen reports it, and "pruned 3" is a
+        # more honest line than "ok".
+        _pruned = 0
+        try:
+            _pruned = audit.prune_old()
+        except Exception:
+            pass
+        self._boot_start(_pruned)
         try:
             _mc = swarmdb.connect()
             _retention = float(
@@ -1602,6 +1773,7 @@ class RelayApp(App):
         # async_create() is designed to run inside an existing event loop
         # (the iTerm2 docs' apython/REPL case) - which is what Textual gives us.
         try:
+            _t0 = time.time()
             connection = await iterm2.Connection.async_create()
             self._connection = connection
             self.watcher = Watcher(
@@ -1610,6 +1782,8 @@ class RelayApp(App):
                 dry_run=self.dry_run,
                 own_sid=self._own_sid,
             )
+            self._boot_report("iTerm2 Link",
+                              f"established · {time.time() - _t0:.2f}s")
             self._running_cfg = self.watcher.cfg
             self._working_cfg = self.watcher.cfg
             # Apply [events] once, here: this is the first moment the loaded
@@ -1632,7 +1806,16 @@ class RelayApp(App):
                 pass
             # One poll loop reads every visible/armed session every 2s.
             await self.watcher.start(interval=2.0)
+            n = len(self.watcher.sessions or {})
+            armed = sum(1 for i in (self.watcher.sessions or {}).values()
+                        if getattr(i, "mode", "off") != "off")
+            self._boot_report("Sessions", f"{n} found · {armed} armed",
+                              "bright")
         except Exception as e:
+            # The boot screen must never outlive a failure: say which step
+            # broke, then let it dismiss instead of spinning forever.
+            self._boot_report("iTerm2 Link", f"FAILED · {e}", "danger")
+            self._boot_report("Sessions", "-", "dim")
             self.query_one(Log).write_line(f"connection error: {e}")
 
     def _safe_refresh(self) -> None:

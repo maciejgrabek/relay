@@ -51,6 +51,11 @@ SETTINGS = [
     # but it must not be three left-presses from the default in an overlay
     # that saves immediately.
     ("EVENTS", "events_retention_days", "number", (1.0, 1.0)),
+    # The boot screen. `style` is an enum over boot.BOOT_STYLES rather than a
+    # literal tuple, so registering a second style in boot.py makes it
+    # selectable here with no edit to this file.
+    ("BOOT", "boot_enabled", "toggle", None),
+    ("BOOT", "boot_style", "enum", _config.BOOT_STYLES),
 ]
 
 # _LIVE: applied to the running Watcher without a restart. _APP_LIVE: applied to
