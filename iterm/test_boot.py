@@ -38,13 +38,9 @@ def run():
         ok = ok and cond
 
     def steps(n_done, total=3):
-        out = []
-        for i in range(total):
-            s = boot.Step(f"Subsystem {i}")
-            if i < n_done:
-                s.value = f"value {i}"
-            out.append(s)
-        return out
+        return [boot.step(f"Subsystem {i}",
+                          f"value {i}" if i < n_done else None)
+                for i in range(total)]
 
     # --- the strike is clock-driven and monotonic --------------------------
     r0, c0 = boot.strike_state(0)
@@ -88,8 +84,31 @@ def run():
           boot.finished(steps(3)) and not boot.finished(steps(2)))
     check("finished() is False with no steps at all", not boot.finished([]))
 
+    # --- progress() shows without completing; report() completes -----------
+    # The bug this pins: deriving `done` from `value` froze the memory counter
+    # on its first frame, because the first digits written looked like a
+    # finished result and nothing ever incremented again.
+    counting = boot.step("Memory Test")
+    counting.progress("26215K")
+    check("progress() puts a value on screen", counting.value == "26215K")
+    check("progress() does NOT complete the step", not counting.done)
+    check("a counting step blocks the welcome", not boot.finished([counting]))
+    f_mid = plain(boot.render([counting], tick=5, cols=100, rows=40, pal=PAL))
+    check("a counting step renders its count, not a spinner",
+          "26215K" in f_mid and not any(g in f_mid for g in boot.SPIN))
+    counting.progress("52430K")
+    check("progress() can be called again", counting.value == "52430K")
+    counting.report("262144K  OK")
+    check("report() completes the step",
+          counting.done and counting.value == "262144K  OK")
+    check("a reported step releases the welcome", boot.finished([counting]))
+
+    # a step built with a value is already done; built without one is not
+    check("step() with a value starts done", boot.step("X", "v").done)
+    check("step() without a value starts pending", not boot.step("X").done)
+
     # --- markup in a value must not become a tag ---------------------------
-    s = [boot.Step("Command", "rm [dangerous] /tmp", "warn")]
+    s = [boot.step("Command", "rm [dangerous] /tmp", "warn")]
     raw = boot.render(s, tick=20, cols=100, rows=40, pal=PAL)
     check("a '[' in a value is escaped, not opened as markup",
           r"\[dangerous]" in raw)

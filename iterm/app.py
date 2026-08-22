@@ -99,6 +99,11 @@ WARN, DANGER, CYAN, EMBER = TH["warn"], TH["danger"], TH["cyan"], TH["ember"]
 # The active palette as a plain name -> hex dict. boot.py takes this rather
 # than importing app.py, which is what lets it stay a dependency-free plugin
 # and still strike in amber or ice without knowing those themes exist.
+# The boot screen gives every subsystem this long to report before it says so
+# and hands over. Generous: a cold iTerm2 handshake on a loaded machine is
+# genuinely slow, and a boot that gives up early is worse than one that waits.
+BOOT_DEADLINE = 8.0
+
 PALETTE = {"bright": BRIGHT, "accent": ACCENT, "dim": DIM, "dimmer": DIMMER,
            "warn": WARN, "danger": DANGER, "cyan": CYAN,
            "hot": TH.get("hot", BRIGHT)}
@@ -1582,21 +1587,22 @@ class RelayApp(App):
             if not cfg.boot_enabled:
                 return
             steps = [
-                bootmod.Step("Memory Test"),
-                bootmod.Step("Config", f"{cfg.theme} · gate={cfg.danger_preset}",
+                bootmod.step("Memory Test"),      # counts up, see _boot_tick
+                bootmod.step("Config",
+                             f"{cfg.theme} · gate={cfg.danger_preset}",
                              "bright"),
-                bootmod.Step("Safety Classifier",
+                bootmod.step("Safety Classifier",
                              f"lib/danger.sh · preset={cfg.danger_preset}"),
-                bootmod.Step("Audit Log",
+                bootmod.step("Audit Log",
                              f"{_count_lines(audit.AUDIT_PATH)} entries · "
                              f"pruned {pruned}"),
-                bootmod.Step("Event Seam", _events_line(cfg)),
-                bootmod.Step("iTerm2 Link"),      # filled by _connect
-                bootmod.Step("Sessions"),         # filled after the first sweep
+                bootmod.step("Event Seam", _events_line(cfg)),
+                bootmod.step("iTerm2 Link"),      # filled by _connect
+                bootmod.step("Sessions"),         # filled by the first sweep
             ]
             self._boot = {"steps": steps, "tick": 0, "mem": 0,
                           "style": cfg.boot_style, "done_at": None,
-                          "timer": None}
+                          "timer": None, "started": time.time()}
             for wid in ("#banner", "#subtitle", "#reactor", "#middle",
                         "#log", "#keybar"):
                 try:
@@ -1620,18 +1626,17 @@ class RelayApp(App):
             mem = b["steps"][0]
             if not mem.done:
                 b["mem"] = min(262144, b["mem"] + 26215)
-                mem.value = (f"{b['mem']}K" if b["mem"] < 262144
-                             else "262144K  OK")
                 if b["mem"] < 262144:
-                    mem.value = f"{b['mem']}K"
-                    mem.color = "bright"
+                    mem.progress(f"{b['mem']}K")
                 else:
-                    mem.color = "accent"
+                    mem.report("262144K  OK")
             size = self.size
             self.query_one("#bootview", Static).update(
                 bootmod.render(b["steps"], tick=b["tick"],
                                cols=size.width, rows=size.height,
                                pal=PALETTE, style=b["style"]))
+            if time.time() - b["started"] > BOOT_DEADLINE:
+                self._boot_deadline()
             if bootmod.finished(b["steps"]):
                 now = time.time()
                 if b["done_at"] is None:
@@ -1647,11 +1652,35 @@ class RelayApp(App):
         b = self._boot
         if not b:
             return
-        for step in b["steps"]:
-            if step.label == label:
-                step.value = value
-                step.color = color
+        for st in b["steps"]:
+            if st.label == label:
+                st.report(value, color)
                 break
+
+    def _boot_sessions(self) -> None:
+        """The first sweep landed - report what it found. Driven by the
+        watcher's own change callback because start() never returns."""
+        try:
+            sessions = (self.watcher.sessions if self.watcher else {}) or {}
+            armed = sum(1 for i in sessions.values()
+                        if getattr(i, "mode", "off") != "off")
+            self._boot_report("Sessions",
+                              f"{len(sessions)} found · {armed} armed",
+                              "bright")
+        except Exception:
+            self._boot_report("Sessions", "-", "dim")
+
+    def _boot_deadline(self) -> None:
+        """Nothing may leave the operator stuck on a splash. Past the
+        deadline, every silent subsystem is marked as such - naming what did
+        not answer is more useful than a screen that waits forever - and the
+        panel takes over."""
+        b = self._boot
+        if not b:
+            return
+        for st in b["steps"]:
+            if not st.done:
+                st.report("no answer", "warn")
 
     def _boot_finish(self) -> None:
         """Dismiss and hand the terminal to the panel. Idempotent."""
@@ -1805,12 +1834,11 @@ class RelayApp(App):
             except Exception:
                 pass
             # One poll loop reads every visible/armed session every 2s.
+            # NOTE: start() is the poll loop and does not return until relay
+            # quits, so NOTHING may be added after this line - it would never
+            # run. The boot screen's Sessions line is reported from
+            # _safe_refresh instead, on the watcher's first callback.
             await self.watcher.start(interval=2.0)
-            n = len(self.watcher.sessions or {})
-            armed = sum(1 for i in (self.watcher.sessions or {}).values()
-                        if getattr(i, "mode", "off") != "off")
-            self._boot_report("Sessions", f"{n} found · {armed} armed",
-                              "bright")
         except Exception as e:
             # The boot screen must never outlive a failure: say which step
             # broke, then let it dismiss instead of spinning forever.
@@ -1820,6 +1848,8 @@ class RelayApp(App):
 
     def _safe_refresh(self) -> None:
         # Watcher calls this from the same loop; schedule a repaint.
+        if self._boot is not None:
+            self._boot_sessions()
         try:
             self.call_later(self._refresh)
         except Exception:

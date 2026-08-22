@@ -56,16 +56,43 @@ WELCOME = "WELCOME, OPERATOR"
 
 @dataclass
 class Step:
-    """One POST line. `value` is None until the subsystem reports; `color` is a
-    palette key, so a step can report in `warn` without this module deciding
-    what warning looks like."""
+    """One POST line.
+
+    `value` and `done` are deliberately SEPARATE. Having something to display
+    is not the same as having finished: a memory count ticking upward shows a
+    new value every frame and is not done until it lands. Deriving one from
+    the other froze the counter on its first frame, because the first digit
+    written looked like a result.
+
+    `color` is a palette key, so a step can report in `warn` without this
+    module deciding what warning looks like.
+    """
     label: str
     value: Optional[str] = None
     color: str = "accent"
+    done: bool = False
 
-    @property
-    def done(self) -> bool:
-        return self.value is not None
+    def report(self, value: str, color: str = "accent") -> "Step":
+        """The subsystem has finished. The only way a step becomes done."""
+        self.value = value
+        self.color = color
+        self.done = True
+        return self
+
+    def progress(self, value: str, color: str = "bright") -> "Step":
+        """Something to show while still working - a count, a partial result.
+        Does NOT complete the step."""
+        self.value = value
+        self.color = color
+        return self
+
+
+def step(label: str, value: Optional[str] = None,
+         color: str = "accent") -> Step:
+    """Build a Step. Passing a value here means the subsystem had already
+    reported by the time the screen was built (config, the audit prune), so
+    such a step starts done."""
+    return Step(label, value, color, done=value is not None)
 
 
 def _esc(text: str) -> str:
@@ -123,10 +150,10 @@ def _bios(steps: List[Step], *, tick: int, cols: int, rows: int,
     body.append("")
 
     left = _center(label_w + 40, cols)
-    for step in steps:
-        label = _tag(pal, "dim", f"{step.label:<{label_w}} : ")
-        if step.done:
-            value = _tag(pal, step.color, _esc(step.value))
+    for st in steps:                      # not `step` - that is the factory
+        label = _tag(pal, "dim", f"{st.label:<{label_w}} : ")
+        if st.value is not None:
+            value = _tag(pal, st.color, _esc(st.value))
         else:
             value = _tag(pal, "cyan", SPIN[tick % len(SPIN)])
         body.append(left + label + value)
