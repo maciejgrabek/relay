@@ -5,6 +5,7 @@ import dataclasses
 import glob
 import os
 
+import chrome
 import config as _config
 
 SYSTEM_SOUNDS_DIR = "/System/Library/Sounds"
@@ -141,9 +142,12 @@ def render(working, running, cursor, width):
     group = None
     for i, (g, f, kind, spec) in enumerate(SETTINGS):
         if g != group:
+            # A settings group is a SECTION, not a group of rows that bind to
+            # each other, so it gets a titled rule rather than a rail - same
+            # edge grammar one weight down (chrome.py).
             group = g
             lines.append("")
-            lines.append(f"  {g}")
+            lines.append(chrome.rule(str(g).lower(), "", max(20, width - 2)))
         mark = ">" if i == cursor else " "
         val = _display(kind, getattr(working, f))
         if kind == "sound" and not working.sounds_enabled:

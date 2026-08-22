@@ -28,6 +28,7 @@ import swarm
 import statusbar as statusbar_mod
 import config as relay_config
 import titles
+import workspaces
 import timers as timers_mod
 import gates
 from gates import (classify, Action, Decision, reconstruct_lines,
@@ -84,6 +85,13 @@ class SessionInfo:
                                       # tab has - a registered one also gets this
                                       # persisted to sessions.workdir (see
                                       # set_watcher_workdir).
+    # The directory this tab was FIRST SEEN in, and the workspace key the
+    # panel groups by (workspaces.py). Deliberately NOT `workdir`: iTerm2's
+    # path var is live and follows every `cd` a session runs, so grouping on
+    # it would shuffle rows around whenever Claude walked into a subdirectory.
+    # Written once, on the first non-empty reading, and never again - the
+    # freeze is the feature, so nothing here may "helpfully" refresh it.
+    home_dir: str = ""
     state: str = "idle"              # idle | working | prompting | blocked | cleared
     last_command: str = ""
     last_seen: float = 0.0
@@ -567,6 +575,14 @@ class Watcher:
                         info.job = job
                         info.workdir = path
                         info.job_pid = jpid
+                    # Freeze the workspace key. The persisted column wins when
+                    # it exists: sessions.workdir is written once and only
+                    # into an empty column, so it is the oldest reading relay
+                    # has and survives a relay restart, where this in-memory
+                    # snapshot would otherwise re-freeze on wherever the
+                    # session had wandered to by then.
+                    info.home_dir = workspaces.freeze(
+                        info.home_dir, (reg or {}).get("workdir") or "", path)
                     # Stamped for both paths (new tab and known tab), and only
                     # ever written when this IS the selection: it is the time
                     # you were last here, so a deselected tab keeps its value

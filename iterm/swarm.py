@@ -12,6 +12,8 @@ import os
 import re
 from typing import List, Optional
 
+import chrome
+
 # Mirrors db.RESERVED_NAMES. Duplicated rather than imported so this module
 # stays dependency-free (it is unit-tested standalone, like gates.py).
 # db.register enforces the real rule; this only stops us ever PROPOSING a name
@@ -1407,10 +1409,10 @@ def render_prs(rows, width: int = 100) -> list:
     as "relay has no such feature" rather than "nothing here yet", and the
     empty state is where the operator most needs telling how one gets filled."""
     if not rows:
-        return ["PULL REQUESTS",
+        return [chrome.rule("pull requests", "", width),
                 "[dim]  (none - a session records one with: "
                 "relay pr claim owner/name#482)[/dim]"]
-    out = ["PULL REQUESTS"]
+    out = [chrome.rule("pull requests", f"{len(rows)} open", width)]
     flagged = [r for r in rows if r["flag"]]
     for r in flagged:
         out.append(_pr_line(r, width, mark="‼"))
@@ -1459,10 +1461,10 @@ def render_discussions(rows, width: int = 100) -> list:
     operator is DUPLICATED above rather than moved. Always renders, even empty
     - a section that vanishes reads as "relay has no such feature"."""
     if not rows:
-        return ["DISCUSSIONS",
+        return [chrome.rule("discussions", "", width),
                 "[dim]  (none - a session opens one with: "
                 "relay discuss <name> <name> \"<question>\")[/dim]"]
-    out = ["DISCUSSIONS"]
+    out = [chrome.rule("discussions", f"{len(rows)}", width)]
     flagged = [r for r in rows if r["flag"]]
     for r in flagged:
         out.append(_discussion_line(r, width, mark="‼"))
@@ -1525,18 +1527,24 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
         coord = next((s["name"] for s in p_sessions
                       if s["role"] == "coordinator"), "-")
         workers = sum(1 for s in p_sessions if s["role"] == "worker")
-        out.append(_esc(f"PROJECT {proj or '(none)'} · coordinator: {coord} · "
-                        f"{workers} workers"))
+        # A PROJECT is to the swarm view exactly what a workspace is to the
+        # control view, so it takes the same open rail: heavy bar on the left,
+        # light rules top and bottom, nothing on the right to line up.
+        out.append(chrome.rail_top(
+            f"project {proj or '(none)'}",
+            f"coordinator {coord} · {workers} worker"
+            f"{'' if workers == 1 else 's'}", width))
         for s in p_sessions:
             hb = (f"  ↻ {fmt_age(now - activity[s['name']])}"
                   if s["name"] in activity else "")
-            line = (f"  {s['name']:<16} {s['role']:<12} "
+            line = (f" {s['name']:<16} {s['role']:<12} "
                     f"{_clip(_get(s, 'status_text', '') or '-', width - 40)}"
                     f"{hb}")
             if s["name"] in stale:
-                out.append(f"[red]{_esc(line + ' ⧗')}[/red]")
+                out.append(chrome.rail_row(f"[red]{_esc(line + ' ⧗')}[/red]"))
             else:
-                out.append(_esc(line))
+                out.append(chrome.rail_row(_esc(line)))
+        out.append(chrome.rail_bottom(width))
         out.append("")
 
         # kanban: 4 columns of "#id title"
@@ -1567,6 +1575,10 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
         cols = {st: [_card(t) for t in p_tasks if t["state"] == st]
                 for st in _STATE_COLS}
         height = max([len(v) for v in cols.values()] + [1])
+        _done = sum(1 for t in p_tasks if t["state"] == "done")
+        out.append(chrome.rule(
+            "board", f"{len(p_tasks)} task{'' if len(p_tasks) == 1 else 's'}"
+            f" · {_done} done", width))
         out.append("   ".join(h.upper().ljust(colw)
                               for h in _STATE_COLS))
         out.append("   ".join("─" * colw for _ in _STATE_COLS))
@@ -1590,7 +1602,8 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     coords = {s["name"] for s in sessions if s["role"] == "coordinator"}
     inter = interaction_rows(messages, coordinators=coords, now=now)
     if inter:
-        out.append("INTERACTIONS                    sent recv  last        age")
+        out.append(chrome.rule("interactions", "sent recv · last · age",
+                               width))
         for r in inter:
             flag = "  ‼" if r["flag"] else ""
             pair = _clip(f"{r['a']} ⇄ {r['b']}", 28)
@@ -1607,7 +1620,7 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     out.extend(render_discussions(list(threads), width))
     out.append("")
 
-    out.append("MESSAGES")
+    out.append(chrome.rule("messages", f"last {min(8, len(messages))}", width))
     for m in messages[-8:]:
         q = "" if _get(m, "delivered_at") else "  [queued]"
         k = kind_of(m)

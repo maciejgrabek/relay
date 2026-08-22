@@ -460,7 +460,13 @@ def run():
         now=400.0, stale={"etl"}, activity={"bff": 388.0})
     ok &= check("render: fleet line on top", vs.splitlines()[0]
                 .startswith("FLEET"))
-    ok &= check("render: interactions section", "INTERACTIONS" in vs)
+    # The section headings are titled rules now (chrome.rule): a screen's own
+    # name stays upper case (PARKED / TIMERS / SWARM), a region inside it is
+    # lower case, so the two never read as the same kind of thing.
+    ok &= check("render: interactions section", "interactions" in vs)
+    ok &= check("render: interactions heading is a titled rule",
+                any(l.startswith("──") and "interactions" in l
+                    for l in vs.splitlines()))
     ok &= check("render: heartbeat age on roster", "12s" in vs)
     ok &= check("render: stale roster row marked", "⧗" in vs)
     ok &= check("render: escalation feed line colored",
@@ -612,16 +618,22 @@ def run():
                 text.count("acme/api#482") == 2)
     ok &= check("unflagged rows appear exactly once",
                 text.count("acme/api#480") == 1)
+    # The separator is the bare dash line INSIDE the pane - located by shape,
+    # not by "the first ─ in the text", which is now the titled rule the
+    # section opens with.
+    _lines = text.splitlines()
+    _sep = next(i for i, l in enumerate(_lines)
+                if set(l.strip()) == {"─"})
     ok &= check("the attention strip sits above the separator",
-                text.index("acme/api#482")
-                < text.index("─") < text.rindex("acme/api#482"))
+                any("acme/api#482" in l for l in _lines[:_sep])
+                and any("acme/api#482" in l for l in _lines[_sep + 1:]))
 
     # Empty renders like MESSAGES does - header plus a "(none)" line - so the
     # section never looks like a missing feature, and the empty state teaches
     # how it gets filled.
     empty = swarm.render_prs([], 100)
     ok &= check("render_prs still renders a header with no PRs",
-                empty[0] == "PULL REQUESTS")
+                "pull requests" in empty[0] and empty[0].startswith("── "))
     ok &= check("the empty pane says none and names the verb that fills it",
                 len(empty) == 2 and "(none" in empty[1]
                 and "relay pr claim" in empty[1])
@@ -631,12 +643,12 @@ def run():
                 in swarm.fleet_line(sess, [], prs=rows))
 
     full = swarm.render_swarm(sess, [], [], now, width=100, prs=prs)
-    ok &= check("render_swarm includes the PR pane", "PULL REQUESTS" in full)
+    ok &= check("render_swarm includes the PR pane", "pull requests" in full)
     noprs = swarm.render_swarm(sess, [], [], now, width=100)
     ok &= check("render_swarm shows the PR pane even with no prs argument",
-                "PULL REQUESTS" in noprs)
+                "pull requests" in noprs)
     ok &= check("that empty pane carries the (none) line, not stray rows",
-                "(none" in noprs.split("PULL REQUESTS")[1].split("MESSAGES")[0])
+                "(none" in noprs.split("pull requests")[1].split("messages")[0])
 
     kb = swarm.render_swarm(
         sess,
@@ -690,7 +702,8 @@ def run():
 
     empty = swarm.render_discussions([], 100)
     ok &= check("discussions pane renders when empty",
-                any("DISCUSSIONS" in ln for ln in empty))
+                any("discussions" in ln and ln.startswith("── ")
+                    for ln in empty))
     ok &= check("the empty pane teaches how to open one",
                 any("relay discuss" in ln for ln in empty))
 

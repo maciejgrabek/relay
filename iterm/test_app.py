@@ -276,7 +276,11 @@ async def go():
                                   last_screen=["x"])}
 
     chk("help text covers keys + arm levels",
-        "ARM LEVELS" in appmod.help_text() and "SPACE" in appmod.help_text())
+        "arm levels" in appmod.help_text() and "SPACE" in appmod.help_text())
+    chk("help names itself in its own border, not in a heading row",
+        _plain(appmod.help_text()).splitlines()[0].startswith("┌─"))
+    chk("no help row runs past its own frame",
+        _cells_wide(appmod.help_text(80)) == 84)
     ht = appmod.help_text()
     chk("help text covers pause", "pause" in ht.lower())
     chk("help text covers shadow", "shadow" in ht.lower() and "◌" in ht)
@@ -317,12 +321,15 @@ async def go():
         sh._refresh()
         await pilot.pause()
         pv = str(sh.query_one("#preview", appmod.Static).render())
-        chk("shadow pane header reads MODE:SHADOW, not MODE:MANUAL",
-            "MODE:SHADOW" in pv)
+        # The mode moved OFF the pane body and INTO the pane's border, where
+        # the panel already says which session this is (border_subtitle).
+        chk("shadow pane border reads SHADOW, not MANUAL",
+            "SHADOW" in str(sh.query_one("#preview", appmod.Static)
+                            .border_subtitle))
         chk("shadow pane suppresses the LOCKED/attn line",
             "LOCKED" not in pv and "AWAITING" not in pv and "STALE" not in pv)
         chk("shadow pane WHY line reads WOULD ESCALATE (not a real lockdown)",
-            "SHADOW" in pv and "WOULD ESCALATE" in pv)
+            "WOULD ESCALATE" in pv)
 
     # --- themes: complete palettes, resolved CSS ------------------------------
     keys = set(appmod.THEMES["phosphor"])
@@ -339,7 +346,7 @@ async def go():
              "command": "rm -rf /"}]
     av = appmod.audit_view_text(ents, "t0", 80)
     chk("audit view filters by session + marks verdicts",
-        "AUDIT // t0" in av and "grep -rn TODO" in av
+        "AUDIT ── t0" in av and "grep -rn TODO" in av
         and "rm -rf /" not in av and "✓" in av)
     chk("audit view empty state teaches",
         "no recorded decisions" in appmod.audit_view_text([], "t0", 80))
@@ -913,8 +920,11 @@ async def go():
           "key": ""}],
         now=1000.0, session_title="api", width=90, cursor=99)  # nothing selected
     _wide_row = [ln for ln in _wide.splitlines() if "ppp" in ln]
+    # Measured in CELLS, not len(): the row now carries the panel's border
+    # markup, and counting tag characters as columns would fail a row that
+    # renders exactly to the edge.
     chk("a long operator label leaves the rendered row inside the width",
-        len(_wide_row) == 1 and len(_wide_row[0]) <= 90)
+        len(_wide_row) == 1 and _cells_wide(_wide_row[0]) <= 90)
     # a disabled (off) timer shows no countdown and is greyed out
     _off_row = {"id": 1, "interval_min": 5, "payload": "paused one",
                 "mode": "now", "enabled": 0, "active": 1,
@@ -957,13 +967,13 @@ async def go():
     chk("parked_overlay_text no owner marker when unowned",
         not any("#3" in r and "@" in r for r in _po_lines))
     chk("parked_overlay_text cursor on row 0",
-        any(r.lstrip().startswith("▸") and "#3" in r for r in _po_lines))
+        any(r.lstrip("│ ").startswith("▸") and "#3" in r for r in _po_lines))
     _po1 = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 2)
     _po1_lines = _plain(_po1).splitlines()
     chk("parked_overlay_text cursor moves",
-        any(r.lstrip().startswith("▸") and "#9" in r for r in _po1_lines))
+        any(r.lstrip("│ ").startswith("▸") and "#9" in r for r in _po1_lines))
     chk("parked_overlay_text exactly one cursor",
-        sum(1 for r in _po1_lines if r.lstrip().startswith("▸")) == 1)
+        sum(1 for r in _po1_lines if r.lstrip("│ ").startswith("▸")) == 1)
     _po_empty = appmod.parked_overlay_text([], "/Work/relay", 60, 0)
     chk("parked_overlay_text empty state teaches i",
         "i" in _plain(_po_empty) and "park" in _plain(_po_empty).lower())
@@ -991,7 +1001,7 @@ async def go():
     _po_clamped = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 99)
     chk("parked_overlay_text out-of-range cursor clamps",
         sum(1 for r in _plain(_po_clamped).splitlines()
-            if r.lstrip().startswith("▸")) == 1)
+            if r.lstrip("│ ").startswith("▸")) == 1)
 
     # --- the drop confirmation and the retitle form, at the render layer ----
     _po_armed = appmod.parked_overlay_text(_prows, "/Work/relay", 60, 0,
@@ -2486,9 +2496,112 @@ async def test_parked_badge_per_session():
     return ok
 
 
+
+
+async def test_workspace_grouping():
+    """Sessions sharing a LAUNCH directory render inside one open rail.
+
+    The rail is chrome, not data: its rows must stay unselectable, the cursor
+    must skip them, and no change of session state may move a row - the
+    grouping key is frozen, which is the whole reason it is allowed to reorder
+    the list at all (docs/IDEAS.md #14).
+    """
+    ok = True
+
+    def chk(label, cond):
+        nonlocal ok
+        print(f" {'OK  ' if cond else 'FAIL'}  {label}")
+        ok = ok and cond
+
+    wd_a, wd_b = "/tmp/relay-ws-a", "/tmp/relay-ws-b"
+    sessions = {
+        "a1": SessionInfo("a1", title="alpha", window_idx=0, tab_idx=0,
+                          last_screen=["x"]),
+        "a2": SessionInfo("a2", title="beta", window_idx=0, tab_idx=1,
+                          last_screen=["x"]),
+        "solo": SessionInfo("solo", title="solo", window_idx=0, tab_idx=2,
+                            last_screen=["x"]),
+    }
+    sessions["a1"].home_dir = wd_a
+    sessions["a2"].home_dir = wd_a
+    sessions["solo"].home_dir = wd_b
+
+    app = _TestApp(sessions, dry_run=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh()
+        await pilot.pause()
+        t = app.query_one(appmod.DataTable)
+        labels = [str(c.label) for c in t.columns.values()]
+        sess_col = labels.index("SESSION")
+        last_col = labels.index("LAST DIRECTIVE")
+
+        def col(row, c):
+            return _plain(str(t.get_row_at(row)[c]))
+
+        rails = [col(i, 0) for i in range(t.row_count)]
+        chk("two sessions in one directory open and close a rail",
+            rails == ["\u250e", "\u2503", "\u2503", "\u2516", ""])
+        chk("a directory with one session gets no rail at all",
+            rails[-1] == "" and app._row_sids[-1] == "solo")
+        chk("the rules are chrome, not sessions",
+            app._row_sids == [None, "a1", "a2", None, "solo"])
+        chk("the top rule names the workspace",
+            "relay-ws-a" in col(0, sess_col))
+        # Compact counts: the rule lives in a table column, so it uses the
+        # row glyphs (◉ armed, ‼ wants you) rather than words that the column
+        # width would silently cut.
+        chk("the top rule carries the group's counts",
+            col(0, last_col).startswith("2"))
+        chk("a count that is zero is not printed",
+            "◉" not in col(0, last_col))
+
+        # The cursor must never land on a rule.
+        chk("the cursor skips the top rule",
+            app._row_sids[app._nearest_selectable(0)] is not None)
+        chk("the cursor skips the bottom rule",
+            app._row_sids[app._nearest_selectable(3)] is not None)
+
+        # Arming one session changes the counts but must not move a row.
+        before = list(app._row_sids)
+        sessions["a1"].mode = "safe"
+        app._refresh()
+        await pilot.pause()
+        chk("arming does not move a single row", app._row_sids == before)
+        chk("but the counts on the rule do follow the state",
+            "◉1" in col(0, last_col))
+
+        # A session needing attention is DUPLICATED into the strip above; the
+        # main list below - including the whole group - stays exactly put.
+        sessions["a2"].state = "prompting"
+        app._refresh()
+        await pilot.pause()
+        chk("the attention strip adds rows above, and only above",
+            app._row_sids[-len(before):] == before)
+        chk("the strip is a duplicate, not a move",
+            app._row_sids.count("a2") == 2)
+        rails = [col(i, 0) for i in range(t.row_count)]
+        chk("the strip carries no rail: it is not a workspace",
+            rails[:len(rails) - len(before)] == [""] * (len(rails) - len(before)))
+        chk("the group's rule reports the session that wants you",
+            "‼1" in col(len(rails) - len(before), last_col))
+
+        # A session that walks into a subdirectory stays in its own workspace.
+        sessions["a1"].workdir = wd_a + "/iterm"
+        after = list(app._row_sids)
+        app._refresh()
+        await pilot.pause()
+        chk("a session that cd'd keeps its place in the group",
+            app._row_sids == after)
+
+    return ok
+
+
 if __name__ == "__main__":
     r1 = asyncio.run(go())
     r2 = lock_tests()
     print("\n-- parked badge --")
     r3 = asyncio.run(test_parked_badge_per_session())
-    sys.exit(0 if (r1 and r2 and r3) else 1)
+    print("\n-- workspace grouping --")
+    r4 = asyncio.run(test_workspace_grouping())
+    sys.exit(0 if (r1 and r2 and r3 and r4) else 1)

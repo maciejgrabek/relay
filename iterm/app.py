@@ -15,6 +15,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import textwrap as _textwrap
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,6 +29,7 @@ from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 
 import audit  # noqa: E402
 import burn as burnmod  # noqa: E402
+import chrome  # noqa: E402
 import config as cfgmod  # noqa: E402
 import db as swarmdb  # noqa: E402
 import events  # noqa: E402
@@ -36,6 +38,7 @@ import settings as settingsmod  # noqa: E402
 import swarm as swarmlogic  # noqa: E402
 import usage as usagemod  # noqa: E402
 import widget as widgetmod  # noqa: E402
+import workspaces as wsmod  # noqa: E402
 from watcher import Watcher  # noqa: E402
 
 # Retro phosphor-green CRT terminal aesthetic. Big block logo (ANSI Shadow figlet).
@@ -118,6 +121,12 @@ MODE_STYLE = {
     "shadow": ("◌", "SHADOW",  CYAN),
     "extreme": ("✷", "EXTREME", DANGER),
 }
+
+# workspaces.summary() names what a count MEANS ('armed', 'attention'); the
+# hue is this view's business, so the mapping lives here and moves with the
+# theme instead of stranding a colour inside the pure module.
+GROUP_KIND_COLOR = {"plain": DIM, "armed": WARN, "attention": DANGER,
+                    "burning": WARN}
 
 # Mode label for the session-detail preview pane header (plain text, no
 # glyph/color - those live in MODE_STYLE for the table). Kept as its own
@@ -216,35 +225,52 @@ def _overlay_keybar(pairs, width: int, accent: str) -> list:
         for k, label in row) for row in rows]
 
 
+# An overlay is drawn OUTER cells wide; everything its renderer builds is
+# fitted to BODY = OUTER - 4 (a border cell and a pad space on each side). The
+# renderers take that inner width as their `width` and hand it back out, so no
+# body line has to know a border exists.
+OVERLAY_FRAME = 4
+
+
 def overlay_head(glyph: str, title: str, subtitle: str, right: str,
                  keys, width: int, accent: str) -> list:
     """The shared chrome every full-screen overlay opens with.
 
-    A rule, a reverse-video title bar (glyph + overlay name + context on the
-    left, a count on the right), a closing rule, then the key bar. Returns a
-    list of MARKUP lines each already fitted to `width` cells - callers join
-    them and must not slice the result.
+    Element [0] is the panel's TOP EDGE - the overlay names itself in its own
+    border, with the count the operator opened it for on the right of the same
+    edge (chrome.py rule 1 and 3). Everything after it is the key bar, fitted
+    to the body width, and belongs INSIDE the box: pass the whole list plus
+    the body to overlay_panel(), which adds the side bars and closes it.
 
-    `subtitle` is the expendable half when the bar is too narrow for both: the
-    title names the overlay and `right` is the count the operator opened it
-    for, while the subtitle (a workdir, a session name) is context they can
-    also get elsewhere.
+    This replaced a `═══` rule + reverse-video title bar + `═══` rule - three
+    rows of chrome, two of them pure separator - with one titled edge. The
+    overlays already described themselves as open boxes; this makes them
+    actual ones, and the same shape the control view now uses.
+
+    `width` is the BODY width. `subtitle` is the expendable half when the edge
+    is too narrow for everything: the title names the overlay and `right` is
+    the count, while the subtitle (a workdir, a session name) is context that
+    can also be read elsewhere.
     """
-    w = max(40, width)
-    rule = f"[{accent}]" + "═" * w + "[/]"
-    left = f" {glyph} {title}"
+    w = width + OVERLAY_FRAME
+    name = f"{glyph} {title}"
     if subtitle:
-        left += f"  {subtitle}"
-    tail = f"{right} " if right else ""
-    room = w - _cells(tail)
-    left = _fit(left, max(0, room - 1))
-    bar = (left + " " * max(0, room - _cells(left)) + tail)
-    # Padded to exactly w cells BEFORE the markup goes on, so the reverse-video
-    # block spans the full width instead of ending raggedly at the text.
-    bar += " " * max(0, w - _cells(bar))
-    return [rule,
-            f"[bold {TH['bg_deep']} on {accent}]{escape(bar)}[/]",
-            rule] + _overlay_keybar(keys, w, accent)
+        name += f" {chrome.H}{chrome.H} {subtitle}"
+    return [chrome.panel_top(name, right, w, accent, f"bold {accent}", DIM)]\
+        + _overlay_keybar(keys, width, accent)
+
+
+def overlay_panel(lines: list, width: int, accent: str) -> str:
+    """Close the box: `lines[0]` is the top edge as returned by overlay_head,
+    everything after it gets side bars, and a bottom edge finishes it.
+
+    The body keeps a one-cell gutter inside the border, so a full-width
+    highlight bar (the cursor row) stops short of the frame instead of
+    painting over it.
+    """
+    w = width + OVERLAY_FRAME
+    body = [chrome.side(" " + ln, w, accent) for ln in lines[1:]]
+    return "\n".join([lines[0]] + body + [chrome.panel_bottom(w, accent)])
 
 
 KEYBAR = (
@@ -919,17 +945,23 @@ def getting_started_panel(width: int) -> str:
         " Keys:  ↑↓ move · SPACE arm · TAB swarm view · q quit\n")
 
 
-def help_text() -> str:
+def help_text(width: int = 96) -> str:
     """The `?` overlay: key map + arm-level cheat sheet. Pure so it's
-    testable; markup is static (no dynamic text to escape)."""
+    testable; markup is static (no dynamic text to escape).
+
+    `width` is the BODY width - the panel is drawn OVERLAY_FRAME wider, the
+    same contract every other overlay uses.
+    """
     A, G, D = WARN, BRIGHT, DIM
+    w = max(40, width)
 
     def row(key, what):
-        return f"  [{A}]{key:<9}[/] [{G}]{what}[/]"
+        # Clipped to the frame: an un-fitted help row used to run off the
+        # right of the screen, which was invisible until the view got a
+        # border for it to run past.
+        return f"  [{A}]{key:<9}[/] [{G}]{_fit(what, max(10, w - 13))}[/]"
 
-    return "\n".join([
-        f"[{A}]RELAY KEYS[/]   [{D}]press ? or ESC to close this help[/]",
-        "",
+    lines = [
         row("↑↓ / j k", "move (continuous through NEEDS ACTION and list)"),
         row("ENTER", "send Enter to the selected session (answer by hand)"),
         row("1 2 3", "send that digit (pick a menu option by hand)"),
@@ -959,7 +991,8 @@ def help_text() -> str:
         row("q", "quit (asks twice only when something is live)"),
         row("?", "close this help"),
         "",
-        f"[{A}]ARM LEVELS[/]  [{D}](what relay may auto-approve)[/]",
+        chrome.rule("arm levels", "what relay may auto-approve", w, DIM,
+                    f"bold {WARN}", DIM),
         "",
         row("○ MANUAL", "never acts - watch and notify only"),
         row("◉ SAFE", "auto-approves commands classified safe; escalates rest"),
@@ -974,10 +1007,14 @@ def help_text() -> str:
         row("✷ EXTREME", "insane + pushes your prompt into an idle tab; budget-capped, gone on restart"),
         row("◌ SHADOW", "dry-run - records would-approve/would-escalate, never acts"),
         "",
-        f"[{D}]A real question (multi-choice) is ALWAYS yours - no mode"
-        f" auto-answers decisions. A PAUSED relay is not acting on ANY"
-        f" tab, regardless of arm level.[/]",
-    ])
+    ] + [f"[{D}] {ln}[/]" for ln in _textwrap.wrap(
+        "A real question (multi-choice) is ALWAYS yours - no mode"
+        " auto-answers decisions. A PAUSED relay is not acting on ANY"
+        " tab, regardless of arm level.", max(20, w - 2))]
+    return overlay_panel(
+        [chrome.panel_top("? HELP", "? or ESC closes", w + OVERLAY_FRAME,
+                          BRIGHT, f"bold {BRIGHT}", DIM)] + lines,
+        w, BRIGHT)
 
 
 def audit_view_text(entries, title: str, width: int, now=None) -> str:
@@ -987,19 +1024,26 @@ def audit_view_text(entries, title: str, width: int, now=None) -> str:
     session field, which stores the session title."""
     import time as _t
     w = max(40, width)
-    bar = "═" * w
-    head = (f"╔{bar}╗\n"
-            f" ▓ AUDIT // {title[:w - 12]}\n"
-            f" what relay decided unattended · press v or ESC to return to "
-            f"the live feed\n"
-            f"╚{bar}╝\n")
     mine = [e for e in entries if e.get("session") == title]
+    # Same grammar as every other view, drawn WITHOUT markup: this pane is a
+    # markup-free Static, so the chrome takes no colours and escapes nothing
+    # (escaping would print its own backslashes here).
+    def _frame(lines):
+        return "\n".join(
+            [chrome.panel_top(f"▓ AUDIT ── {title}",
+                              f"{len(mine)} recorded" if mine else "none",
+                              w, esc=False)]
+            + [chrome.side(" " + ln, w) for ln in lines]
+            + [chrome.panel_bottom(w)])
     if not mine:
-        return head + (
-            "\n no recorded decisions for this session yet.\n\n"
-            " every unattended approval, escalation, and delivery is\n"
-            " written to ~/.relay/audit.jsonl (kept 7 days) BEFORE relay\n"
-            " acts - this view is that record, per session.")
+        return _frame([
+            " what relay decided unattended · v or ESC returns to the feed",
+            "",
+            " no recorded decisions for this session yet.",
+            "",
+            " every unattended approval, escalation, and delivery is",
+            " written to ~/.relay/audit.jsonl (kept 7 days) BEFORE relay",
+            " acts - this view is that record, per session."])
     mark = {"auto-approved": "✓", "escalated": "⊘", "delivered": "→",
             "would-approve": "≈", "would-deliver": "≈"}
     lines = []
@@ -1008,7 +1052,8 @@ def audit_view_text(entries, title: str, width: int, now=None) -> str:
         m = mark.get(e.get("verdict", ""), "?")
         lines.append(f" {t}  {m} {str(e.get('verdict', '?')):<13} "
                      f"{str(e.get('command', ''))[:max(10, w - 38)]}")
-    return head + "\n".join(lines)
+    return _frame([" what relay decided unattended · v or ESC returns to the"
+                   " feed", ""] + lines)
 
 
 def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
@@ -1018,22 +1063,23 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
     interval, mode, on/off, fire-cap progress, and the countdown. Rendered with
     markup ON, so the session title and payload are escaped."""
     import timers as _timers
-    w = max(40, width)
+    w = max(40, width) - OVERLAY_FRAME      # body width; see OVERLAY_FRAME
     n = len(rows)
     on = sum(1 for r in rows if r["enabled"])
-    head = "\n".join(overlay_head(
+    head = overlay_head(
         "⏲", "TIMERS", session_title,
         f"{on}/{n} on" if n else "none",
         [("a", "add"), ("enter", "edit"), ("←→", "interval"), ("m", "mode"),
          ("[ ]", "cap"), ("space", "on/off"), ("g", "fire"), ("x", "del"),
          ("r", "restore/restart"), ("esc", "close")],
-        w, OVERLAY_ACCENT["timers"])) + "\n"
+        w, OVERLAY_ACCENT["timers"]) + [""]
     if not rows:
-        return head + (f"\n  [{DIM}]no timers on this session.[/]\n\n"
-                       f"  [{DIM}]press a to add one: an interval (1-90 min)"
-                       f" and a[/]\n"
-                       f"  [{DIM}]payload string sent to this session on that"
-                       f" schedule.[/]")
+        return overlay_panel(head + [
+            f"  [{DIM}]no timers on this session.[/]",
+            "",
+            f"  [{DIM}]press a to add one: an interval (1-90 min) and a[/]",
+            f"  [{DIM}]payload string sent to this session on that"
+            f" schedule.[/]"], w, OVERLAY_ACCENT["timers"])
     lines = []
     for i, r in enumerate(rows):
         sel = (i == cursor)
@@ -1075,7 +1121,7 @@ def timers_view_text(rows, now, session_title, width, cursor=0) -> str:
             lines.append(f"[{DIM}]{line}[/]")    # off: greyed out
         else:
             lines.append(line)
-    return head + "\n".join(lines)
+    return overlay_panel(head + lines, w, OVERLAY_ACCENT["timers"])
 
 
 def parked_overlay_text(rows: list, scope_label: str, width: int,
@@ -1124,7 +1170,9 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
     sliced, because a tag cut in half stops being a tag and corrupts the whole
     render from that point on rather than merely cropping it.
     """
-    w = max(40, width)
+    # Body width: the frame's two border cells and two pad cells come off the
+    # top, once, here - so every line built below is already inside the box.
+    w = max(40, width) - OVERLAY_FRAME
     accent = OVERLAY_ACCENT["parked"]
     n = len(rows)
     keys = [("↑↓", "move"), ("←→", "scope"), ("e", "edit"), ("d", "drop"),
@@ -1137,13 +1185,13 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
         # Replaces the key bar rather than adding to it: while a drop is
         # armed, the only two things that matter are which key confirms and
         # which item it destroys.
-        head = head[:3] + [
+        head = head[:1] + [
             "  " + f"[bold {TH['bg_deep']} on {DANGER}]"
             + escape(_fit(f" press d again to DROP #{armed_id} permanently ",
                           w - 2)) + "[/]",
             f"  [{DIM}]any other key cancels[/]"]
     if editing_id is not None:
-        head = head[:3] + _overlay_keybar(
+        head = head[:1] + _overlay_keybar(
             [("enter", "save"), ("esc", "cancel")], w, accent) + [
             "  " + f"[{accent}]"
             + escape(_fit(f"EDIT #{editing_id} - retitle it below", w - 2))
@@ -1157,7 +1205,7 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
             f"  [{DIM}]that session's context on it - claim one later[/]",
             f"  [{DIM}]with enter.[/]",
         ]
-        return "\n".join(head + body)
+        return overlay_panel(head + body, w, accent)
     cur = min(max(0, cursor), len(rows) - 1)
     body = []
     for i, r in enumerate(rows):
@@ -1184,7 +1232,7 @@ def parked_overlay_text(rows: list, scope_label: str, width: int,
             body.append(f"[bold {TH['hot']} on {TH['bg_cursor']}]{line}{pad}[/]")
         else:
             body.append(line)
-    return "\n".join(head + body)
+    return overlay_panel(head + body, w, accent)
 
 
 def timer_cell(active, pending) -> str:
@@ -1277,9 +1325,16 @@ class RelayApp(App):
        full width so the 8-column list and 80-col terminal output each get the
        room they need (side-by-side left the preview too narrow to read). */
     #middle { height: 1fr; }
+    /* Panel chrome: each region is a box that names itself in its own top
+       edge, with its counts on the bottom edge (chrome.py, docs/IDEAS.md
+       #17). Textual draws these borders from the container's own width, so
+       they cannot drift - unlike a right-hand edge assembled per row, which
+       is why workspace groups inside the table use an open rail instead. */
     DataTable {
         width: 1fr; height: 2fr; background: $bg; color: $bright;
-        border-bottom: solid $dimmer;
+        border: round $dimmer;
+        border-title-color: $bright; border-title-style: bold;
+        border-subtitle-color: $dim;
     }
     DataTable > .datatable--cursor { background: $bg_cursor; color: $hot; text-style: bold; }
     DataTable > .datatable--header {
@@ -1291,10 +1346,13 @@ class RelayApp(App):
         width: 1fr; height: 3fr;
         background: $bg_deep; color: $accent;
         padding: 0 1;
+        border: round $dimmer;
+        border-title-color: $cyan; border-subtitle-color: $dim;
     }
     #log {
-        height: 5; border-top: solid $dimmer;
+        height: 7; border: round $dimmer;
         background: $bg_deep; color: $dim;
+        border-title-color: $cyan; border-subtitle-color: $dim;
     }
     #swarmview, #helpview, #settingsview, #timersview, #parkedview {
         display: none; height: 1fr; padding: 0 2;
@@ -1482,8 +1540,21 @@ class RelayApp(App):
         except Exception:
             pass
         table = self.query_one(DataTable)
-        table.add_columns("MODE", "STATUS", "↻", "⏲ TIMERS", "CTX", "SESSION",
-                          "ROLE", "TASK NOW", "✓/⊘", "LAST DIRECTIVE")
+        # The first column is the workspace RAIL - one glyph wide, carrying
+        # ┎/┃/┖ for sessions that share a launch directory (workspaces.py).
+        # Its own header is blank: it names nothing, it groups.
+        table.add_columns("", "MODE", "STATUS", "↻", "⏲ TIMERS", "CTX",
+                          "SESSION", "ROLE", "TASK NOW", "✓/⊘",
+                          "LAST DIRECTIVE")
+        table.border_title = "sessions"
+        # Rule 4: borders carry names and counts, never keys. The key bar
+        # keeps every key - a key in a border as well would be the same key
+        # printed twice on one screen.
+        try:
+            self.query_one("#preview", Static).border_title = "detail"
+            self.query_one(Log).border_title = "feed"
+        except Exception:
+            pass
         # Preview pane starts in its configured state (watcher isn't connected
         # yet, so read config directly - same as the theme is read at import).
         try:
@@ -1612,7 +1683,7 @@ class RelayApp(App):
 
         DIM = DIMMER   # dimmed phosphor for hidden rows
 
-        def add(info, dim=False, attention=False):
+        def add(info, dim=False, attention=False, rail=""):
             label, color = STATE_STYLE.get(info.state, ("? UNKNOWN", BRIGHT))
             _b = self._burning.get(info.session_id)
             if _b is not None and _b.burning:
@@ -1709,14 +1780,46 @@ class RelayApp(App):
                 ccolor = {"high": DANGER,
                           "warn": WARN}.get(usagemod.ctx_level(u), DIM)
                 ctext = f"[{DIM}]{ctext}[/]" if dim else f"[{ccolor}]{ctext}[/]"
-            table.add_row(arm, label, wt, tcell, ctext, title, role, task_now,
-                          counts, cmd)
+            table.add_row(rail, arm, label, wt, tcell, ctext, title, role,
+                          task_now, counts, cmd)
             self._row_sids.append(info.session_id)
 
         def divider(text, color):
-            table.add_row("", f"[{color}]▼▼▼[/]", "", "", "",
+            table.add_row("", "", f"[{color}]▼▼▼[/]", "", "", "",
                           f"[{color}]{text}[/]", "", "", "", "")
             self._row_sids.append(None)        # divider: not selectable
+
+        # --- workspace group chrome ------------------------------------------
+        # A group's top rule carries the directory and the counts; its rows
+        # carry the rail. The rules do NOT run to the panel edge, and that is
+        # a deliberate limit of the medium rather than an oversight: a rule
+        # spanning the table would have to be assembled per column, which
+        # means pinning every column width - the exact cost the open (no right
+        # edge) shape exists to avoid. See chrome.py.
+        def group_open(path, members):
+            def _burning(i):
+                b = self._burning.get(i.session_id)
+                return b is not None and b.burning
+            # Compact: this rule is drawn INSIDE a table column, and the
+            # spelled-out counts are silently cut by whatever width that
+            # column gets. The panel's own bottom edge carries the long form.
+            parts = wsmod.summary(
+                members,
+                lambda i: i.active,
+                lambda i: needs_action(i.state, getattr(i, "stale", False)),
+                _burning, compact=True)
+            counts = f" [{DIM}]·[/] ".join(
+                f"[{GROUP_KIND_COLOR.get(kind, DIM)}]{text}[/]"
+                for text, kind in parts)
+            label = escape(wsmod.short_path(path))
+            table.add_row(f"[{DIM}]{chrome.RAIL_TOP}[/]", "", "", "", "", "",
+                          f"[{CYAN}]{label}[/]", "", "", "", counts)
+            self._row_sids.append(None)       # a rule is not a session
+
+        def group_close():
+            table.add_row(f"[{DIM}]{chrome.RAIL_BOT}[/]", "", "", "", "", "",
+                          "", "", "", "", "")
+            self._row_sids.append(None)
 
         # NEEDS ACTION is a strip of DUPLICATE rows on top - the main list
         # below keeps its stable tab order ALWAYS. Rows must never teleport
@@ -1732,9 +1835,20 @@ class RelayApp(App):
             for info in attention:
                 add(info, attention=True)
             divider("── SESSIONS ──", DIM)
-        for info in shown:
-            # Own row greyed out: it is display-only by design.
-            add(info, dim=info.session_id == self._own_sid)
+        # The main list, grouped by launch directory. Grouping GATHERS, it
+        # never sorts: a group sits where its first member sat, and the key is
+        # frozen at first sight, so no change of session state can move a row.
+        for path, members in wsmod.group(shown, lambda i: self._home_of(i)):
+            if path is None:
+                info = members[0]
+                # Own row greyed out: it is display-only by design.
+                add(info, dim=info.session_id == self._own_sid)
+                continue
+            group_open(path, members)
+            for info in members:
+                add(info, dim=info.session_id == self._own_sid,
+                    rail=f"[{DIM}]{chrome.RAIL}[/]")
+            group_close()
         if hidden:
             divider(f"── QUARANTINED ({len(hidden)}) ──", DIMMER)
             for info in hidden:
@@ -1876,6 +1990,17 @@ class RelayApp(App):
                          f"{who}{more}[/] [{DIM}]·[/] ")
         pause_tag = (f"[bold {WARN}]⏸ PAUSED - NOT acting[/] [{DIM}]·[/] "
                      if getattr(self.watcher, "paused", False) else "")
+        # The sessions panel says its own totals on its own bottom edge.
+        try:
+            n_attn = sum(1 for i in sess
+                         if i.session_id != self._own_sid
+                         and needs_action(i.state, getattr(i, "stale", False)))
+            sub = f"{len(sess)} units · {armed} armed"
+            if n_attn:
+                sub += f" · {n_attn} needs you"
+            self.query_one(DataTable).border_subtitle = sub
+        except Exception:
+            pass
         self.query_one("#subtitle", Static).update(
             blind_tag + pause_tag +
             f"[{DIM}]RELAY · SESSION CONTROL ·[/] "
@@ -1941,6 +2066,19 @@ class RelayApp(App):
                 timer_next=getattr(self, "_timers_fleet_next", None)))
         except Exception:
             pass
+
+    def _home_of(self, info) -> str:
+        """This tab's WORKSPACE key: the directory it was first seen in.
+
+        Normalized through real_workdir so /tmp and /private/tmp are one
+        workspace rather than two. Falls back to the live cwd only when the
+        freeze has not happened yet (the very first tick, or a path iTerm2
+        could not read) - a group that appears one tick late is better than a
+        group keyed on a directory the session has since walked out of.
+        """
+        d = (getattr(info, "home_dir", "") or getattr(info, "workdir", "")
+             or "")
+        return swarmlogic.real_workdir(d) if d else ""
 
     def _usage_for(self, sid: str):
         """Token usage for one tab, or None when relay cannot read any.
@@ -2103,17 +2241,23 @@ class RelayApp(App):
             burn_line = " ◈ burn: no readable git tree here\n"
         else:
             burn_line = ""
-        header = (f"╔{bar}╗\n"
-                  f" ▓ LIVE FEED // {info.title[:w-16]}\n"
-                  f" MODE:{mode}  LINK:{loc}  "
-                  f"CLEARED:{info.n_approved}  HELD:{info.n_escalated}\n"
-                  f"{tok}"
+        # The pane is a titled panel now (border_title/border_subtitle), so
+        # the ╔═══╗ box this header used to draw inside it would be a second
+        # frame around the first. What the box carried moves into the border:
+        # which session, and the tallies. The lines below it stay - they are
+        # facts about this session, not chrome.
+        preview.border_title = f"detail ── {info.title}"
+        preview.border_subtitle = (f"{mode} · {loc} · cleared "
+                                   f"{info.n_approved} · held "
+                                   f"{info.n_escalated}")
+        header = (f"{tok}"
                   f"{burn_line}"
                   f"{push}"
                   f"{tsum_line}"
                   f"{why}"
-                  f"{attn}"
-                  f"╚{bar}╝\n")
+                  f"{attn}")
+        if header:
+            header += "─" * max(0, w) + "\n"
         body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
         preview.update(header + body)
 
@@ -3088,6 +3232,11 @@ class RelayApp(App):
         self.query_one("#middle").styles.display = "none" if on else "block"
         self.query_one("#log").styles.display = "none" if on else "block"
         self.query_one("#helpview").styles.display = "block" if on else "none"
+        if on:
+            # Re-rendered on open, at the width the panel actually has: the
+            # frame is only a frame if its edges reach the sides.
+            w = self.query_one("#helpview").size.width - 4 - OVERLAY_FRAME
+            self.query_one("#helpview", Static).update(help_text(max(40, w)))
 
     def _render_swarm_view(self) -> None:
         import time as _time
@@ -3125,21 +3274,24 @@ class RelayApp(App):
                 for th in swarmdb.list_threads(self._swarm_db)
                 if th["state"] == "open"
                 or _now - (th["closed_at"] or 0) < 86400]
-            w = max(60, self.query_one("#swarmview").size.width - 4)
+            w = max(60, self.query_one("#swarmview").size.width
+                    - 4 - OVERLAY_FRAME)
             text = swarmlogic.render_swarm(sessions, tasks, msgs,
                                            _time.time(), width=w,
                                            stale=stale, activity=activity,
                                            prs=prs, threads=threads)
             # Chrome only - render_swarm owns the body and its own colors.
-            # Prepended here rather than inside swarm.py because the title bar
+            # Framed here rather than inside swarm.py because the panel
             # belongs to the OVERLAY (which app.py owns for timers and parked
             # too), not to the swarm rendering, which the CLI also prints
             # without any overlay around it.
-            text = "\n".join(overlay_head(
+            head = overlay_head(
                 "◈", "SWARM", f"{len(sessions)} sessions",
                 f"{len(tasks)} tasks",
                 [("TAB", "back"), ("f", "feed"), ("esc", "close")],
-                w, OVERLAY_ACCENT["swarm"])) + "\n\n" + text
+                w, OVERLAY_ACCENT["swarm"]) + [""]
+            text = overlay_panel(head + text.splitlines(), w,
+                                 OVERLAY_ACCENT["swarm"])
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)
