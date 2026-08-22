@@ -2541,11 +2541,13 @@ async def test_workspace_grouping():
 
         rails = [col(i, 0) for i in range(t.row_count)]
         chk("two sessions in one directory open and close a rail",
-            rails == ["\u250e", "\u2503", "\u2503", "\u2516", ""])
-        chk("a directory with one session gets no rail at all",
-            rails[-1] == "" and app._row_sids[-1] == "solo")
+            rails == ["\u250e", "\u2503", "\u2503", "\u2516",
+                      "\u250e", "\u2503", "\u2516"])
+        chk("a directory with ONE session is railed the same way",
+            rails[-3:] == ["\u250e", "\u2503", "\u2516"]
+            and app._row_sids[-2] == "solo")
         chk("the rules are chrome, not sessions",
-            app._row_sids == [None, "a1", "a2", None, "solo"])
+            app._row_sids == [None, "a1", "a2", None, None, "solo", None])
         chk("the top rule names the workspace",
             "relay-ws-a" in col(0, sess_col))
         # Compact counts: the rule lives in a table column, so it uses the

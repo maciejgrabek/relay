@@ -1331,7 +1331,7 @@ class RelayApp(App):
        they cannot drift - unlike a right-hand edge assembled per row, which
        is why workspace groups inside the table use an open rail instead. */
     DataTable {
-        width: 1fr; height: 2fr; background: $bg; color: $bright;
+        width: 1fr; height: 3fr; background: $bg; color: $bright;
         border: round $dimmer;
         border-title-color: $bright; border-title-style: bold;
         border-subtitle-color: $dim;
@@ -1343,7 +1343,7 @@ class RelayApp(App):
     DataTable > .datatable--odd-row { background: $bg_alt; }
     DataTable > .datatable--even-row { background: $bg; }
     #preview {
-        width: 1fr; height: 3fr;
+        width: 1fr; height: 2fr;
         background: $bg_deep; color: $accent;
         padding: 0 1;
         border: round $dimmer;
@@ -1838,7 +1838,15 @@ class RelayApp(App):
         # The main list, grouped by launch directory. Grouping GATHERS, it
         # never sorts: a group sits where its first member sat, and the key is
         # frozen at first sight, so no change of session state can move a row.
-        for path, members in wsmod.group(shown, lambda i: self._home_of(i)):
+        #
+        # min_size=1: a directory with ONE session in it is railed too. It
+        # costs two rows per lone session, which is the deal - the payment is
+        # that every session is under a directory heading, so the eye never
+        # has to decide whether a row is inside the group above it or on its
+        # own. A tab whose directory relay cannot read still renders bare:
+        # that is not a workspace, and saying otherwise would be a guess.
+        for path, members in wsmod.group(shown, lambda i: self._home_of(i),
+                                         min_size=1):
             if path is None:
                 info = members[0]
                 # Own row greyed out: it is display-only by design.

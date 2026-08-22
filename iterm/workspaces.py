@@ -19,8 +19,12 @@ Two properties make the grouping cheap and safe:
     the stable-list-order rule exists to prevent. It moves only when the
     operator opens or closes a tab, which is a thing they just did.
 
-  * A directory holding ONE session gets no group at all. A rail around a
-    single row is noise, and most directories hold one session.
+  * `min_size` is the CALLER's decision, not this module's opinion. The
+    control view rails every directory including one-session ones, so the eye
+    never has to work out whether a row belongs to the group above it; a
+    caller that wants rails only where they carry information passes 2. A key
+    that is empty never groups either way - an unreadable directory is not a
+    workspace, and pretending otherwise would put unrelated tabs in one box.
 
 Order: a group sits where its FIRST member sat, and members keep their
 relative order inside it. So the list is still read top-to-bottom in tab
