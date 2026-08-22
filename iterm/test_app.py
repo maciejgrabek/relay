@@ -2586,6 +2586,49 @@ async def test_workspace_grouping():
         chk("the group's rule reports the session that wants you",
             "‼1" in col(len(rails) - len(before), last_col))
 
+        # --- the cursor, which is where this design can hurt most ----------
+        # DataTable owns up/down before the app's bindings do, so the cursor
+        # lands on whatever row is next - and with a rule opening and closing
+        # every workspace, that is now most of the list.
+        t.move_cursor(row=app._row_sids.index("a1"))
+        await pilot.pause()
+        walked = []
+        for _ in range(6):
+            await pilot.press("down")
+            await pilot.pause()
+            walked.append(app._selected_sid())
+        chk("walking down never rests on a rule", None not in walked)
+        for _ in range(6):
+            await pilot.press("up")
+            await pilot.pause()
+            walked.append(app._selected_sid())
+        chk("walking up never rests on a rule either", None not in walked)
+        chk("walking down leaves the group in tab order",
+            walked[0] == "a2" and "solo" in walked)
+
+        # The regression this cost: table.clear() posts a RowHighlighted(0)
+        # that arrives AFTER the cursor has been restored. Acting on it
+        # dragged the operator to the top of the fleet one second after every
+        # repaint - with the session they were watching left behind.
+        for sid in ("a1", "solo", "a2"):
+            t.move_cursor(row=app._row_sids.index(sid))
+            await pilot.pause()
+            app._refresh()
+            await pilot.pause()
+            chk(f"a repaint leaves the cursor on {sid}",
+                app._selected_sid() == sid)
+
+        # A cursor parked ON a rule (a click, a rebuild) must not be answered
+        # by sending it to row 0.
+        rule_row = next(i for i, x in enumerate(app._row_sids) if x is None)
+        t.move_cursor(row=rule_row)
+        await pilot.pause()
+        app._refresh()
+        await pilot.pause()
+        chk("a cursor on a rule stays where it was, not at the top",
+            app._selected_sid() is not None
+            and abs(t.cursor_row - rule_row) <= 1)
+
         # A session that walks into a subdirectory stays in its own workspace.
         sessions["a1"].workdir = wd_a + "/iterm"
         after = list(app._row_sids)

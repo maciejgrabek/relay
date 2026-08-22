@@ -1874,9 +1874,14 @@ class RelayApp(App):
         # attention strip appears TWICE - keep the occurrence nearest to where
         # the cursor was, so it doesn't teleport between strip and main list.
         if self._row_sids:
+            # prev_sid is None when the cursor was sitting on a rule (a
+            # divider or a workspace rule). Falling back to row 0 there sent
+            # the operator to the top of the fleet on the next repaint, one
+            # second later - so the fallback is WHERE THEY WERE, and only the
+            # exact row is negotiable.
             target = self._row_index_near(prev_sid, prev_row)
-            target = self._nearest_selectable(target if target is not None
-                                              else 0)
+            target = self._nearest_selectable(
+                target if target is not None else prev_row)
             if target is not None:
                 table.move_cursor(row=target)
         # Status line: live armed-count + total approvals.
@@ -2261,9 +2266,46 @@ class RelayApp(App):
         body = "\n".join(info.last_screen) if info.last_screen else "[ no signal ]"
         preview.update(header + body)
 
+    def _skip_rule_row(self, row: int) -> None:
+        """Never leave the cursor resting on a rule.
+
+        DataTable owns the `up`/`down` keys before this app's bindings do, so
+        its own cursor moves one row whatever that row contains, and the
+        skipping in _move_cursor never gets a say. That was survivable when
+        the only unselectable rows were the two section dividers; with a rule
+        opening and closing every workspace it is most of the list. So the
+        skip happens where every cursor move ends up - on highlight - and it
+        carries on in the direction of travel, turning around only at the end
+        of the list.
+        """
+        table = self.query_one(DataTable)
+        if row != table.cursor_row:
+            # A STALE event. table.clear() posts RowHighlighted(0), which
+            # arrives after _refresh has already put the cursor back on the
+            # session the operator was on - acting on it would drag them to
+            # the top of the list one second after every repaint, which is
+            # exactly the bug this guard exists for.
+            return
+        n = len(self._row_sids)
+        last = getattr(self, "_last_cursor_row", 0)
+        if 0 <= row < n and self._row_sids[row] is None:
+            step = 1 if row >= last else -1
+            r = row + step
+            while 0 <= r < n and self._row_sids[r] is None:
+                r += step
+            if not 0 <= r < n:                    # ran off the end: turn back
+                r = row - step
+                while 0 <= r < n and self._row_sids[r] is None:
+                    r -= step
+            if 0 <= r < n:
+                table.move_cursor(row=r)
+                row = r
+        self._last_cursor_row = row
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         # Live-update the preview as the cursor moves between rows, and pull a
         # fresh screen for the now-selected session so it reflects reality NOW.
+        self._skip_rule_row(event.cursor_row)
         self._update_preview()
         if not self._preview_visible:
             return                        # hidden pane: don't pay for iTerm2 reads
