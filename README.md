@@ -678,9 +678,20 @@ the checkout's tracking state on every run:
 
 ```
   update: ✓ tracking origin/main
+  update: ✓ tracking origin/main (3 behind as of the last fetch - 'relay update' will fast-forward)
+  update: ✗ tracking origin/main, but DIVERGED: 1 ahead, 4 behind (as of the last fetch)
+      'relay update' cannot fast-forward past your own commits. In ~/Work/relay:
+      git log --oneline origin/main..HEAD   # what is local-only
+      git pull --rebase                     # keep them, replayed on top
   update: ✗ the current branch is not tracking a remote branch, so relay
             cannot tell what is newer - in ~/Work/relay: git checkout main
 ```
+
+Tracking a branch is not the same as being able to update: `relay update`
+merges `--ff-only`, so a checkout carrying commits of its own cannot move at
+all. Doctor reads the last-fetched state (it never goes to the network - a
+health command that waits on a socket is one people stop running), so the
+counts can be stale, and the question they answer is not.
 
 That line exists because the failure is otherwise invisible: the daily auto
 check skips in silence by design, so a machine in this state simply stops

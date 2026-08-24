@@ -558,6 +558,23 @@ def run():
     # whatever it is - this suite runs on developer machines that may sit on a
     # feature branch or a detached HEAD, so the assertion is that the line
     # EXISTS and classifies, not that it is healthy.
+    # Divergence is the OTHER way an update check silently stalls: `relay
+    # update` merges --ff-only, so a branch carrying commits of its own cannot
+    # move at all, and --auto skips it in the same silence as a missing
+    # upstream. Reporting "tracking origin/main" and stopping there would have
+    # repeated the bug one state over.
+    a, b = cli.ahead_behind()
+    ok &= check("ahead/behind is a pair of counts, or a pair of Nones - "
+                "never a half-answer a caller has to guess about",
+                (a is None) == (b is None)
+                and (a is None or (isinstance(a, int) and isinstance(b, int))))
+    ok &= check("doctor's update line accounts for a diverged checkout too",
+                "update:" in out
+                and ("DIVERGED" in out or "tracking " in out
+                     or "not tracking a remote branch" in out
+                     or "detached HEAD" in out or "not a git checkout" in out
+                     or "no git remote" in out))
+
     ok &= check("doctor reports whether this checkout can see a new version",
                 "update:" in out
                 and any(m in out for m in ("tracking ", "not tracking a "

@@ -1435,6 +1435,24 @@ def upstream_state() -> tuple:
             f"--set-upstream-to={remote}/{branch} {branch})")
 
 
+def ahead_behind() -> tuple:
+    """(ahead, behind) against the tracked branch, or (None, None).
+
+    Computed against the LAST FETCHED remote-tracking ref - doctor does not go
+    to the network, because a health command that waits on a socket is one
+    people stop running. Stale numbers still answer the question that matters:
+    can this checkout fast-forward at all, or has it diverged?
+    """
+    rc, counts = _git("rev-list", "--count", "--left-right", "HEAD...@{u}")
+    if rc != 0 or not counts or "\t" not in counts:
+        return (None, None)
+    try:
+        a, b = counts.split("\t")[:2]
+        return (int(a), int(b))
+    except (ValueError, TypeError):
+        return (None, None)
+
+
 def _no_upstream_msg(state: str, detail: str) -> str:
     """One sentence naming the problem and the command that fixes it."""
     if state == "detached":
@@ -1516,9 +1534,13 @@ def cmd_update(args) -> int:
         print(f"{behind} new commit(s) available, fast-forwarding...")
     rc, out = _git("merge", "--ff-only", "@{u}", timeout=30)
     if rc != 0:
+        ahead, _ = ahead_behind()
+        own = (f"this checkout has {ahead} commit(s) of its own"
+               if ahead else "the branch has diverged")
         return 0 if auto else _err(
-            "fast-forward failed (branch diverged) - resolve manually "
-            "with git in the relay repo")
+            f"fast-forward failed - {own}. In {_repo_root()}: "
+            "'git log --oneline @{u}..HEAD' shows them, "
+            "'git pull --rebase' keeps them")
     if auto:
         print(f"relay updated: {behind} new commit(s) -> {local_version()}")
     else:
@@ -1606,7 +1628,27 @@ def _doctor_update() -> None:
     no = "\033[31m✗\033[0m"
     state, detail = upstream_state()
     if state == "ok":
-        print(f"  update: {ok} tracking {detail}")
+        ahead, behind = ahead_behind()
+        if ahead:
+            # Tracking is not the same as updatable. `relay update` merges
+            # --ff-only, so a branch with commits of its own cannot move at
+            # all - and in --auto that failure is silent, exactly like the
+            # no-upstream case this line was added for. Saying "tracking" and
+            # stopping there would repeat the bug one state over.
+            print(f"  update: {no} tracking {detail}, but DIVERGED: "
+                  f"{ahead} ahead, {behind} behind (as of the last fetch)")
+            print(f"      'relay update' cannot fast-forward past your own "
+                  f"commits. In {_repo_root()}:")
+            cmds = [(f"git log --oneline {detail}..HEAD", "what is local-only"),
+                    ("git pull --rebase", "keep them, replayed on top")]
+            w = max(len(c) for c, _ in cmds)
+            for cmd, note in cmds:
+                print(f"      {cmd:<{w}}   # {note}")
+        elif behind:
+            print(f"  update: {ok} tracking {detail} ({behind} behind as of "
+                  f"the last fetch - 'relay update' will fast-forward)")
+        else:
+            print(f"  update: {ok} tracking {detail}")
     elif state == "norepo":
         print(f"  update: {no} not a git checkout - 'relay update' cannot run")
     elif state == "noremote":
