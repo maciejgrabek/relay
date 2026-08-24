@@ -294,12 +294,20 @@ identically:
 ```
 relay review (last 7 days) - what relay decided, and on whose authority
 
+  covering 2026-08-17 -> 2026-08-23
+
   approvals: 2363  (2136 cleared by the safety gate, 135 approved over it, 92 unverified)
   escalated to you: 240 · delivered 1 · extreme pushes 5
-  9.6% of approvals did NOT come from the safety gate reading the command
+    186  a session asked you something
+     41  the gate refused a command
+     13  the gate could not read the screen
+  9.6% of approvals did NOT come from the safety gate reading the command (227 of 2363)
 
   the gate said DANGEROUS and the arm level approved anyway (135):
     pkill/killall 31x · ssh 30x · psql 29x · curl -X 28x · rm -rf 27x · git push --force 4x
+
+  the gate said DANGEROUS and it STOOD (41):
+    ssh 12x · kubectl delete 9x · terraform 8x · rm -rf 7x · (other) 5x
 
   approved WITHOUT the gate being able to read the command (92):
     (unreadable) 92x
@@ -326,6 +334,20 @@ answers nothing, while `ssh 30x · psql 29x` tells you what you've been waving
 through. The rate is shown alongside the count on purpose - 135 reads as
 alarming until you know it's 9.6% of 2,363, and reads as complacent if you only
 ever see the percentage.
+
+Escalations get the same treatment, and for the same reason. "Relay stopped
+and asked you" covers a session asking a **question** (no command in sight),
+the gate **refusing** a command, and the gate being unable to **read** the
+screen - three different facts about how well the gate is working. A single
+total reads as "the gate refused N commands", and an operator acting on that
+reading goes off to loosen a gate that may never have fired. If nothing was
+ever refused, the report says that in as many words.
+
+The window is stated because `--all` cannot mean all time: the audit log is
+pruned to its retention (7 days by default) at every TUI start, so the report
+names the range it actually saw rather than implying history the log does not
+hold. The rate carries its denominator for the same reason - 6.2% of 16
+approvals is one `ssh`.
 
 Nobody's being scolded: arming a tab `insane` is a deliberate choice. This is
 where its consequences are visible once, instead of buried across thousands of

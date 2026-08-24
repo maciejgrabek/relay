@@ -123,10 +123,23 @@ def review(entries, since: float = 0.0) -> dict:
     """
     out = {"approved": 0, "clean": 0, "overridden": 0, "unverified": 0,
            "escalated": 0, "delivered": 0, "pushed": 0,
-           "override_cmds": {}, "unverified_cmds": {}, "sessions": {}}
+           "override_cmds": {}, "unverified_cmds": {}, "sessions": {},
+           # Escalations are not one thing. "relay stopped and asked you"
+           # covers a session asking a QUESTION (no command in sight) and the
+           # gate REFUSING a command, and those two mean opposite things about
+           # how well the gate is working - exactly the conflation this report
+           # was built to fix on the approval side, left in place on this one.
+           "esc_kinds": {"question": 0, "dangerous": 0, "unsure": 0,
+                         "other": 0},
+           "esc_cmds": {},
+           # The window the rows actually cover, which is not the window that
+           # was asked for: the audit log is pruned, so "all time" is bounded
+           # by retention and a report that does not say so overstates itself.
+           "first_ts": None, "last_ts": None}
     for e in entries:
         try:
-            if float(e.get("ts", 0)) < since:
+            ts = float(e.get("ts", 0))
+            if ts < since:
                 continue
             v = e.get("verdict") or ""
             reason = (e.get("reason") or "").lower()
@@ -134,8 +147,26 @@ def review(entries, since: float = 0.0) -> dict:
             sess = (e.get("session") or "?").strip() or "?"
         except Exception:
             continue
+        if ts:
+            out["first_ts"] = ts if out["first_ts"] is None else min(
+                out["first_ts"], ts)
+            out["last_ts"] = ts if out["last_ts"] is None else max(
+                out["last_ts"], ts)
         if v == "escalated":
             out["escalated"] += 1
+            # Same marks as the approval side, deliberately: the gate said one
+            # of a handful of things, and an escalation is what happens when
+            # nothing overruled it. One vocabulary, two outcomes.
+            if _OVERRIDE_MARK in reason:
+                out["esc_kinds"]["dangerous"] += 1
+                for tag in risk_tags(cmd):
+                    out["esc_cmds"][tag] = out["esc_cmds"].get(tag, 0) + 1
+            elif any(m in reason for m in _UNVERIFIED_MARKS):
+                out["esc_kinds"]["unsure"] += 1
+            elif "hands off" in reason or not cmd:
+                out["esc_kinds"]["question"] += 1
+            else:
+                out["esc_kinds"]["other"] += 1
             continue
         if v == "delivered":
             out["delivered"] += 1
@@ -164,6 +195,15 @@ def review(entries, since: float = 0.0) -> dict:
     return out
 
 
+def _day(ts) -> str:
+    """A timestamp as a local date. Pure-ish: time.localtime is a formatting
+    call, not I/O, and keeping it here means the CLI stays a printer."""
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(float(ts)))
+    except Exception:
+        return "?"
+
+
 def review_lines(r: dict, top: int = 8) -> list:
     """The review as plain text.
 
@@ -172,18 +212,41 @@ def review_lines(r: dict, top: int = 8) -> list:
     warning block is one that stops being read.
     """
     n = r["approved"]
-    out = [f"  approvals: {n}  ({r['clean']} cleared by the safety gate, "
-           f"{r['overridden']} approved over it, {r['unverified']} unverified)",
-           f"  escalated to you: {r['escalated']}"
-           + (f" · delivered {r['delivered']}" if r["delivered"] else "")
-           + (f" · extreme pushes {r['pushed']}" if r["pushed"] else "")]
+    out = []
+    if r.get("first_ts") and r.get("last_ts"):
+        out.append(f"  covering {_day(r['first_ts'])} -> "
+                   f"{_day(r['last_ts'])}")
+        out.append("")
+    out += [f"  approvals: {n}  ({r['clean']} cleared by the safety gate, "
+            f"{r['overridden']} approved over it, {r['unverified']} unverified)",
+            f"  escalated to you: {r['escalated']}"
+            + (f" · delivered {r['delivered']}" if r["delivered"] else "")
+            + (f" · extreme pushes {r['pushed']}" if r["pushed"] else "")]
+
+    kinds = r.get("esc_kinds") or {}
+    if r["escalated"]:
+        # Named, not just counted. "escalated to you: 114" reads as "the gate
+        # refused 114 commands" when every one of them was a session asking a
+        # question, and an operator acting on that reading would go tighten a
+        # gate that never fired.
+        parts = [(kinds.get("question", 0), "a session asked you something"),
+                 (kinds.get("dangerous", 0), "the gate refused a command"),
+                 (kinds.get("unsure", 0), "the gate could not read the screen"),
+                 (kinds.get("other", 0), "unclassified")]
+        for count, label in parts:
+            if count:
+                out.append(f"  {count:>5}  {label}")
+        if not kinds.get("dangerous"):
+            out.append("    the safety gate did not refuse a single command "
+                       "in this window.")
     if n:
         # The rate is the honest headline: 135 overrides reads as alarming
         # until you know it is 5% of 2,700, and it reads as complacent if you
         # only ever see the percentage. Both, always.
-        pct = 100.0 * (r["overridden"] + r["unverified"]) / n
+        off_gate = r["overridden"] + r["unverified"]
+        pct = 100.0 * off_gate / n
         out.append(f"  {pct:.1f}% of approvals did NOT come from the safety "
-                   f"gate reading the command")
+                   f"gate reading the command ({off_gate} of {n})")
     if r["overridden"]:
         out.append("")
         out.append(f"  the gate said DANGEROUS and the arm level approved "
@@ -198,6 +261,13 @@ def review_lines(r: dict, top: int = 8) -> list:
         out.append("    " + " · ".join(
             f"{tag} {c}x" for tag, c in
             sorted(r["unverified_cmds"].items(), key=lambda kv: -kv[1])[:top]))
+    if kinds.get("dangerous") and r.get("esc_cmds"):
+        out.append("")
+        out.append(f"  the gate said DANGEROUS and it STOOD "
+                   f"({kinds['dangerous']}):")
+        out.append("    " + " · ".join(
+            f"{tag} {c}x" for tag, c in
+            sorted(r["esc_cmds"].items(), key=lambda kv: -kv[1])[:top]))
     if r["sessions"] and (r["overridden"] or r["unverified"]):
         out.append("")
         top_s = sorted(r["sessions"].items(), key=lambda kv: -kv[1])[:5]

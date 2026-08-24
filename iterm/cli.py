@@ -1489,7 +1489,12 @@ def cmd_review(args) -> int:
         recap.start_of_today() - 6 * 86400)
     rows = audit.read_tail(limit=10 ** 6)
     r = recap.review(rows, since)
-    window = "all time" if since == 0.0 else "last 7 days"
+    # "all time" is a promise the log cannot keep: it is pruned to
+    # RETENTION_DAYS at every TUI start, so --all reads the same rolling
+    # window as the default whenever relay has been restarted recently. Say
+    # the ceiling out loud rather than let the flag imply history.
+    window = (f"all time, up to {audit.RETENTION_DAYS:g} days of audit "
+              f"retention" if since == 0.0 else "last 7 days")
     print(f"relay review ({window}) - what relay decided, and on whose "
           f"authority")
     print()

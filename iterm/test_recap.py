@@ -120,6 +120,78 @@ def _review(check) -> bool:
     ok &= check("the report names the overridden verbs", "ssh" in body)
     ok &= check("the report attributes them to sessions", "by session" in body)
 
+    # --- escalations are not one thing ------------------------------------
+    # The bug this pins, found by running the verb against a real log: 114 of
+    # 114 escalations were sessions asking questions, and the report said only
+    # "escalated to you: 114" - which reads as "the gate refused 114 commands"
+    # and would send an operator off to loosen a gate that had never fired.
+    def esc(reason, cmd="", sess="w1", ts=1000.0):
+        return {"ts": ts, "verdict": "escalated", "reason": reason,
+                "command": cmd, "session": sess}
+
+    mixed = recap.review([
+        esc("real question - hands off"),
+        esc("real question - hands off"),
+        esc("dangerous command", "ssh root@box"),
+        esc("dangerous command", "rm -rf /var/lib"),
+        esc("could not parse command - fail safe", "???"),
+        esc("cursor not on option 1 - fail safe", "curl -X POST h"),
+        esc("some future reason nobody has written yet", "make build"),
+    ], since=0.0)
+    k = mixed["esc_kinds"]
+    ok &= check("a question and a refused command are counted separately",
+                k["question"] == 2 and k["dangerous"] == 2)
+    ok &= check("an escalation the gate could not read is its own class",
+                k["unsure"] == 2)
+    ok &= check("an escalation reason this build does not know is bucketed, "
+                "never dropped - the classes must add up to the total",
+                k["other"] == 1
+                and sum(k.values()) == mixed["escalated"] == 7)
+    ok &= check("refused commands are grouped by the risky verb, like "
+                "overrides are - one vocabulary for both outcomes",
+                mixed["esc_cmds"].get("ssh") == 1
+                and mixed["esc_cmds"].get("rm -rf") == 1)
+    mixed_body = "\n".join(recap.review_lines(mixed))
+    ok &= check("the report names each escalation class rather than printing "
+                "one total", "a session asked you something" in mixed_body
+                and "the gate refused a command" in mixed_body)
+    ok &= check("a refused command is reported as the gate STANDING, not as "
+                "an override", "it STOOD" in mixed_body)
+
+    questions_only = recap.review([esc("real question - hands off")] * 3,
+                                  since=0.0)
+    q_body = "\n".join(recap.review_lines(questions_only))
+    ok &= check("with no command ever refused, the report says so - that is "
+                "the finding, and it is invisible in a bare total",
+                "did not refuse a single command" in q_body)
+    ok &= check("...and does not print an empty refused-command block",
+                "it STOOD" not in q_body)
+
+    # --- a rate keeps its denominator -------------------------------------
+    # 6.2% of 16 approvals is one ssh. A percentage without its sample size is
+    # how a handful of rows gets read as a trend.
+    small = recap.review([ap("safe permission prompt", "ls")] * 3
+                         + [ap("insane-approve (dangerous command)", "ssh h")],
+                         since=0.0)
+    small_body = "\n".join(recap.review_lines(small))
+    ok &= check("the rate is printed with the counts it came from",
+                "% of approvals" in small_body and "(1 of 4)" in small_body)
+
+    # --- the window the rows actually cover -------------------------------
+    # `--all` cannot mean all time: the audit log is pruned at every TUI start,
+    # so the report states the range it really saw.
+    spanned = recap.review([ap("safe permission prompt", "ls", ts=1_000_000.0),
+                            ap("safe permission prompt", "ls", ts=9_000_000.0)],
+                           since=0.0)
+    ok &= check("review records the first and last timestamp it saw",
+                spanned["first_ts"] == 1_000_000.0
+                and spanned["last_ts"] == 9_000_000.0)
+    ok &= check("the report opens with the range it actually covers",
+                "covering" in "\n".join(recap.review_lines(spanned)))
+    ok &= check("an empty window claims no coverage at all",
+                "covering" not in "\n".join(
+                    recap.review_lines(recap.review([], since=0.0))))
+
     clean_only = recap.review([ap("safe permission prompt", "ls")], since=0.0)
     clean_body = "\n".join(recap.review_lines(clean_only))
     ok &= check("with nothing waved through, the report says so plainly "
