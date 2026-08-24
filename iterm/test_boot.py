@@ -128,6 +128,94 @@ def run():
     check("the logo is centred - a wider terminal indents it more",
           w_indent > n_indent)
 
+    # --- every registered style keeps the same contract --------------------
+    # Written as a loop over the registry, not a list of style names: a style
+    # added later is covered the day it is added, which is the only way a plug
+    # point stays honest. What is asserted here is the reason the boot screen
+    # is allowed to exist - it names what it is waiting on and it never claims
+    # to be finished early. Decoration is each style's own business.
+    for name in boot.BOOT_STYLES:
+        def frame(st, tick=9, cols=100, rows=40):
+            return boot.render(st, tick=tick, cols=cols, rows=rows, pal=PAL,
+                               style=name)
+
+        mid = plain(frame(steps(2)))
+        check(f"{name}: names the subsystem it is waiting on",
+              "Subsystem 2" in mid)
+        check(f"{name}: shows the latest value a step reported",
+              "value 1" in mid)
+        check(f"{name}: never shows a value a step has not reported",
+              "value 2" not in mid)
+        check(f"{name}: no sign-off while a step is pending",
+              boot.WELCOME not in mid)
+        check(f"{name}: signs off once every step reports",
+              boot.WELCOME in plain(frame(steps(3), tick=20)))
+        check(f"{name}: renders with no steps at all",
+              isinstance(frame([]), str))
+        for cols, rows in ((20, 10), (60, 24), (80, 24), (200, 60), (5, 3)):
+            fr = frame(steps(3), cols=cols, rows=rows)
+            check(f"{name}: renders a string at {cols}x{rows}",
+                  isinstance(fr, str) and fr)
+            check(f"{name}: no line overruns {cols} columns at {rows} rows",
+                  all(len(l) <= max(20, cols)
+                      for l in plain(fr).splitlines()))
+
+        # Markup discipline, asserted structurally rather than by example: the
+        # ONLY tags a frame may contain are the palette colours _tag opens and
+        # the closer it emits. Anything else - a literal '[  OK  ]' mark, a
+        # path with a bracket in it - is text that must have been escaped, and
+        # would otherwise vanish from the screen or raise on an unknown style.
+        raw = frame([boot.step("Command", "rm [dangerous] /tmp", "warn"),
+                     boot.step("Pending")])
+        stray = [t for t in TAGS.findall(raw.replace(r"\[", "\x00"))
+                 if t.strip("[]") not in set(PAL.values()) | {"/"}]
+        check(f"{name}: emits no tag that is not a palette colour or a closer",
+              not stray)
+        check(f"{name}: a '[' in a value is escaped, not opened as markup",
+              r"\[dangerous]" in raw and "dangerous" in plain(raw))
+
+    # The styles that promise the WHOLE report, not just the latest line.
+    # `minimal` is the deliberate exception and says so in its docstring: it
+    # trades the full block for two lines, which is the reason to pick it. A
+    # style added later belongs here unless it makes the same trade.
+    for name in ("bios", "console", "crt"):
+        f_all = plain(boot.render(steps(3), tick=20, cols=100, rows=40,
+                                  pal=PAL, style=name))
+        check(f"{name}: renders every label", 
+              all(f"Subsystem {i}" in f_all for i in range(3)))
+        check(f"{name}: renders every reported value",
+              all(f"value {i}" in f_all for i in range(3)))
+
+    # Style-specific promises, one each - the thing you would pick that style
+    # FOR, so a refactor that quietly turns them all back into bios fails here.
+    warned = [boot.step("Event Seam", "no post_url", "warn"),
+              boot.step("Audit Log", "corrupt", "danger"),
+              boot.step("Sessions", "4 found")]
+    con = plain(boot.render(warned, tick=20, cols=100, rows=40, pal=PAL,
+                            style="console"))
+    check("console: a warn step is marked WARN, a danger step FAIL",
+          "[ WARN ] Event Seam" in con and "[ FAIL ] Audit Log" in con)
+    check("console: a healthy step is marked OK", "[  OK  ] Sessions" in con)
+    check("console: anchors at the top, not the middle",
+          con.splitlines()[0].strip().startswith("relay"))
+    mini = plain(boot.render(steps(2), tick=9, cols=100, rows=40, pal=PAL,
+                             style="minimal"))
+    check("minimal: draws a progress bar with the work still to do",
+          boot.BAR_ON in mini and boot.BAR_OFF in mini)
+    check("minimal: stays small - no block logo",
+          "██████╗" not in mini and boot.WORDMARK in mini)
+    crt_mid = plain(boot.render(steps(2), tick=9, cols=100, rows=40, pal=PAL,
+                                style="crt"))
+    check("crt: uses dot leaders", "·····" in crt_mid)
+    check("crt: keeps the logo", "██████╗" in crt_mid)
+    # The scanline is a COLOUR sweep: the text of the frame must not move, or
+    # the boot screen would be unreadable while it played.
+    a = boot.render(steps(2), tick=9, cols=100, rows=40, pal=PAL, style="crt")
+    b = boot.render(steps(2), tick=10, cols=100, rows=40, pal=PAL, style="crt")
+    check("crt: the scanline changes colour without moving any text",
+          a != b and plain(a).replace(boot.SPIN[9 % len(boot.SPIN)], "")
+          == plain(b).replace(boot.SPIN[10 % len(boot.SPIN)], ""))
+
     # --- the plug point ----------------------------------------------------
     check("bios is a registered style", "bios" in boot.BOOT_STYLES)
     check("the default style is registered",

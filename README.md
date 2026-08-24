@@ -1375,10 +1375,23 @@ skips it**.
 ```ini
 [boot]
 enabled = true    ; false to go straight to the panel
-style   = bios    ; see boot.BOOT_STYLES
+style   = bios    ; bios | console | crt | minimal
 ```
 
-Both are editable in the settings overlay (`,`). `RELAY_NO_BOOT=1` disables it
+Four styles over the same report - pick the one you want to look at every
+morning:
+
+| style | what it is |
+|-------|-----------|
+| `bios` | the full-screen POST above (default) |
+| `console` | a top-anchored boot log: `[  OK  ]` / `[ WARN ]` / `[ FAIL ]` in one column, so a subsystem in trouble is the line your eye lands on |
+| `crt` | the POST under a phosphor scanline, dot leaders instead of a colon |
+| `minimal` | a wordmark, a progress bar, the subsystem it is waiting on and the last thing that reported - two lines, for people who want the diagnosis without the splash |
+
+Whatever the style, the rules are the same: it names the subsystem it is
+waiting on, it shows a value the moment that subsystem reports one, and it
+never signs off early. A style that only decorates is what `enabled = false`
+is for. Both keys are editable in the settings overlay (`,`). `RELAY_NO_BOOT=1` disables it
 for a single run without touching config - which is how the test suite runs,
 since a pilot pressing keys would spend its first press dismissing the screen.
 
