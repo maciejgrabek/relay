@@ -697,6 +697,25 @@ That line exists because the failure is otherwise invisible: the daily auto
 check skips in silence by design, so a machine in this state simply stops
 updating and never says so.
 
+**A clone made before 2026-08-22 cannot be pulled into.** This repo's history
+was rewritten that day to drop an internal `docs/` directory from every
+commit, so every commit after 2026-06-16 has a new hash. An older clone shares
+only the first six commits with `origin/main` and `git pull` reports divergent
+branches - correctly, and no reconciliation strategy will fix it. Check with:
+
+```bash
+git ls-files docs | head -1     # prints a path -> you are on the old history
+```
+
+If it does, save anything local first (`docs/` is tracked in the old history,
+so a hard reset DELETES it), then adopt the published history:
+
+```bash
+cp -r docs ~/relay-docs-backup            # only if that directory exists
+git fetch origin && git reset --hard origin/main
+cp -r ~/relay-docs-backup/. docs          # now gitignored, stays local
+```
+
 ## Swarm
 
 > **Status: newer and less battle-tested than the arm/approve core.** The
