@@ -1398,6 +1398,52 @@ def _update_stamp_path() -> str:
         os.environ.get("RELAY_UPDATE_STAMP", "~/.relay/update-check"))
 
 
+def upstream_state() -> tuple:
+    """(state, detail) for this checkout's ability to see a new version.
+
+    `relay update` compares HEAD against `@{u}` - the branch the current branch
+    tracks. A checkout with NO upstream has no `@{u}` at all, and the git
+    plumbing fails rather than reporting zero. That failure used to read as
+    "0 commits behind", so a machine in this state was told `already up to
+    date` forever while falling arbitrarily far behind - the same state where
+    `git pull` says "There is no tracking information for the current branch".
+    Silence about a permanent failure is the one thing an update check must
+    never do, so the state is named and carried to both callers.
+
+    States: "ok" (tracking), "detached", "untracked", "norepo", "noremote".
+    """
+    rc, _ = _git("rev-parse", "--is-inside-work-tree")
+    if rc != 0:
+        return ("norepo", "")
+    rc, remotes = _git("remote")
+    if rc != 0 or not remotes:
+        return ("noremote", "")
+    remote = remotes.splitlines()[0].strip()
+    rc, branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    branch = branch or "?"
+    rc_u, upstream = _git("rev-parse", "--abbrev-ref",
+                          "--symbolic-full-name", "@{u}")
+    if rc_u == 0 and upstream:
+        return ("ok", upstream)
+    if branch == "HEAD":
+        return ("detached", "git checkout main")
+    # set-upstream-to only works if that remote branch exists; naming both the
+    # simple fix and the general one keeps the advice honest on a feature
+    # branch that was never pushed.
+    return ("untracked",
+            f"git checkout main   (or: git branch "
+            f"--set-upstream-to={remote}/{branch} {branch})")
+
+
+def _no_upstream_msg(state: str, detail: str) -> str:
+    """One sentence naming the problem and the command that fixes it."""
+    if state == "detached":
+        return ("this checkout is on a detached HEAD, so relay cannot tell "
+                f"what is newer - in {_repo_root()}: {detail}")
+    return ("the current branch is not tracking a remote branch, so relay "
+            f"cannot tell what is newer - in {_repo_root()}: {detail}")
+
+
 def cmd_update(args) -> int:
     """Fetch and fast-forward the relay checkout to the latest version. Safe:
     ff-only never rewrites local history, and a dirty tree or missing remote
@@ -1428,8 +1474,8 @@ def cmd_update(args) -> int:
                 f.write(str(time.time()))
         except OSError:
             pass
-    rc, _ = _git("rev-parse", "--is-inside-work-tree")
-    if rc != 0:
+    state, detail = upstream_state()
+    if state == "norepo":
         return 0 if auto else _err(
             "not a git checkout - update by re-pulling however you "
             "installed relay")
@@ -1438,10 +1484,15 @@ def cmd_update(args) -> int:
         return 0 if auto else _err(
             "working tree has local changes - commit or stash them "
             "first, then rerun 'relay update'")
-    rc, remote = _git("remote")
-    if rc != 0 or not remote:
+    if state == "noremote":
         return 0 if auto else _err("no git remote configured - nothing to "
                                    "update from")
+    if state != "ok":
+        # Silent in --auto like every other skip, but this one is PERMANENT:
+        # it cannot fix itself on the next launch the way an offline day can.
+        # 'relay doctor' reports it, which is where a silently-not-working
+        # subsystem is supposed to be findable.
+        return 0 if auto else _err(_no_upstream_msg(state, detail))
     if not auto:
         print(f"current: {local_version()}")
         print("fetching...")
@@ -1450,7 +1501,13 @@ def cmd_update(args) -> int:
         return 0 if auto else _err("git fetch failed (offline?) - try again "
                                    "when connected")
     rc, counts = _git("rev-list", "--count", "--left-right", "HEAD...@{u}")
-    behind = counts.split("\t")[-1] if counts and "\t" in counts else "0"
+    if rc != 0 or not counts or "\t" not in counts:
+        # Whatever went wrong, it is not "you are up to date" - and saying so
+        # is the bug this guard exists to prevent.
+        return 0 if auto else _err(
+            "could not compare this checkout with its upstream - run "
+            f"'git status' in {_repo_root()}")
+    behind = counts.split("\t")[-1]
     if behind == "0":
         if not auto:
             print("already up to date.")
@@ -1536,6 +1593,28 @@ def cmd_selftest(args) -> int:
     return rc.get("code", 1)
 
 
+def _doctor_update() -> None:
+    """Report whether this checkout can even SEE a new version.
+
+    A branch with no upstream is invisible from inside relay: `relay update`
+    finds nothing to compare against and the daily auto-check skips in
+    silence, so the machine simply stops updating and says nothing. It is also
+    the state where `git pull` answers "There is no tracking information for
+    the current branch", which is how it usually gets noticed - on the other
+    machine, days later."""
+    ok = "\033[32m✓\033[0m"
+    no = "\033[31m✗\033[0m"
+    state, detail = upstream_state()
+    if state == "ok":
+        print(f"  update: {ok} tracking {detail}")
+    elif state == "norepo":
+        print(f"  update: {no} not a git checkout - 'relay update' cannot run")
+    elif state == "noremote":
+        print(f"  update: {no} no git remote - nothing to update from")
+    else:
+        print(f"  update: {no} {_no_upstream_msg(state, detail)}")
+
+
 def cmd_doctor(args) -> int:
     """Print swarm health from OUTSIDE the TUI - a lifeline for 'I launched it
     and I'm stuck'. Reads the DB only; never mutates. Flags the two things that
@@ -1547,6 +1626,7 @@ def cmd_doctor(args) -> int:
     cfg = relay_config.load()[0]
     print(f"relay doctor")
     print(f"  version: {local_version()}")
+    _doctor_update()
     print(f"  DB: {db.default_path()} (schema v{v})")
     print(f"  config: title_style={cfg.title_style} spawn_arm={cfg.spawn_arm} "
           f"stale_minutes={cfg.stale_minutes:g}")

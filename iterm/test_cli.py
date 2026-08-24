@@ -551,6 +551,20 @@ def run():
     ok &= check("doctor exits 0 and reports sessions/tasks",
                 code == 0 and "relay doctor" in out
                 and ("sessions:" in out or "registered" in out))
+    # An update check that cannot see its upstream is the worst kind of
+    # broken: `relay update` used to read the failed comparison as "0 commits
+    # behind" and print "already up to date" forever, while the daily auto
+    # check skipped in silence. Doctor has to name the checkout's state,
+    # whatever it is - this suite runs on developer machines that may sit on a
+    # feature branch or a detached HEAD, so the assertion is that the line
+    # EXISTS and classifies, not that it is healthy.
+    ok &= check("doctor reports whether this checkout can see a new version",
+                "update:" in out
+                and any(m in out for m in ("tracking ", "not tracking a "
+                                           "remote branch", "detached HEAD",
+                                           "not a git checkout",
+                                           "no git remote")))
+
     # A session registered before relay recorded Claude session ids reports no
     # token usage, and the ONLY symptom in the panel is a blank CTX cell -
     # indistinguishable from the feature not being there. Doctor is where you

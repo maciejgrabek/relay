@@ -670,6 +670,22 @@ relay version          # what you have now
 relay update           # fetch + fast-forward (safe: stops on local changes)
 ```
 
+The check compares your branch against the branch it tracks, so a checkout
+with **no upstream** cannot be compared at all - the state where `git pull`
+answers *"There is no tracking information for the current branch"*. Relay
+refuses to guess and says which command fixes it, and `relay doctor` reports
+the checkout's tracking state on every run:
+
+```
+  update: ✓ tracking origin/main
+  update: ✗ the current branch is not tracking a remote branch, so relay
+            cannot tell what is newer - in ~/Work/relay: git checkout main
+```
+
+That line exists because the failure is otherwise invisible: the daily auto
+check skips in silence by design, so a machine in this state simply stops
+updating and never says so.
+
 ## Swarm
 
 > **Status: newer and less battle-tested than the arm/approve core.** The
