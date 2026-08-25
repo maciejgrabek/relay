@@ -535,6 +535,12 @@ async def go():
             ao._row_sids == ["OWN-1"])
         sub = str(ao.query_one("#subtitle", appmod.Static).render())
         chk("own panel row not counted as awaiting", "awaiting" not in sub)
+        # The unit count is "sessions relay can control", not "tabs on screen".
+        # Relay's own panel is a tab it will never act on, so counting it made
+        # a lone relay claim a fleet of one it does not have.
+        chk("own panel row not counted as a unit", "0 units" in sub)
+        chk("the panel's own subtitle agrees",
+            "0 units" in str(ao.query_one(appmod.DataTable).border_subtitle))
 
     # --- quit guard: instant when idle, double-press when something's live ---
     # RELAY_DB is set at module scope now (see top of file) - the eleven

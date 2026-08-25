@@ -1661,8 +1661,11 @@ class RelayApp(App):
         """The first sweep landed - report what it found. Driven by the
         watcher's own change callback because start() never returns."""
         try:
-            sessions = (self.watcher.sessions if self.watcher else {}) or {}
-            armed = sum(1 for i in sessions.values()
+            # Relay's own panel tab excluded, same as the header counts -
+            # otherwise boot reports a fleet one larger than the one the
+            # panel shows a second later, on every single start.
+            sessions = self._controllable()
+            armed = sum(1 for i in sessions
                         if getattr(i, "mode", "off") != "off")
             self._boot_report("Sessions",
                               f"{len(sessions)} found · {armed} armed",
@@ -2125,7 +2128,10 @@ class RelayApp(App):
         else:
             hint = ""
         # Attention counts: only the parts that are non-zero earn header space.
-        # Own panel row excluded - it can never legitimately await a human.
+        # `others` is the FLEET, as distinct from the tabs on screen: relay's
+        # own panel is a session iTerm2 reports and relay will never act on, so
+        # it is not a unit and can never legitimately await a human. Every
+        # count the header shows comes from here, not from `sess`.
         others = [i for i in sess if i.session_id != self._own_sid]
         # Power: hold the assertion while anything is working, release when the
         # fleet has been quiet for [power] release_after minutes. Own row
@@ -2221,7 +2227,7 @@ class RelayApp(App):
             n_attn = sum(1 for i in sess
                          if i.session_id != self._own_sid
                          and needs_action(i.state, getattr(i, "stale", False)))
-            sub = f"{len(sess)} units · {armed} armed"
+            sub = f"{len(others)} units · {armed} armed"
             if n_attn:
                 sub += f" · {n_attn} needs you"
             self.query_one(DataTable).border_subtitle = sub
@@ -2230,7 +2236,7 @@ class RelayApp(App):
         self.query_one("#subtitle", Static).update(
             blind_tag + pause_tag +
             f"[{DIM}]RELAY · SESSION CONTROL ·[/] "
-            f"[{BRIGHT}]{len(sess)} units[/] [{DIM}]·[/] "
+            f"[{BRIGHT}]{len(others)} units[/] [{DIM}]·[/] "
             f"[{WARN}]{armed} armed[/] [{DIM}]·[/] "
             f"[{CYAN}]{appr}✓[/] [{DANGER}]{esc}⊘[/]{attn}{dry}{hint}")
         self._update_preview()
@@ -4267,7 +4273,7 @@ class RelayApp(App):
                     timer_next=getattr(self, "_timers_fleet_next", None)),
                 armed=armed_n, awaiting=awaiting, working=working,
                 paused=paused, band=label,
-                sessions=len(self.watcher.sessions),
+                sessions=len(self._controllable()),
                 panel_sid=self._own_sid, attention_sid=att))
         except Exception:
             pass   # an ambient widget must never break the panel
