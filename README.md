@@ -483,6 +483,7 @@ can't silently auto-approve.)
 | `m` | **Mascot widget**: open / close the floating desktop creature (see [The desktop widget](#the-desktop-widget)). Inert while an overlay is open, where `m` belongs to that overlay |
 | `c` | **Caffeinate**: release the assertion so the Mac may sleep, or take it back. A release you make by hand is **sticky** - a session waking at 3am won't undo it - where an automatic one (`[power] release_after`) re-acquires the moment anything starts working. The header shows the countdown while it runs, and says so once released. Inert behind an open overlay, like `m` |
 | `?` | Help overlay: key map + arm-level cheat sheet |
+| `:` | Open the **command line**: type any capability by name (see [Commands](#commands-)) |
 | `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
@@ -515,6 +516,58 @@ you answering a prompt yourself from the panel - it works on **any** session,
 armed or not, **even in `--dry-run`**, because pressing a key is a deliberate
 human action, not automatic injection. So you can keep every session in manual
 mode and just use Relay as one place to navigate between them and answer.
+
+### Commands (`:`)
+
+Press `:` to open a command line at the bottom of the panel. `TAB` completes
+the name you've typed so far, `ESC` cancels, and `ENTER` submits.
+
+Every capability in the panel - every key in the table above, plus a few
+that never had a key - is a named command, and the key bar, the `:`
+completion list, and the `?` overlay are all generated from one table
+(`iterm/commands.py`). That's the point: two keys (`w` workspaces, `S` save
+layout) once shipped working and invisible, because the key bar and the `?`
+overlay were two hand-maintained lists, and adding a key to `BINDINGS`
+touched neither. Now there is one list; a capability that isn't in it can't
+be bound, completed, or shown, and one that is in it shows up everywhere by
+construction.
+
+Keys did not change - everything that had a key still has it. The key bar
+only shows eight of those entries, the ones used dozens of times an hour
+(move, arm, go to the tab, swarm view, pause, quit, send a digit); every
+other command kept its key, it simply left the one-line bar, and is still
+listed by key and by name (`:name`) in the `?` overlay.
+
+A command that acts on a session (`:arm`, `:shadow`, `:hide`, `:park`,
+`:extreme`) defaults to the selected row, same as its key would. Name a
+session explicitly to target a different one: `:arm w1` moves the cursor to
+the session registered as `w1` and arms that one, leaving whatever was
+selected untouched.
+
+Four commands are destructive and refuse to run without a trailing `!`:
+`:restore`, `:wipe`, `:zap`, `:extreme`. `:wipe` alone prints what it would
+do and stops there; `:wipe!` clears that gate and falls through to the same
+arm-then-confirm safety its key (`W`) already uses - so from an unarmed
+state the first `:wipe!` arms it, exactly like a first `W` press, and it
+takes a second confirming `:wipe!` (or a `W` press) inside the countdown to
+actually delete.
+
+`:ws`, `:doctor`, and `:recap` don't act inside the panel - they shell out
+to the `relay` CLI and print its output into the log pane. That happens in
+the background: the command's echo line appears immediately, but the
+roster keeps running while the subprocess is still going, and the result
+lands whenever it finishes, tagged with an invocation number (`[1]`, `[2]`,
+...) so two overlapping commands can't be attributed to each other.
+
+Not everything relay can do is exposed here. Sixteen worker-protocol verbs
+- `register`, `join`, `send`, `status`, `inbox`, `next`, `reply`, `ask`,
+`say`, `agree`, `close`, `discuss`, `thread`, `task`, `timer`, `pr` - have
+no `:` command at all: a Claude session runs those about itself as a
+participant in a swarm, and running `register` or `join` from relay's own
+panel would wrongly enroll relay's own tab as a session in the swarm it's
+supervising. (`:help` does exist, but it's the TUI's own help overlay - it
+shares a name with, and is otherwise unrelated to, the worker protocol's
+`help` verb.)
 
 ### Audit trail
 
