@@ -1431,6 +1431,8 @@ class RelayApp(App):
         Binding("v", "audit_view", "Audit view", show=False),
         Binding("f", "toggle_preview", "Feed on/off", show=False),
         Binding("t", "timers", "Timers", show=False),
+        Binding("w", "workspaces", "Workspaces", show=True),
+        Binding("S", "ws_save", "Save layout", show=True),
         Binding("tab", "swarm_view", "Swarm", priority=True),
         Binding("R", "restore", "Restore", show=True),
         Binding("W", "wipe", "Wipe", show=True),
@@ -1508,6 +1510,7 @@ class RelayApp(App):
         # None | {"sid": str, "name": str, "workdir": str, "buf": str,
         #         "dir": bool} - the park-an-idea capture modal
         self._park = None
+        self._wssave = None          # {"buf": str} while the name is typed
         # The item `d` has been pressed on ONCE. Dropping is permanent with no
         # undo, so it arms first and the second press confirms - the R / W / Z
         # shape. Held as an ID, not an index: the cursor can move and the list
@@ -3278,6 +3281,22 @@ class RelayApp(App):
             event.stop()
             event.prevent_default()
             return
+        if self._wssave is not None:
+            k = event.key
+            if k == "escape":
+                self._wssave_close()
+            elif k == "enter":
+                self._wssave_commit()
+            elif k == "backspace":
+                self._wssave["buf"] = self._wssave["buf"][:-1]
+                self._wssave_render()
+            elif len(getattr(event, "character", "") or "") == 1 \
+                    and event.character.isprintable():
+                self._wssave["buf"] += event.character
+                self._wssave_render()
+            event.stop()
+            event.prevent_default()
+            return
         if self._parked_visible and self._parked_edit is not None:
             # Every key belongs to the focused title Input (same rule as the
             # timers payload form below). ENTER arrives via
@@ -3665,6 +3684,78 @@ class RelayApp(App):
             return
         self._restore_armed = False
         self._shell_verb("restore", "respawning dead workers")
+
+    def action_workspaces(self) -> None:
+        """Show what is defined. Opening one is `relay ws up <name>`."""
+        if self._any_overlay_open():
+            return
+        import wsconfig
+        try:
+            _, spaces = wsconfig.load()
+        except wsconfig.ConfigError as exc:
+            self._modal_show("NO WORKSPACES", [str(exc)[:60],
+                                               "", "S saves the current layout"])
+            return
+        if not spaces:
+            self._modal_show("NO WORKSPACES",
+                             ["Nothing defined yet.",
+                              "", "S saves the current layout"])
+            return
+        lines = []
+        for name in sorted(spaces):
+            tabs = spaces[name]
+            armed = sum(1 for t in tabs if t.arm)
+            suffix = f", {armed} armed" if armed else ""
+            lines.append(f"{name}  ({len(tabs)} tabs{suffix})")
+        lines += ["", "open one with:  relay ws up <name>"]
+        self._modal_show("WORKSPACES", lines)
+
+    def action_ws_save(self) -> None:
+        if self._any_overlay_open():
+            return
+        self._wssave = {"buf": ""}
+        self._wssave_render()
+
+    def _wssave_render(self) -> None:
+        s = self._wssave
+        if s is None:
+            return
+        w = self.query_one("#modal", Static)
+        w.update(
+            "\n SAVE LAYOUT AS WORKSPACE\n\n"
+            f"  name: {s['buf']}█\n\n"
+            "  Saves this window's tabs (name + directory).\n"
+            "  A running tab cannot report its command,\n"
+            "  so fill in each cmd afterwards.\n\n"
+            "  ENTER save    ESC cancel\n")
+        w.display = True
+
+    def _wssave_close(self) -> None:
+        self._wssave = None
+        w = self.query_one("#modal", Static)
+        w.display = False
+
+    def _wssave_commit(self) -> None:
+        s = self._wssave
+        if s is None or not s["buf"].strip():
+            return
+        name = s["buf"].strip()
+        import wsconfig
+        # Check here rather than letting the CLI refuse: _shell_verb sends
+        # stdout and stderr to DEVNULL, so a refusal there would be invisible.
+        try:
+            _, spaces = wsconfig.load()
+        except wsconfig.ConfigError:
+            spaces = {}
+        self._wssave_close()
+        if name in spaces:
+            self._modal_show("ALREADY EXISTS",
+                             [f'"{name}" is already defined.', "",
+                              "Replace it from a shell:",
+                              f"  relay ws save {name} --force"])
+            return
+        self._shell_verb("ws", f"saving this window as {name}",
+                         extra=["save", name])
 
     # --- wipe (delete orphaned task-owner work) --------------------------
     def action_wipe(self) -> None:
