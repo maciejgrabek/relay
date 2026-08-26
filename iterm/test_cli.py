@@ -284,6 +284,64 @@ def _ws_checks(ok):
         wsbuildmod.live_tab_names = orig_live
         wsbuildmod.build = orig_build
 
+    # --- up: a Ctrl-C once build() has actually started must NOT be
+    # reported as "aborted." - windows may already be on screen by then, and
+    # saying nothing happened would be a silent misreport, worse than round
+    # 1's unhandled traceback. Case A (before build begins) still cleanly
+    # declines; case B (after) says so honestly and exits non-zero.
+    iterm2mod.run_until_complete = _drive_via_asyncio
+    try:
+        # Case A: interrupted at the confirm, before build() is ever called.
+        cli._confirm = _raise_interrupt
+        wsbuildmod.live_tab_names = _empty_live
+        before_calls = []
+
+        async def _spy_build_before(connection, tabs, warmup, target):
+            before_calls.append(list(tabs))
+            return []
+        wsbuildmod.build = _spy_build_before
+
+        escaped = False
+        try:
+            code, out, _ = run_cli("ws", "up", "upws", "--config", upws_path)
+        except KeyboardInterrupt:
+            escaped = True
+            code, out = None, ""
+        ok &= check("interrupted BEFORE build() still declines cleanly: "
+                    "exit 0, aborted.",
+                    not escaped and code == 0 and "aborted." in out)
+        ok &= check("...and build() was never called",
+                    before_calls == [])
+
+        # Case B: interrupted once build() has actually begun. --yes skips
+        # the confirm so build() is reached directly.
+        cli._confirm = orig_confirm
+
+        async def _boom_build(connection, tabs, warmup, target):
+            raise KeyboardInterrupt()
+        wsbuildmod.build = _boom_build
+
+        escaped = False
+        try:
+            code, out, _ = run_cli("ws", "up", "upws", "--config", upws_path,
+                                   "--yes")
+        except KeyboardInterrupt:
+            escaped = True
+            code, out = None, ""
+        ok &= check("interrupted AFTER build() has begun is reported "
+                    "honestly, not as aborted.",
+                    not escaped and "aborted." not in out)
+        ok &= check("...names the real risk: tabs may already be open",
+                    not escaped
+                    and "some tabs may already be open" in out)
+        ok &= check("...and exits non-zero: this did not cleanly decline",
+                    not escaped and code != 0)
+    finally:
+        iterm2mod.run_until_complete = orig_run_until_complete
+        cli._confirm = orig_confirm
+        wsbuildmod.live_tab_names = orig_live
+        wsbuildmod.build = orig_build
+
     return ok
 
 

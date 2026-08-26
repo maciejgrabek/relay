@@ -2455,6 +2455,15 @@ def cmd_ws(args) -> int:
     import asyncio
     import wsbuild
 
+    # Visible to cmd_ws after _ws_iterm returns, same shape as _ws_iterm's own
+    # `box` - NOT a global, since a second `ws up` in the same process must
+    # not see a stale True from a previous call. A Ctrl-C during the confirm
+    # (nothing built yet) and a Ctrl-C during build() (windows may already be
+    # on screen) are different facts and need different messages: the first
+    # is a clean decline, the second is a botched operation that must not be
+    # reported as "aborted." while tabs are actually sitting there.
+    build_state = {"started": False}
+
     async def _up(connection):
         # ONE connection for the whole verb - probe, plan, confirm and build
         # all share it. Two connections (as this used to be) let a second
@@ -2495,11 +2504,26 @@ def cmd_ws(args) -> int:
         target = "current" if args.here else (
             "new" if args.new else str(settings.get("target", "new")))
         warmup = float(settings.get("warmup", 1.5))
+        # Set BEFORE the call, not after: build() has real awaits and a
+        # warmup sleep, so a Ctrl-C can land anywhere inside it, and the flag
+        # exists precisely to be visible to a caller who never sees this
+        # coroutine return at all.
+        build_state["started"] = True
         notes = await wsbuild.build(connection, build, warmup, target)
         return {"notes": notes}
 
     result, err = _ws_iterm(_up, "open the workspace")
     if result is _WS_ABORTED:
+        if build_state["started"]:
+            # Round 1 turned an interrupted build into an unhandled
+            # traceback (at least a visible signal that something broke);
+            # reporting it as a clean "aborted." would be worse than that -
+            # a silent misreport while tabs are actually on screen. Say so,
+            # and exit non-zero: the operation neither completed nor
+            # cleanly declined.
+            print("interrupted while opening the workspace - some tabs may "
+                  "already be open; check your windows")
+            return 1
         print("aborted.")
         return 0
     if err:
