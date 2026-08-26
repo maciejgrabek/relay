@@ -121,6 +121,8 @@ def run():
     ok &= check("ARM_MODES matches db.ARM_REQUEST_MODES", _arm_modes_match())
     ok &= check("ROLES matches db.ROLES", _roles_match())
 
+    ok = _round_trip(ok)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
@@ -159,6 +161,69 @@ def _arm_modes_match():
 def _roles_match():
     import db
     return tuple(wsconfig.ROLES) == tuple(db.ROLES)
+
+
+def _round_trip(ok):
+    """render() must produce TOML that load() reads back identically."""
+    _, spaces = wsconfig.load(_write(FULL))
+    tabs = spaces["dragen"]
+    text = wsconfig.render("dragen", tabs)
+    _, again = wsconfig.load(_write(text))
+    ok &= check("render round-trips through load", again["dragen"] == tabs)
+    ok &= check("render omits an unset arm",
+                "arm" not in text.split("[[dragen]]")[1])
+    ok &= check("render keeps a set arm", 'arm = "safe"' in text)
+    ok &= check("render keeps panes", "panes = [" in text)
+    ok &= check("render collapses $HOME to ~", '"~/Work/dragen"' in text)
+
+    quoted = [wsconfig.Tab(name='say "hi"', dir="/tmp",
+                             cmd='echo \\ "q"')]
+    _, back = wsconfig.load(_write(wsconfig.render("q", quoted)))
+    ok &= check("quotes and backslashes round-trip", back["q"] == quoted)
+
+    stripped = wsconfig.strip_block(FULL, "dragen")
+    ok &= check("strip_block drops the workspace",
+                "[[dragen]]" not in stripped)
+    ok &= check("strip_block keeps other tables",
+                "[settings]" in stripped and "warmup" in stripped)
+
+    path = _write(FULL)
+    raised = ""
+    try:
+        wsconfig.save(path, "dragen", tabs)
+    except wsconfig.ConfigError as exc:
+        raised = str(exc)
+    ok &= check("save refuses to clobber without force", "force" in raised)
+
+    wsconfig.save(path, "dragen", tabs[:1], force=True)
+    _, after = wsconfig.load(path)
+    ok &= check("save --force replaces the workspace",
+                len(after["dragen"]) == 1)
+    ok &= check("save --force keeps settings",
+                after is not None and wsconfig.load(path)[0].get("warmup") == 2.0)
+
+    path2 = _write(FULL)
+    wsconfig.save(path2, "other", tabs[:1])
+    _, both = wsconfig.load(path2)
+    ok &= check("save appends a new workspace",
+                sorted(both) == ["dragen", "other"])
+
+    ok &= check("save creates a missing file",
+                _save_into_new_file())
+
+    path3 = _write(FULL)
+    ok &= check("remove reports a hit", wsconfig.remove(path3, "dragen"))
+    ok &= check("remove drops it", "dragen" not in wsconfig.load(path3)[1])
+    ok &= check("remove reports a miss",
+                wsconfig.remove(path3, "nosuch") is False)
+    return ok
+
+
+def _save_into_new_file():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "sub", "workspaces.toml")
+    wsconfig.save(p, "x", [wsconfig.Tab(name="a", dir="/tmp")])
+    return "x" in wsconfig.load(p)[1]
 
 
 if __name__ == "__main__":

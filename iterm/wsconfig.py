@@ -165,3 +165,121 @@ def group_windows(tabs: List[Tab]) -> List[Tuple[int, List[Tab]]]:
             order.append(tab.window)
         groups[tab.window].append(tab)
     return [(w, groups[w]) for w in order]
+
+
+def _q(value: str) -> str:
+    """A TOML basic string. Only backslash and quote need escaping here; a
+    workspace name or command containing a raw newline is not something we
+    round-trip, and load() would reject the result loudly rather than quietly."""
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _tilde(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def _render_pane(pane: Pane) -> str:
+    bits = []
+    if pane.cmd:
+        bits.append(f"cmd = {_q(pane.cmd)}")
+    if pane.dir:
+        bits.append(f"dir = {_q(_tilde(pane.dir))}")
+    bits.append(f"split = {_q(pane.split)}")
+    return "{ " + ", ".join(bits) + " }"
+
+
+def render(name: str, tabs: List[Tab]) -> str:
+    """Tabs back to a TOML block. Only non-default keys are written, so a
+    hand-edited file stays as short as what the operator actually meant."""
+    lines: List[str] = []
+    for tab in tabs:
+        lines.append(f"[[{name}]]")
+        lines.append(f"name = {_q(tab.name)}")
+        lines.append(f"dir = {_q(_tilde(tab.dir))}")
+        if tab.cmd:
+            lines.append(f"cmd = {_q(tab.cmd)}")
+        if tab.arm:
+            lines.append(f"arm = {_q(tab.arm)}")
+        if tab.prompt:
+            lines.append(f"prompt = {_q(tab.prompt)}")
+        if tab.prompt and tab.role != "worker":
+            lines.append(f"role = {_q(tab.role)}")
+        if tab.project:
+            lines.append(f"project = {_q(tab.project)}")
+        if tab.window != 1:
+            lines.append(f"window = {tab.window}")
+        if tab.panes:
+            lines.append("panes = [ "
+                         + ", ".join(_render_pane(p) for p in tab.panes)
+                         + " ]")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _is_header(line: str) -> Optional[str]:
+    """The table name a line declares, or None. Handles [x] and [[x]]."""
+    s = line.strip()
+    if s.startswith("[[") and s.endswith("]]"):
+        return s[2:-2].strip().strip('"')
+    if s.startswith("[") and s.endswith("]"):
+        return s[1:-1].strip().strip('"')
+    return None
+
+
+def strip_block(text: str, name: str) -> str:
+    """Every [[name]] table removed, everything else preserved verbatim.
+
+    Comments sitting directly above a removed block are orphaned rather than
+    removed with it - a comment belongs to whoever wrote it, and guessing
+    which ones "belong" to the table below would delete more than asked.
+    """
+    out: List[str] = []
+    dropping = False
+    for line in text.splitlines():
+        header = _is_header(line)
+        if header is not None:
+            dropping = header == name
+        if not dropping:
+            out.append(line)
+    return "\n".join(out)
+
+
+def save(path: str, name: str, tabs: List[Tab], force: bool = False) -> None:
+    """Write `name` into the file at `path`, creating it if absent."""
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = ""
+
+    if text.strip():
+        _, existing = load(path)
+        if name in existing:
+            if not force:
+                raise ConfigError(
+                    f'workspace "{name}" already exists - pass force to '
+                    f"replace it")
+            text = strip_block(text, name)
+
+    body = render(name, tabs)
+    joined = (text.rstrip("\n") + "\n\n" + body) if text.strip() else body
+
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(joined.rstrip("\n") + "\n")
+
+
+def remove(path: str, name: str) -> bool:
+    """Drop a workspace. True when it was there, False when it was not."""
+    _, existing = load(path)
+    if name not in existing:
+        return False
+    with open(path) as fh:
+        text = fh.read()
+    with open(path, "w") as fh:
+        fh.write(strip_block(text, name).rstrip("\n") + "\n")
+    return True
