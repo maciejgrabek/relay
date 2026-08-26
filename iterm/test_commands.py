@@ -156,6 +156,18 @@ def run():
                 commands.validate([
                     commands.Cmd(name="x", help="h", action="a", key="a,,b")]) != [])
 
+    # Fix 6: NEVER_EXPOSE is a blacklist; EXPOSE is the allowlist a `cli=`
+    # entry must additionally satisfy. A verb not on either list (not
+    # dangerous, just not routed) must still fail - it is not vetted.
+    ok &= check("validate catches a cli verb not in EXPOSE",
+                commands.validate([
+                    commands.Cmd(name="x", help="h",
+                                 cli="frobnicate")]) != [])
+    ok &= check("every table entry's cli verb (if any) is in EXPOSE",
+                all(c.cli in commands.EXPOSE for c in table if c.cli))
+    ok &= check("EXPOSE and NEVER_EXPOSE do not overlap",
+                commands.EXPOSE & commands.NEVER_EXPOSE == set())
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok

@@ -27,6 +27,17 @@ NEVER_EXPOSE = frozenset({
     "help",
 })
 
+# NEVER_EXPOSE is a blacklist - it stops the worker-protocol verbs, but says
+# nothing about what a `cli=` entry MAY point at. `bin/relay` dispatches any
+# verb it recognizes, including ones with their own full-screen TUI (a bare
+# `relay` with no verb, for instance); routing a table entry at one of those
+# would launch a SECOND Textual app underneath this one, which _cmd_run_cli
+# would then dutifully capture as text and kill at the 8s timeout. EXPOSE is
+# the allowlist: only a verb named here may ever appear as `cli=` on a table
+# entry, so a typo or a future verb added to bin/relay cannot be shelled out
+# by accident.
+EXPOSE = frozenset({"ws", "doctor", "recap"})
+
 
 @dataclass(frozen=True)
 class Cmd:
@@ -98,6 +109,10 @@ def validate(table) -> List[str]:
             problems.append(
                 f"{cmd.name}: {cmd.cli} is a worker protocol verb and must "
                 f"never be exposed in the TUI")
+        if cmd.cli and cmd.cli not in EXPOSE:
+            problems.append(
+                f"{cmd.name}: cli={cmd.cli!r} is not in EXPOSE - a `cli=` "
+                f"entry may only name a verb explicitly allowlisted there")
         # `help` is exempt: NEVER_EXPOSE governs which CLI verbs may be
         # SHELLED OUT, and the TUI's `?`-overlay command never shells out
         # anything - it shares a stem with the worker protocol's `help`
