@@ -230,6 +230,60 @@ def _ws_checks(ok):
         wsbuildmod.snapshot_rows = orig_snapshot_rows
         cli._ws_iterm = orig_ws_iterm
 
+    # --- up: a Ctrl-C at the confirm prompt declines, it does not crash ---
+    # Deliberately does NOT use the _fake_ws_iterm stand-in above: that would
+    # only prove our own test double happens to swallow KeyboardInterrupt,
+    # not that cli._ws_iterm's real except-KeyboardInterrupt clause does. So
+    # this drives the REAL _ws_iterm (restored above) and stubs only
+    # iterm2.run_until_complete itself - the exact call the real fix wraps -
+    # to actually run the coroutine in-process instead of opening a socket.
+    import iterm2 as iterm2mod
+    orig_run_until_complete = iterm2mod.run_until_complete
+    orig_confirm = cli._confirm
+
+    def _drive_via_asyncio(coro, retry, debug=False):
+        return asyncio.run(coro(None))
+
+    def _raise_interrupt(question):
+        raise KeyboardInterrupt()
+
+    interrupt_build_calls = []
+
+    async def _spy_build_interrupt(connection, tabs, warmup, target):
+        interrupt_build_calls.append(list(tabs))
+        return []
+
+    iterm2mod.run_until_complete = _drive_via_asyncio
+    cli._confirm = _raise_interrupt
+    wsbuildmod.live_tab_names = _empty_live      # reach the confirm at all
+    wsbuildmod.build = _spy_build_interrupt
+
+    try:
+        escaped = False
+        try:
+            # No --yes: the point is to reach the confirm prompt this stubs.
+            code, out, err = run_cli("ws", "up", "upws", "--config",
+                                     upws_path)
+        except KeyboardInterrupt:
+            # Without the fix this is exactly what happens: the exception
+            # reaches here instead of being handled inside cli.main(). Caught
+            # so ONE missing fix fails this check cleanly instead of
+            # crashing every check the rest of this suite would have run.
+            escaped = True
+            code, out = None, ""
+        ok &= check("Ctrl-C at the confirm prompt is handled, not left to "
+                    "escape as a raw KeyboardInterrupt", not escaped)
+        ok &= check("...and treated as a decline: exit 0",
+                    not escaped and code == 0)
+        ok &= check("...printing the same aborted. line any other decline "
+                    "does", not escaped and "aborted." in out)
+        ok &= check("...never reaching build()", interrupt_build_calls == [])
+    finally:
+        iterm2mod.run_until_complete = orig_run_until_complete
+        cli._confirm = orig_confirm
+        wsbuildmod.live_tab_names = orig_live
+        wsbuildmod.build = orig_build
+
     return ok
 
 

@@ -2337,6 +2337,22 @@ def _ws_iterm(coro_factory, what: str):
     connected) gets a printed traceback and sys.exit(1) from the iterm2
     library, which no outer `except Exception` can catch - so the coroutine
     catches its own.
+
+    A Ctrl-C is a THIRD shape, and a subtle one: cmd_ws's `up` verb awaits its
+    confirmation prompt via loop.run_in_executor so the confirm does not block
+    this connection, but a real SIGINT is delivered to the MAIN thread
+    wherever it happens to be - not to the executor's worker thread actually
+    running input() - so it lands inside the event loop's own wait, not inside
+    any coroutine's try/except. asyncio.BaseEventLoop.run_until_complete (what
+    iterm2's Connection.run() calls internally) does not convert that into
+    task cancellation; it just lets KeyboardInterrupt fall straight out,
+    abandoning every task - including `run` above - without giving its own
+    `except Exception` a chance to see it (KeyboardInterrupt is a
+    BaseException, which `except Exception` never catches). This is the one
+    place that reliably sees it for every ws verb that reaches this helper, so
+    it is treated the same as declining any other confirmation: return the
+    _WS_ABORTED sentinel and let the caller print "aborted." and build
+    nothing, rather than let a Ctrl-C surface as an unhandled traceback.
     """
     import iterm2
     box = {"value": None, "err": ""}
@@ -2349,12 +2365,19 @@ def _ws_iterm(coro_factory, what: str):
 
     try:
         iterm2.run_until_complete(run, False)
+    except KeyboardInterrupt:
+        return _WS_ABORTED, ""
     except (SystemExit, Exception):                  # noqa: BLE001
         return None, (f"could not connect to iTerm to {what} - is it "
                       f"running, and is its Python API enabled? "
                       f"(iTerm2 > Preferences > General > Magic)")
     return box["value"], box["err"]
 
+
+# Distinct from any real value _ws_iterm ever returns (a list, a dict, None
+# for a clean iTerm-side failure) - a plain `is` check can never collide with
+# a coroutine's own result by accident.
+_WS_ABORTED = object()
 
 _WS_NO_LIVE_GUARD = ("could not read which tabs are already open - refusing "
                      "to build, because the guard that stops a restore from "
@@ -2371,6 +2394,9 @@ def cmd_ws(args) -> int:
         rows, err = _ws_iterm(
             lambda c: wsbuild.snapshot_rows(c, all_windows=args.all),
             "read the current window")
+        if rows is _WS_ABORTED:
+            print("aborted.")
+            return 0
         if err:
             return _err(err)
         tabs = wsconfig.snapshot(rows or [])
@@ -2473,6 +2499,9 @@ def cmd_ws(args) -> int:
         return {"notes": notes}
 
     result, err = _ws_iterm(_up, "open the workspace")
+    if result is _WS_ABORTED:
+        print("aborted.")
+        return 0
     if err:
         return _err(err)
     result = result or {}
