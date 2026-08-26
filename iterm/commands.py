@@ -241,6 +241,8 @@ CMD = (
     # it avoided.
     Cmd(name="help", help="this help", action="action_help",
         key="question_mark"),
+    Cmd(name="commands", help="open the command line", action="action_command_mode",
+        key="colon"),
 
     Cmd(name="restore", help="respawn dead task-owners (double-press confirms)",
         action="action_restore", key="R", confirm=True),

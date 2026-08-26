@@ -1459,6 +1459,7 @@ class RelayApp(App):
         Binding("E", "extreme", "Extreme", show=True),
         Binding("exclamation_mark", "intervene", "Intervene", show=True),
         Binding("question_mark", "help", "Help", show=False),
+        Binding("colon", "command_mode", "Commands", show=False),
         Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
     ]
@@ -1530,6 +1531,7 @@ class RelayApp(App):
         #         "dir": bool} - the park-an-idea capture modal
         self._park = None
         self._wssave = None          # {"buf": str} while the name is typed
+        self._cmdline = None          # {"open": True} while the `:` line is open
         # The item `d` has been pressed on ONCE. Dropping is permanent with no
         # undo, so it arms first and the second press confirms - the R / W / Z
         # shape. Held as an ID, not an index: the cursor can move and the list
@@ -1557,7 +1559,8 @@ class RelayApp(App):
                 or self._help_visible or self._timers_visible
                 or self._parked_visible
                 or self._modal_open or self._park is not None
-                or self._intervene is not None or self._wssave is not None)
+                or self._intervene is not None or self._wssave is not None
+                or self._cmdline is not None)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -2778,6 +2781,28 @@ class RelayApp(App):
             # stays open underneath. See commit 5ad1076.
             self._wssave_close()
             return
+        if self._cmdline is not None:
+            # `tab` is bound priority=True, which means Textual's App.on_event
+            # runs _check_bindings(priority=True) and, on a match, NEVER
+            # forwards the key event to the focused widget at all (see
+            # textual/app.py) - #cmdline's own Input.on_key, and this app's
+            # on_key, are both skipped entirely. This is therefore the ONLY
+            # place TAB can be intercepted while the command line is open;
+            # an on_key branch for "tab" would be dead code. Same shape as
+            # _intervene/_park/_wssave above, doing completion instead of a
+            # plain close.
+            try:
+                inp = self.query_one("#cmdline")
+            except Exception:
+                return
+            matches = commands.complete(inp.value.strip().lstrip(":"),
+                                        commands.CMD)
+            if len(matches) == 1:
+                inp.value = matches[0] + " "
+                inp.cursor_position = len(inp.value)
+            elif matches:
+                self.query_one(Log).write_line("  " + "  ".join(matches))
+            return
         if self._modal_open:
             # Bound with priority=True (so Tab works while an Input holds
             # focus), which means Textual dispatches this action BEFORE
@@ -2941,7 +2966,35 @@ class RelayApp(App):
                                  mode=mode)
         self._timer_form_close()
 
+    # --- command line (`:` opens it, mirrors _timer_form) ----------------------
+    def action_command_mode(self) -> None:
+        if self._any_overlay_open():
+            return
+        self._cmdline = {"open": True}
+        inp = Input(placeholder="command (TAB completes, ESC cancels)",
+                    id="cmdline")
+        self.query_one("#middle").mount(inp)
+        inp.focus()
+
+    def _cmdline_close(self) -> None:
+        self._cmdline = None
+        try:
+            self.query_one("#cmdline").remove()
+        except Exception:
+            pass          # already gone: closing twice must not raise
+
+    def _cmdline_submit(self, line: str) -> None:
+        name, args, bang = commands.parse(line)
+        if not name:
+            return
+        self.query_one(Log).write_line(f":{name} {' '.join(args)}".rstrip())
+
     def on_input_submitted(self, event) -> None:
+        if self._cmdline is not None:
+            line = event.value
+            self._cmdline_close()
+            self._cmdline_submit(line)
+            return
         if self._parked_edit is not None:
             self._parked_edit_save()
         elif self._timer_form is not None:
@@ -3255,6 +3308,18 @@ class RelayApp(App):
         # priority binding for its own `if self._modal_open: ...` guard.
         if self._modal_open:
             self._modal_close()
+            event.stop()
+            event.prevent_default()
+            return
+        if self._cmdline is not None and event.key == "escape":
+            # TAB is deliberately NOT handled here - it is bound priority=True
+            # (action_swarm_view), so Textual consumes it before this handler
+            # (or the focused #cmdline Input) ever sees it. See the _cmdline
+            # branch in action_swarm_view for where TAB completion actually
+            # lives. ESC is not priority-bound, so it reaches #cmdline's
+            # Input (which does not stop non-printable keys) and bubbles
+            # here same as every other real-Input form in this file.
+            self._cmdline_close()
             event.stop()
             event.prevent_default()
             return
