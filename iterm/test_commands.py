@@ -78,6 +78,22 @@ def run():
     ok &= check('help_rows includes (":answer", "send Enter to the selected session")',
                 (":answer", "send Enter to the selected session") in help_rows)
 
+    # Task 3 review finding 1: `colon` shipped with no _KEY_DISPLAY entry, so
+    # the ?-overlay rendered the literal Textual token ("colon") instead of
+    # the glyph (":") - the same bug class Task 2 fixed as its finding F3,
+    # recurring because a NEW key was added and the map was not extended.
+    # Guard the whole class, not just this one instance: no raw multi-
+    # character Textual key name may survive into the KEY COLUMN help_rows()
+    # hands to the `?` overlay (checking the column, not the whole row text,
+    # is deliberate - "space" or "escape" could otherwise false-positive
+    # against ordinary help prose).
+    _RAW_KEY_NAMES = ("colon", "comma", "exclamation_mark", "question_mark",
+                      "space", "escape")
+    _leaked = [tok for key, _what in help_rows for tok in key.split()
+               if tok in _RAW_KEY_NAMES]
+    ok &= check(f"no raw Textual key name leaks into the ?-overlay key "
+                f"column (found {_leaked})", _leaked == [])
+
     ok &= check("exact name completes to itself",
                 commands.complete("audit", table) == ["audit"])
     ok &= check("a unique prefix completes",

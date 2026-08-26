@@ -2462,6 +2462,45 @@ async def go():
         "intervene" in appmod.help_text().lower()
         or "stop" in appmod.help_text().lower())
 
+    # --- `:` command line (task 3 review finding 2: the feature had zero ---
+    # behavioural coverage - only the table entry was checked, not the
+    # widget, ESC, ENTER, or the load-bearing property the TAB deviation
+    # rests on: TAB completes instead of falling through to
+    # action_swarm_view's default toggle. Ported from the throwaway pilot
+    # used to prove that deviation.
+    cl = _TestApp(_one(), dry_run=True)
+    async with cl.run_test() as pilot:
+        await pilot.pause()
+        cl._refresh()
+        await pilot.pause()
+        await pilot.press("colon")
+        await pilot.pause()
+        chk(": mounts #cmdline", cl._cmdline is not None)
+        inp = cl.query_one("#cmdline")
+        inp.value = "swa"                 # a unique prefix ("swarm")
+        await pilot.pause()
+        swarm_before = cl._swarm_visible
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB completes a unique prefix in place", inp.value == "swarm ")
+        chk("TAB does NOT toggle _swarm_visible while the command line is "
+            "open (the regression guard for the whole TAB deviation)",
+            cl._swarm_visible == swarm_before)
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("ESC clears _cmdline", cl._cmdline is None)
+        chk("ESC removes the #cmdline widget",
+            not any(w.id == "cmdline" for w in cl.query("Input")))
+        await pilot.press("colon")
+        await pilot.pause()
+        cl.query_one("#cmdline").value = "pause extra"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("ENTER closes #cmdline", cl._cmdline is None)
+        chk("ENTER submitted and logged the parsed command",
+            ":pause extra" in "\n".join(cl.query_one(appmod.Log).lines))
+
     ok = _command_table_checks(ok)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")

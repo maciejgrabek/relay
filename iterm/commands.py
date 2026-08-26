@@ -67,6 +67,7 @@ _KEY_DISPLAY = {
     "question_mark": "?",
     "space": "SPACE",
     "escape": "ESC",
+    "colon": ":",
 }
 
 
