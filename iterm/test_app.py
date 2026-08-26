@@ -2505,6 +2505,25 @@ async def go():
         await pilot.press("colon")
         await pilot.pause()
         chk(": mounts #cmdline", cl._cmdline is not None)
+        chk("the palette list mounts alongside it", bool(cl.query("#cmdlist")))
+        chk("the palette opens with a highlight on the first row",
+            cl._cmdline.get("cursor") == 0)
+        # Arrows move the HIGHLIGHT, not the roster behind it. Proven with an
+        # instrumented pilot before this was built that the arrows reach
+        # on_key at all - unlike `tab`, which a priority binding eats.
+        roster_before = cl._selected_sid()
+        await pilot.press("down")
+        await pilot.pause()
+        chk("down moves the palette highlight", cl._cmdline["cursor"] == 1)
+        chk("down does NOT move the roster behind the palette",
+            cl._selected_sid() == roster_before)
+        await pilot.press("up")
+        await pilot.pause()
+        chk("up moves the highlight back", cl._cmdline["cursor"] == 0)
+        await pilot.press("up")
+        await pilot.pause()
+        chk("the highlight cannot walk off the top",
+            cl._cmdline["cursor"] == 0)
         inp = cl.query_one("#cmdline")
         inp.value = "swa"                 # a unique prefix ("swarm")
         await pilot.pause()
@@ -2580,14 +2599,20 @@ async def go():
         def logtext():
             return "\n".join(cd.query_one(appmod.Log).lines)
 
+        # The palette CHANGED what a partial line means. `wip` used to be an
+        # unknown command; it now highlights `wipe` and ENTER runs the
+        # highlight, which is the whole point of a palette. That is a
+        # deliberate behaviour change, so the old expectation is superseded
+        # rather than broken - but unknown-command reporting still has to
+        # work, so it is kept below with input that matches NOTHING.
         await cmd("wip")
-        chk("an unknown command reports itself and suggests the close match",
-            "unknown command 'wip'" in logtext() and "wipe" in logtext())
+        chk("a partial line runs the HIGHLIGHTED command, not 'unknown'",
+            "unknown command" not in logtext()
+            and ":wipe!" in logtext())      # wipe's confirm gate, i.e. it ran
 
-        await cmd("zzz")
-        chk("a typo with no matching prefix still reports unknown "
-            "(no table entry starts with 'zzz', so no suggestion is owed)",
-            "unknown command 'zzz'" in logtext())
+        await cmd("zzzzz")
+        chk("a line matching no command at all still reports unknown",
+            "unknown command 'zzzzz'" in logtext())
 
         before_audit = cd._audit_visible
         await cmd("audit")

@@ -168,8 +168,80 @@ def run():
     ok &= check("EXPOSE and NEVER_EXPOSE do not overlap",
                 commands.EXPOSE & commands.NEVER_EXPOSE == set())
 
+    ok = _palette_checks(ok)
+
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
+def _palette_checks(ok):
+    """The palette: filtering, ordering, and the two-column help layout."""
+    table = commands.CMD
+
+    everything = commands.filter_cmds("", table)
+    ok &= check("an empty query offers every command",
+                len(everything) == len(table))
+    ok &= check("pure-navigation entries sink to the bottom",
+                {c.name for c in everything[-len(commands._PALETTE_LAST):]}
+                == set(commands._PALETTE_LAST))
+    ok &= check("something worth typing is at the top",
+                everything[0].name not in commands._PALETTE_LAST)
+
+    # A genuine INTERIOR match - "work" would not do, since it is a prefix of
+    # "workspaces" and a prefix-only implementation would pass.
+    ok &= check("an INTERIOR substring matches (prefix-only would not)",
+                any(c.name == "workspaces"
+                    for c in commands.filter_cmds("space", table)))
+    ok &= check("another interior match, to be sure",
+                any(c.name == "disarmall"
+                    for c in commands.filter_cmds("sarm", table)))
+
+    au = commands.filter_cmds("au", table)
+    ok &= check("a prefix match ranks above a substring match",
+                au and au[0].name == "audit")
+
+    ok &= check("an unknown query matches nothing",
+                commands.filter_cmds("zzzzz", table) == [])
+    ok &= check("filtering is case-insensitive",
+                [c.name for c in commands.filter_cmds("WORK", table)]
+                == [c.name for c in commands.filter_cmds("work", table)])
+    ok &= check("a leading slash or colon is ignored",
+                [c.name for c in commands.filter_cmds("/au", table)]
+                == [c.name for c in commands.filter_cmds("au", table)])
+
+    lines = commands.palette_lines("", table, 0, 70, limit=5)
+    ok &= check("palette renders at most `limit` rows plus a footer",
+                len(lines) <= 6)
+    ok &= check("the cursor row is marked", any("\u25b8" in l for l in lines))
+    ok &= check("a name and its help both appear",
+                any("arm" in l for l in lines))
+    ok &= check("the overflow footer counts what is not shown",
+                any(str(len(table)) in l for l in lines))
+    ok &= check("every rendered line fits the width",
+                all(len(l) <= 70 for l in commands.palette_lines(
+                    "", table, 0, 70, limit=5)))
+    ok &= check("an empty result set says so",
+                commands.palette_lines("zzzzz", table, 0, 70)
+                and "no match" in commands.palette_lines(
+                    "zzzzz", table, 0, 70)[0])
+
+    ok &= check("the cursor cannot render out of range",
+                commands.palette_lines("", table, 999, 70, limit=3) is not None)
+
+    wide = commands.help_columns(commands.help_rows(table), 180)
+    ok &= check("at a wide terminal the help is TWO columns, halving the rows",
+                len(wide) <= (len(table) // 2) + 2)
+    ok &= check("two-column rows fit the width",
+                all(len(r) <= 180 for r in wide))
+    ok &= check("two clean columns truncate nothing",
+                not any("\u2026" in r for r in wide))
+    narrow = commands.help_columns(commands.help_rows(table), 100)
+    ok &= check("at a narrow terminal it falls back to ONE column, because two "
+                "thin columns would truncate what one wide one shows",
+                len(narrow) == len(table))
+    ok &= check("the single column fits too",
+                all(len(r) <= 100 for r in narrow))
     return ok
 
 

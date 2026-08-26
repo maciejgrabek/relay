@@ -366,8 +366,10 @@ def _compact_bar_pairs(pairs):
 
 # Generated, never hand-written. Two hand-maintained legends are exactly how
 # `w` and `S` shipped working but invisible; the table is the only list now.
-KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD))
-               + [(":", "cmd")])
+# The trailing opener used to be appended here as a literal, which meant the
+# bar named a capability the table did not. It is a `hot` table entry now, so
+# hot_pairs supplies it and there is nothing left to drift.
+KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD)))
 
 
 def _tree_fingerprint(workdir: str) -> str:
@@ -1047,7 +1049,12 @@ def help_text(width: int = 96) -> str:
         return f"  [{A}]{key:<9}[/] [{G}]{_fit(what, max(10, w - 13))}[/]"
 
     lines = [
-        *[row(k, what) for k, what in commands.help_rows(commands.CMD)],
+        # TWO columns. One ran 36 entries tall, which pushed the arm-level
+        # cheat sheet off the bottom of an ordinary terminal - the overlay
+        # that documents every capability could not itself be read. The
+        # cheat sheet below stays single-column; it is only five rows.
+        *[f"[{G}]{ln}[/]" for ln in commands.help_columns(
+            commands.help_rows(commands.CMD), w)],
         "",
         chrome.rule("arm levels", "what relay may auto-approve", w, DIM,
                     f"bold {WARN}", DIM),
@@ -1461,6 +1468,7 @@ class RelayApp(App):
         Binding("exclamation_mark", "intervene", "Intervene", show=True),
         Binding("question_mark", "help", "Help", show=False),
         Binding("colon", "command_mode", "Commands", show=False),
+        Binding("slash", "command_mode", "Commands", show=False),
         Binding("escape", "dismiss_view", "Back", show=False),
         Binding("q", "quit", "Quit"),
     ]
@@ -2971,18 +2979,55 @@ class RelayApp(App):
     def action_command_mode(self) -> None:
         if self._any_overlay_open():
             return
-        self._cmdline = {"open": True}
-        inp = Input(placeholder="command (TAB completes, ESC cancels)",
+        self._cmdline = {"open": True, "cursor": 0}
+        inp = Input(placeholder="command (up/down picks, ENTER runs, ESC cancels)",
                     id="cmdline")
         self.query_one("#middle").mount(inp)
+        self.query_one("#middle").mount(Static("", id="cmdlist"))
         inp.focus()
+        self._cmdlist_render()
+
+    def _cmdline_matches(self):
+        """The commands the current query offers, best match first."""
+        if self._cmdline is None:
+            return []
+        try:
+            value = self.query_one("#cmdline", Input).value
+        except Exception:
+            value = ""
+        return commands.filter_cmds(value, commands.CMD)
+
+    def _cmdlist_render(self) -> None:
+        """Redraw the filtered list under the command line.
+
+        Pure rendering lives in commands.palette_lines; this only feeds it the
+        query, the cursor and the width it has.
+        """
+        if self._cmdline is None:
+            return
+        try:
+            widget = self.query_one("#cmdlist", Static)
+            value = self.query_one("#cmdline", Input).value
+        except Exception:
+            return          # mid-teardown: nothing to draw on
+        width = max(20, widget.size.width or 80)
+        widget.update("\n".join(commands.palette_lines(
+            value, commands.CMD, self._cmdline.get("cursor", 0), width)))
+
+    def on_input_changed(self, event) -> None:
+        """Every keystroke refilters. The cursor resets, because the row it
+        pointed at is usually not in the new result set at all."""
+        if self._cmdline is not None and getattr(event.input, "id", "") == "cmdline":
+            self._cmdline["cursor"] = 0
+            self._cmdlist_render()
 
     def _cmdline_close(self) -> None:
         self._cmdline = None
-        try:
-            self.query_one("#cmdline").remove()
-        except Exception:
-            pass          # already gone: closing twice must not raise
+        for wid in ("#cmdline", "#cmdlist"):
+            try:
+                self.query_one(wid).remove()
+            except Exception:
+                pass      # already gone: closing twice must not raise
 
     def _cmd_lookup(self, name: str):
         for cmd in commands.CMD:
@@ -3205,7 +3250,17 @@ class RelayApp(App):
 
     def on_input_submitted(self, event) -> None:
         if self._cmdline is not None:
+            # The HIGHLIGHTED row wins over the literal text: typing `w` and
+            # pressing ENTER runs whatever the cursor is on, the way a palette
+            # is expected to behave. Anything typed beyond the command name is
+            # carried through as that command's arguments.
             line = event.value
+            matches = self._cmdline_matches()
+            cursor = self._cmdline.get("cursor", 0)
+            if matches and 0 <= cursor < len(matches):
+                _verb, args, bang = commands.parse(line)
+                line = " ".join(
+                    [matches[cursor].name + ("!" if bang else "")] + args)
             self._cmdline_close()
             try:
                 self._cmdline_submit(line)
@@ -3536,6 +3591,20 @@ class RelayApp(App):
         # priority binding for its own `if self._modal_open: ...` guard.
         if self._modal_open:
             self._modal_close()
+            event.stop()
+            event.prevent_default()
+            return
+        if self._cmdline is not None and event.key in ("up", "down"):
+            # Proven with an instrumented pilot BEFORE this was built: unlike
+            # `tab` (a priority binding, consumed before any widget sees it),
+            # the arrows DO reach on_key while the Input has focus. Without
+            # this branch they would scroll the roster behind the palette.
+            matches = self._cmdline_matches()
+            if matches:
+                step = -1 if event.key == "up" else 1
+                cur = self._cmdline.get("cursor", 0) + step
+                self._cmdline["cursor"] = max(0, min(cur, len(matches) - 1))
+                self._cmdlist_render()
             event.stop()
             event.prevent_default()
             return

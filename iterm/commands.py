@@ -80,6 +80,7 @@ def key_tokens(cmd: Cmd) -> List[str]:
 # Anything not in this map is already legible as-is (a letter, a digit, or a
 # short word like "left"/"escape") and passes through unchanged.
 _KEY_DISPLAY = {
+    "slash": "/",
     "comma": ",",
     "exclamation_mark": "!",
     "question_mark": "?",
@@ -174,12 +175,18 @@ def hot_pairs(table) -> List[Tuple[str, str]]:
 
 
 def _bar_key(cmd: Cmd) -> str:
-    """How a key reads in the bar: displayed, not Textual's raw token."""
+    """How a key reads in the bar: displayed, not Textual's raw token.
+
+    `bar_key` wins over the bound tokens. An entry can carry several keys
+    (`colon,slash` both open the palette) and listing them all just spends
+    cells on a bar with none to spare - naming the one an operator should
+    reach for is more use than naming every alias.
+    """
+    if cmd.bar_key:
+        return cmd.bar_key
     toks = key_tokens(cmd)
     if toks:
         return "/".join(_display_key(t) for t in toks)
-    if cmd.bar_key:
-        return cmd.bar_key
     return f":{cmd.name}"
 
 
@@ -216,6 +223,118 @@ def help_rows(table) -> List[Tuple[str, str]]:
 # The table. `hot=True` is the hot path only - what an operator does while
 # watching, dozens of times an hour. Everything else stays bound to its key
 # but leaves the bar, and is reachable and discoverable through `:`.
+# Entries that work when typed but that nobody would ever reach for in a
+# palette: cursor movement (the arrow keys are right there), the overlay-closer,
+# the settings-editor nudges, and the palette's own opener. They stay reachable
+# and stay in `?`; they just sink below things worth typing.
+_PALETTE_LAST = frozenset({
+    "up", "down", "back", "settingsleft", "settingsright", "commands",
+})
+
+
+def filter_cmds(query: str, table) -> List["Cmd"]:
+    """Commands matching `query`, best match first.
+
+    SUBSTRING matching, not prefix: the palette exists so nobody has to know a
+    command's first letters. Typing "work" must find "workspaces". Prefix
+    matches still rank above interior ones, so "au" puts `audit` on top rather
+    than burying it under something that merely contains "au".
+
+    An empty query returns EVERYTHING. Opening the palette IS the answer to
+    "what can I do here?" - that is the whole point of it.
+
+    Ordering on an empty query is NOT simply hot-first. `hot` marks the hot
+    PATH - what an operator does constantly by key - which makes those the
+    LEAST likely things to be typed. Nobody opens a palette to run `:up` when
+    the arrow key is under their finger. So pure-navigation and inert entries
+    sink to the bottom and the things worth typing float up.
+    """
+    q = query.strip().lstrip("/:").lower()
+    if not q:
+        return ([c for c in table if c.name not in _PALETTE_LAST]
+                + [c for c in table if c.name in _PALETTE_LAST])
+    starts = [c for c in table if c.name.lower().startswith(q)]
+    inside = [c for c in table
+              if q in c.name.lower() and not c.name.lower().startswith(q)]
+    return starts + inside
+
+
+def palette_lines(query: str, table, cursor: int, width: int,
+                  limit: int = 8) -> List[str]:
+    """The filtered list drawn under the command line.
+
+    Pure so it can be tested without a terminal. `cursor` is clamped rather
+    than trusted: it is driven by arrow keys against a list that changes shape
+    on every keystroke, so an out-of-range value is normal, not a bug.
+    """
+    matches = filter_cmds(query, table)
+    if not matches:
+        return [_fit_line(f"  no match for {query.strip().lstrip('/:')!r}",
+                          width)]
+    cursor = max(0, min(cursor, len(matches) - 1))
+    # Keep the cursor on screen when it walks past the window.
+    first = max(0, min(cursor - limit + 1, len(matches) - limit))
+    first = max(0, first)
+    window = matches[first:first + limit]
+    name_w = max((len(c.name) for c in window), default=0)
+    out = []
+    for i, cmd in enumerate(window, start=first):
+        mark = "\u25b8" if i == cursor else " "
+        out.append(_fit_line(
+            f" {mark} {cmd.name:<{name_w}}  {cmd.help}", width))
+    hidden = len(matches) - len(window)
+    if hidden > 0:
+        out.append(_fit_line(
+            f"   ... {hidden} more of {len(matches)}", width))
+    return out
+
+
+def _fit_line(text: str, width: int) -> str:
+    """Clip to `width`, never pad. The palette floats over the roster, so a
+    line that overruns would paint across rows the operator is watching."""
+    if width <= 1 or len(text) <= width:
+        return text
+    return text[:max(1, width - 1)] + "\u2026"
+
+
+# Two columns are only an improvement when BOTH fit their descriptions.
+# Measured, not guessed: the longest entry needs 71 cells, so a clean pair
+# needs ~144. Below this the overlay stays single-column, where the full
+# width is available and nothing truncates.
+_TWO_COLUMN_MIN = 150
+
+
+def help_columns(rows: List[Tuple[str, str]], width: int) -> List[str]:
+    """`help_rows` laid out in TWO columns.
+
+    One column ran 36 entries tall, which pushed the arm-level cheat sheet
+    off the bottom of an ordinary terminal - the overlay documenting every
+    capability could not itself be read. Two columns halves the height; the
+    per-column width is what stops the descriptions truncating.
+    """
+    if not rows:
+        return []
+    # Two columns trade WIDTH for HEIGHT, and only one of those is ever the
+    # binding constraint. On a narrow terminal each column would be too thin
+    # for the descriptions and we would have swapped an unreadable-because-
+    # too-tall overlay for an unreadable-because-truncated one. So the layout
+    # is chosen, not assumed: one column below the threshold.
+    if width < _TWO_COLUMN_MIN:
+        return [_fit_line(f"  {k:<9} {h}", width) for k, h in rows]
+    half = width // 2
+    mid = (len(rows) + 1) // 2
+    left, right = rows[:mid], rows[mid:]
+    out = []
+    for i in range(mid):
+        lk, lh = left[i]
+        cell = _fit_line(f"  {lk:<9} {lh}", half - 1).ljust(half - 1)
+        if i < len(right):
+            rk, rh = right[i]
+            cell += " " + _fit_line(f"  {rk:<9} {rh}", half - 1)
+        out.append(cell.rstrip())
+    return out
+
+
 CMD = (
     Cmd(name="up", help="move up", action="action_cursor_up", key="up,k",
         hot=True, bar="move"),
@@ -283,8 +402,11 @@ CMD = (
     # it avoided.
     Cmd(name="help", help="this help", action="action_help",
         key="question_mark"),
+    # `/` is the primary opener - it is what a Claude Code user reaches for -
+    # and `:` stays because it shipped first and vim hands expect it. Both
+    # land on the same action, so the palette has one entrance, not two.
     Cmd(name="commands", help="open the command line", action="action_command_mode",
-        key="colon"),
+        key="colon,slash", bar_key="/", bar="cmd", hot=True),
 
     # "(double-press confirms)" used to live in these four `help` strings -
     # dropped (review's fix 4): a `!` on the cmdline and a second key press
