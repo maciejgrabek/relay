@@ -1193,6 +1193,89 @@ only - there's no TUI binding for `--project --all`, that's deliberately a
 terminal-only, type-it-out command). `relay clean` has no TUI binding;
 run it from a terminal when you've decided the work is not worth reviving.
 
+### Workspaces
+
+A workspace is a **named set of tabs** - directory plus command each - saved
+to `~/.relay/workspaces.toml` (override the path with `RELAY_WORKSPACES`) and
+brought back with one command. **A workspace is not a substitute for `relay
+restore`, and restore is not a substitute for a workspace:** restore resolves
+orphaned *task ownership* - it revives closed sessions that still own
+unfinished tasks - while a workspace reproduces *a layout*, whether or not
+anything in it was ever a tracked task. They answer different questions and
+both stay.
+
+Relay already uses the word "workspace" for something else: the live groups
+of tabs that share a launch directory, drawn as the `┎┃┖` rail in the session
+table (`iterm/workspaces.py`). The two are meant to be read together, not as
+a naming collision - the rail is the **live** view of the idea, and
+`~/.relay/workspaces.toml` is its **saved** form. One honest wart: a saved
+workspace's tabs each carry their own `dir`, so a single saved workspace can
+span several directories, which no live rail group can represent.
+
+A tab is a directory plus a command - there is no `kind` key distinguishing a
+plain shell from a Claude session. Behavior falls out of which keys are set:
+
+| shape | what happens |
+|---|---|
+| `cmd` alone | a plain tab - not registered, not armed |
+| `cmd` + `arm` | registered under `name` and pre-armed before `cmd` runs; no prompt injected |
+| `cmd` + `arm` + `prompt` | the existing full swarm-worker path (same as `relay spawn`) |
+
+Per-tab keys, all optional except `name`:
+
+| key | meaning | default |
+|---|---|---|
+| `name` | tab title, and the relay session name once `arm` is set | required |
+| `dir` | working directory | `~` |
+| `cmd` | command run once the shell is up | none |
+| `arm` | `safe` / `wild` / `insane` - registers and pre-arms the tab | unset |
+| `prompt` | mission string; presence routes through the same spawn path as `relay spawn` | unset |
+| `role` | `worker` / `coordinator` | `worker` |
+| `project` | swarm project tag | `""` |
+| `window` | groups tabs into separate windows (tabs sharing a number open in the same window) | `1` |
+| `panes` | extra panes split into the tab, each `{ cmd, dir, split }` (`split` is `v` side-by-side or `h` stacked) | `[]` |
+
+An optional top-level `[settings]` table holds `target` (`new` or `current`,
+default `new`) and `warmup` (seconds before commands are typed, default
+`1.5`); `relay ws up --here` / `--new` override `target` for one call.
+
+```
+relay ws save <name> [--all] [--force] [--config <path>]
+    Snapshot the current window (--all: every window) into the config file.
+    Refuses to replace an existing workspace of the same name unless --force
+    is passed.
+
+    A running tab cannot report the command it was started with, so `cmd` is
+    written empty and you fill it in by hand. Relay's own panel tab and any
+    reserved name are skipped without comment; a tab with no name is dropped
+    and the drop count is printed; a tab with split panes is saved as its
+    first pane only, and that loss is reported too.
+
+relay ws up <name> [--here] [--new] [--dry-run] [--yes] [--config <path>]
+    Build a workspace. Always prints a plan first; without --yes it asks to
+    confirm before opening anything, and --dry-run stops after the plan.
+    --here puts the tabs in the current window, --new always opens new ones.
+
+    Any tab whose name is already a live tab is skipped, not rebuilt - this
+    is what makes `ws up` idempotent, and it stops a workspace from stealing
+    a running session's name out from under it.
+
+relay ws list [--config <path>]
+    List every workspace defined in the config file.
+
+relay ws rm <name> [--config <path>]
+    Delete a workspace from the config file.
+```
+
+In the TUI, `w` opens an overlay listing the workspaces that are defined
+(`relay ws up <name>` opens one); `S` saves the current window as a new
+workspace, prompting for a name.
+
+> `~/.relay/workspaces.toml` can arm sessions. `arm` on a tab makes relay
+> register and pre-arm it, which is the same local-trust boundary as
+> `db.set_arm_request` and `queue_message`: any process that can write your
+> relay files can request arming. Treat it like the rest of `~/.relay`.
+
 ### Pull requests: who owns what
 
 Relay never calls `gh`. A session tells it what it sees, and relay answers one
@@ -1300,6 +1383,7 @@ Environment variables (set before launching `relay`):
 | `RELAY_STATUSBAR_CLICKS`     | `~/.relay/statusbar-clicks.jsonl` | Badge-click queue the provider writes, relay consumes |
 | `RELAY_STATUSBAR_ALIVE`      | `~/.relay/statusbar-provider.alive` | Provider heartbeat (relay registers its own badge unless fresh) |
 | `RELAY_DANGER_PRESET`        | from `[danger] preset`     | `default`/`paranoid` - env wins over the config file |
+| `RELAY_WORKSPACES`           | `~/.relay/workspaces.toml` | Named-workspace config file (see [Workspaces](#workspaces)) |
 
 > **Keep `~/.relay/` on a local disk, not a synced folder** (iCloud Drive,
 > Dropbox, a network mount). Relay's SQLite DB uses WAL mode; a background
