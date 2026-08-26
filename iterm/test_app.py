@@ -79,12 +79,48 @@ def _command_table_checks(ok):
     ok &= check(f"every tabled key is bound (missing {tabled - bound})",
                 tabled - bound == set())
 
+    # The key TOKEN matching above would pass even if an entry named the
+    # right key but the wrong action - which is exactly the "no key is
+    # rebound" promise this task made. Assert the ACTION agrees too.
+    def _binding_method(raw_action: str) -> str:
+        # Binding.action is a call expression for parameterised actions
+        # ("send('1')") and a bare name otherwise ("cursor_up") - either
+        # way the method Textual dispatches to is "action_" + the base name.
+        return f"action_{str(raw_action).split('(', 1)[0].strip()}"
+
+    bound_action = {}
+    for b in appmod.RelayApp.BINDINGS:
+        method = _binding_method(b.action)
+        for tok in str(b.key).split(","):
+            tok = tok.strip()
+            if tok:
+                bound_action[tok] = method
+
+    table_action = {}
+    for c in commands.CMD:
+        for tok in commands.key_tokens(c):
+            table_action[tok] = c.action
+
+    mismatched = {tok: (table_action[tok], bound_action[tok])
+                  for tok in table_action
+                  if tok in bound_action
+                  and table_action[tok] != bound_action[tok]}
+    ok &= check(f"every table entry's action matches its binding's action "
+                f"(mismatches {mismatched})", mismatched == {})
+
     bar = appmod.KEYBAR
     for c in commands.CMD:
         if c.hot:
             ok &= check(f"key bar shows hot entry {c.name}",
                         commands._bar_label(c) in bar)
-    ok &= check("the key bar is ONE line", bar.count("\n") == 0)
+    # A newline count is not the property that matters - a 220-character
+    # single "line" still clips on an 80-column terminal. #keybar is
+    # `height: 2` with `padding: 0 2` (app.py), so the real budget is what
+    # actually fits: 76 cells (80 - 2*2 for the padding), measured on the
+    # PLAIN (markup-stripped) bar.
+    bar_width = _cells_wide(bar)
+    ok &= check(f"the key bar has no line break and fits 76 cells (got "
+                f"{bar_width})", "\n" not in bar and bar_width <= 76)
 
     helptext = appmod.help_text(96)
     missing = [c.name for c in commands.CMD if c.help[:24] not in helptext]
@@ -327,8 +363,13 @@ async def go():
                                   last_screen=["x"])}
 
     chk("help text covers keys + arm levels",
-        "arm levels" in appmod.help_text()
-        and "space" in appmod.help_text().lower())
+        "arm levels" in appmod.help_text())
+    # A loose "space" substring is satisfied by the word "workspaces" even
+    # with the SPACE row deleted entirely - assert the actual generated row.
+    import commands as _cmdmod
+    chk('help_rows renders the arm key as the SPACE row, not "space"',
+        ("SPACE", "cycle arm: off -> safe -> wild -> insane   (:arm)")
+        in _cmdmod.help_rows(_cmdmod.CMD))
     chk("help names itself in its own border, not in a heading row",
         _plain(appmod.help_text()).splitlines()[0].startswith("┌─"))
     chk("no help row runs past its own frame",
@@ -2407,11 +2448,10 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
-    # intervene is not `hot` (left the one-line bar) and its key is bound as
-    # the Textual key name "exclamation_mark" (BINDINGS/commands.CMD agree on
-    # that literal, checked by _command_table_checks) rather than the glyph
-    # "!", so the honest discoverability check is that the overlay explains
-    # the action, not a literal "!" substring.
+    # intervene is not `hot` (left the one-line bar), but its key must still
+    # render as the glyph "!" in the `?` overlay, not Textual's raw binding
+    # name "exclamation_mark" - commands._KEY_DISPLAY maps that back.
+    chk("! is in the help screen", "!" in appmod.help_text())
     chk("help explains what ! does",
         "intervene" in appmod.help_text().lower()
         or "stop" in appmod.help_text().lower())

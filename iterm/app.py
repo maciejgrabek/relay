@@ -174,14 +174,18 @@ PREVIEW_MODE_LABEL = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
                       "shadow": "SHADOW", "extreme": "EXTREME"}
 
 
-# Two-line key bar. The Textual Footer crams every binding onto one row and
-# hides the overflow; with a dozen keys that truncates on a narrow window, so we
-# render our own two lines grouped by meaning: line 1 acts on the SELECTED
-# session, line 2 is fleet-wide + app. The bindings work regardless of this bar
-# (it is display only). Key glyphs amber, labels green, separators dim - the CRT
+# The one-line key bar. The Textual Footer crams every binding onto one row
+# and hides the overflow, so we render our own from the hot subset of the
+# command table instead (the bindings work regardless of this bar - it is
+# display only). Key glyphs amber, labels green, separators dim - the CRT
 # palette. Built once at import; keys don't change at runtime.
+#
+# The separator has a leading space but no trailing one - `#keybar`'s real
+# budget is 76 cells at 80 columns (padding: 0 2), and that one cell per
+# join is the difference between fitting and clipping the tail off a bar
+# built from real (if abbreviated) labels rather than single letters.
 def _keys(pairs) -> str:
-    return f" [{DIM}]·[/] ".join(
+    return f" [{DIM}]·[/]".join(
         f"[{WARN} bold]{k}[/] [{BRIGHT}]{label}[/]" for k, label in pairs)
 
 
@@ -312,9 +316,47 @@ def overlay_panel(lines: list, width: int, accent: str) -> str:
     return "\n".join([lines[0]] + body + [chrome.panel_bottom(w, accent)])
 
 
+def _compact_bar_pairs(pairs):
+    """`hot_pairs()`, compacted to fit `#keybar`'s real budget.
+
+    `#keybar` is `height: 2` with `padding: 0 2` at 80 columns - 76 usable
+    cells - and a bar built by joining every hot entry's full key/label
+    verbatim ran to 220+ cells (review round 1, finding 1). Two things
+    caused most of that, and both are display-only - the underlying table
+    and its keys are untouched:
+
+    - `up`/`down` are two table entries (so `key_tokens`/BINDINGS agreement
+      still checks them separately) but ONE concept on a bar - "move" said
+      twice, once per vim alias, is not two facts. Adjacent hot entries that
+      share a label collapse into the arrow glyph every terminal legend
+      already uses for this.
+    - a run of sequential digit keys (`1/2/3`) reads identically as a range;
+      the `?` overlay still spells out every digit.
+    """
+    merged = []
+    for key, label in pairs:
+        if merged and merged[-1][1] == label:
+            prev_key, _ = merged.pop()
+            primaries = [k.split("/")[0] for k in (prev_key, key)]
+            new_key = ("↑↓" if set(primaries) == {"up", "down"}
+                       else "/".join(primaries))
+            merged.append((new_key, label))
+        else:
+            merged.append((key, label))
+
+    def _compact_key(key: str) -> str:
+        toks = key.split("/")
+        if len(toks) >= 3 and all(t.isdigit() for t in toks):
+            return f"{toks[0]}-{toks[-1]}"
+        return key
+
+    return [(_compact_key(k), label) for k, label in merged]
+
+
 # Generated, never hand-written. Two hand-maintained legends are exactly how
 # `w` and `S` shipped working but invisible; the table is the only list now.
-KEYBAR = _keys(commands.hot_pairs(commands.CMD) + [(":", "commands")])
+KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD))
+               + [(":", "cmds")])
 
 
 def _tree_fingerprint(workdir: str) -> str:

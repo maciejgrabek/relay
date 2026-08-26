@@ -60,9 +60,12 @@ def run():
     hot_pairs = commands.hot_pairs(table)
     ok &= check("hot_pairs returns only hot entries",
                 len(hot_pairs) == len([c for c in table if c.hot]))
-    # Verify "up" entry produces correct (key, label) pair
-    ok &= check('hot_pairs includes ("up/k", "move up")',
-                ("up/k", "move up") in hot_pairs)
+    # Verify "up" entry produces correct (key, label) pair. The label is the
+    # SHORT `bar` field ("move"), not the full `help` sentence ("move up") -
+    # a full sentence on the bar is what let it overflow an 80-column
+    # terminal (review round 1, finding 1).
+    ok &= check('hot_pairs includes ("up/k", "move")',
+                ("up/k", "move") in hot_pairs)
 
     # Check help_rows on actual content, not just length
     help_rows = commands.help_rows(table)
