@@ -2405,9 +2405,20 @@ def cmd_ws(args) -> int:
         # snapshot() drops rows with a blank name: a tab nobody named cannot be
         # addressed in a workspace, and emitting one would write `name = ""`,
         # which load() then refuses. Say so rather than losing tabs silently.
-        dropped = len(rows or []) - len(tabs)
+        # Computed from the name itself (not len(rows) - len(tabs)) so it
+        # counts ONLY the nameless case - a "reserved_own" row (below) is also
+        # absent from `tabs` but is a different loss with its own message.
+        dropped = sum(1 for r in (rows or [])
+                     if not str(r.get("name", "")).strip())
         if dropped:
             print(f"  ! skipped {dropped} tab(s) with no name")
+        # The tab you were standing in, dropped only because it is actually
+        # relay's own panel (db.RESERVED_NAMES) - see wsbuild.snapshot_rows.
+        # From a shell this used to vanish unconditionally and silently;
+        # now it is reported the one time it legitimately still happens.
+        own_skipped = sum(1 for r in (rows or []) if r.get("reserved_own"))
+        if own_skipped:
+            print("  ! skipped this session's own tab (relay's panel)")
         # A split tab is saved as its one active pane, silently, unless said
         # here - the same class of loss as a dropped nameless tab.
         split = sum(1 for r in (rows or []) if r.get("split"))
@@ -2484,6 +2495,7 @@ def cmd_ws(args) -> int:
 
         build, skipped = wsconfig.skip_live(tabs, live)
         missing = {t.dir for t in build if t.dir and not os.path.isdir(t.dir)}
+        missing_names = [t.name for t in build if t.dir in missing]
         build = [t for t in build if t.dir not in missing]
 
         print(wsconfig.plan_text(args.name, tabs, missing_dirs=missing,
@@ -2491,6 +2503,15 @@ def cmd_ws(args) -> int:
         if args.dry_run:
             return {"stopped": True}
         if not build:
+            if missing_names:
+                # Distinct from the ordinary "nothing to open" below (every
+                # tab already live - a clean, idempotent no-op that exits 0):
+                # this is every remaining tab refusing to build because its
+                # directory does not exist, a real failure a script must be
+                # able to see.
+                return {"error": (
+                    f'workspace "{args.name}": every tab has a missing '
+                    f"directory - nothing to open ({', '.join(missing_names)})")}
             print("nothing to open.")
             return {"stopped": True}
         if not args.yes:
@@ -2510,7 +2531,7 @@ def cmd_ws(args) -> int:
         # coroutine return at all.
         build_state["started"] = True
         notes = await wsbuild.build(connection, build, warmup, target)
-        return {"notes": notes}
+        return {"notes": notes, "attempted": [t.name for t in build]}
 
     result, err = _ws_iterm(_up, "open the workspace")
     if result is _WS_ABORTED:
@@ -2532,8 +2553,24 @@ def cmd_ws(args) -> int:
     if "error" in result:
         return _err(result["error"])
     if "notes" in result:
-        for note in result["notes"]:
+        notes = result["notes"]
+        for note in notes:
             print(f"  ! {note}")
+        if notes:
+            # A script cannot tell a clean build from a total failure if
+            # this returns 0 regardless - so any note at all is now
+            # non-zero, and the message says whether anything landed:
+            # every attempted tab failing reads very differently from one
+            # bad tab among several that opened fine.
+            attempted = set(result.get("attempted") or [])
+            failed = {n.split(":", 1)[0] for n in notes}
+            built = attempted - failed
+            if attempted and not built:
+                return _err(f'workspace "{args.name}": every tab failed '
+                           f"to open - see above")
+            return _err(f'workspace "{args.name}": opened with errors - '
+                       f"{len(built)}/{len(attempted)} tab(s) built, see "
+                       f"above")
         print(f"opened {args.name}")
     return 0
 

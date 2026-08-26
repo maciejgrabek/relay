@@ -72,26 +72,42 @@ async def live_tab_names(connection):
         for window in app.terminal_windows:
             for tab in window.tabs:
                 for session in tab.sessions:
-                    try:
-                        # autoName, not session.name: session.name carries a
-                        # live job suffix ("DRAGEN CODE (-zsh)") that never
-                        # matches the saved name ("DRAGEN CODE"), which would
-                        # make skip_live skip nothing and let build() rebind
-                        # a live name to a fresh session - the identity theft
-                        # this guard exists to prevent. Matches the autoName
-                        # precedent at selftest.py:196. session.name is the
-                        # fallback for a session with no autoName at all, not
-                        # the primary read.
-                        name = (await session.async_get_variable("autoName")
-                                or await session.async_get_variable(
-                                    "session.name"))
-                        if name:
-                            names.add(str(name))
-                    except Exception:
-                        # Trap 4: a session closed mid-enumeration (a real
-                        # race) must not take the whole guard down with it.
-                        continue
+                    # autoName, not session.name: session.name carries a
+                    # live job suffix ("DRAGEN CODE (-zsh)") that never
+                    # matches the saved name ("DRAGEN CODE"), which would
+                    # make skip_live skip nothing and let build() rebind
+                    # a live name to a fresh session - the identity theft
+                    # this guard exists to prevent. Matches the autoName
+                    # precedent at selftest.py:196. session.name is the
+                    # fallback for a session with no autoName at all, not
+                    # the primary read.
+                    #
+                    # titleOverride is a further, LOWER-priority fallback,
+                    # added defensively: measured (on the reference machine,
+                    # for a tab created through `relay ws up`) to be None
+                    # while autoName carries the real name - so it never
+                    # changes behaviour today. It exists only in case some
+                    # setup surfaces a live tab's name there instead of in
+                    # autoName/session.name; it is never read AS THE
+                    # PRIMARY source, which would break the guard above.
+                    name = (await session.async_get_variable("autoName")
+                            or await session.async_get_variable(
+                                "session.name")
+                            or await session.async_get_variable(
+                                "titleOverride"))
+                    if name:
+                        names.add(str(name))
     except Exception:
+        # Deliberately no inner per-session try/except here (there used to
+        # be one, swallowing a failed read with `continue`): a session that
+        # cannot be read drops silently out of `names` either way, and a
+        # name missing from `names` is NOT a name skip_live will skip - the
+        # UNSAFE direction, the exact one this whole function exists to
+        # avoid. So ANY failure, anywhere in the enumeration (including one
+        # session closing mid-loop - trap 4), makes the WHOLE result
+        # untrustworthy: caught here and reported the same way as a
+        # top-level enumeration failure.
+        #
         # None here means "the enumeration itself failed" - distinct from an
         # empty set, which means "nothing is open" and is a legitimate result.
         # An empty set on failure would make the guard skip NOTHING, the
@@ -159,6 +175,18 @@ async def build(connection, tabs, warmup: float = 1.5,
                         # is already in place when claude boots.
                         if conn is None:
                             conn = db.connect()
+                        # Clear any persisted mode BEFORE register(): the
+                        # ON CONFLICT DO UPDATE in db.register does not touch
+                        # `mode`, and watcher.py restores a persisted mode at
+                        # first sight when no arm_request is pending. Left
+                        # alone, a name previously registered at a higher
+                        # mode (armed, then its session died without ever
+                        # clearing `mode`) would let this tab's `arm = "safe"`
+                        # come back at that stale HIGHER level instead.
+                        # cmd_restore in cli.py guards the identical case
+                        # for the exact same reason - a fresh start must not
+                        # inherit a dead worker's stale persisted mode.
+                        db.set_session_mode(conn, tab.name, "")
                         db.register(conn, tab.name, session.session_id,
                                     tab.role, tab.project)
                         db.set_arm_request(conn, tab.name, tab.arm)
@@ -203,11 +231,21 @@ async def snapshot_rows(connection, all_windows: bool = False) -> list:
     back empty - which is correct: the way to make a tab come back armed is to
     give it an `arm` key, which registers it.
 
-    Two rows are skipped outright, never counted as "no name" drops:
-    relay's own panel tab (matched by ITERM_SESSION_ID, same trick as
-    selftest.py) - a TUI is not a command and would round-trip into a bare
-    shell - and any name in db.RESERVED_NAMES, since a saved `arm` key on
-    "relay" would make build() refuse it anyway.
+    Any row whose name is in db.RESERVED_NAMES is skipped outright (a saved
+    `arm` key on "relay" would make build() refuse it anyway) - never
+    silently, though: if it is ALSO the caller's own session (matched by
+    ITERM_SESSION_ID, same trick as selftest.py) it is still appended, just
+    flagged "reserved_own", so wsconfig.snapshot() drops it from the saved
+    tabs while cmd_ws can still see and report the skip.
+
+    This used to instead drop ANY own-session row unconditionally, regardless
+    of name: correct when `ws save` runs from inside the TUI (relay's own
+    panel is not a command and would round-trip into a bare shell) but wrong
+    from a plain shell, where it silently omitted the very tab you typed the
+    command in - and did so before the dropped-count was computed, so nothing
+    ever reported the loss. Gating on RESERVED_NAMES instead means a shell's
+    own tab (an ordinary name, not "relay"/"human") is no longer dropped at
+    all.
 
     Each row also carries a "split" flag (not one of the four keys
     wsconfig.snapshot() reads, and harmless to it): True when the tab held
@@ -233,14 +271,20 @@ async def snapshot_rows(connection, all_windows: bool = False) -> list:
             session = _first_session(tab)
             if session is None:
                 continue
-            if session.session_id == own_sid:
-                continue
             # autoName, not session.name: session.name carries the job
             # suffix ("DRAGEN CODE (-zsh)") so a saved name would never match
             # its own live tab again. Same read relay uses at selftest.py:196.
+            # titleOverride is a further, lower-priority fallback - see the
+            # matching comment in live_tab_names for why it is last, not
+            # first.
             name = (await session.async_get_variable("autoName")
-                    or await session.async_get_variable("session.name"))
+                    or await session.async_get_variable("session.name")
+                    or await session.async_get_variable("titleOverride"))
             if name and str(name) in db.RESERVED_NAMES:
+                if session.session_id == own_sid:
+                    rows.append({"name": str(name), "dir": "", "arm": "",
+                                "window": index, "split": False,
+                                "reserved_own": True})
                 continue
             path = await session.async_get_variable("session.path")
             arm = ""

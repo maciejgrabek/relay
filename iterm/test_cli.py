@@ -345,6 +345,298 @@ def _ws_checks(ok):
     return ok
 
 
+def _fix_wave_ws_checks(ok):
+    """Final review's fix wave, the parts reachable through cmd_ws: E (a
+    build with any failures must exit non-zero, and say whether it was a
+    total or partial failure) and the VERIFY case of a workspace whose dir
+    does not exist."""
+    import asyncio
+    import wsbuild as wsbuildmod
+
+    def _fake_ws_iterm(coro_factory, what):
+        try:
+            return asyncio.run(coro_factory(None)), ""
+        except Exception as exc:                    # noqa: BLE001
+            return None, f"{type(exc).__name__}: {exc}"
+
+    orig_ws_iterm = cli._ws_iterm
+    orig_live = wsbuildmod.live_tab_names
+    orig_build = wsbuildmod.build
+    cli._ws_iterm = _fake_ws_iterm
+
+    twotabs_path = os.path.join(tempfile.mkdtemp(), "twotabs.toml")
+    with open(twotabs_path, "w") as fh:
+        fh.write('[[twotabs]]\nname = "t1"\ndir = "/tmp"\ncmd = "pwd"\n\n'
+                 '[[twotabs]]\nname = "t2"\ndir = "/tmp"\ncmd = "pwd"\n')
+
+    try:
+        async def _empty_live(connection):
+            return set()
+        wsbuildmod.live_tab_names = _empty_live
+
+        # --- every attempted tab fails: non-zero, and says "every tab" ---
+        async def _all_fail_build(connection, tabs, warmup, target):
+            return [f"{t.name}: RuntimeError: boom" for t in tabs]
+        wsbuildmod.build = _all_fail_build
+
+        code, out, err = run_cli("ws", "up", "twotabs", "--config",
+                                 twotabs_path, "--yes")
+        ok &= check("ws up exits non-zero when every tab fails (E)",
+                    code != 0)
+        ok &= check("...reporting through stderr with the relay: prefix",
+                    err.startswith("relay: "))
+        ok &= check("...and saying every tab failed",
+                    "every tab failed" in err)
+        ok &= check("...while still printing every note on stdout",
+                    "t1:" in out and "t2:" in out)
+
+        # --- one tab fails, one succeeds: non-zero, but worded as partial,
+        # distinctly from the all-failed case above ---
+        async def _partial_fail_build(connection, tabs, warmup, target):
+            return [f"{tabs[0].name}: RuntimeError: boom"]
+        wsbuildmod.build = _partial_fail_build
+
+        code2, out2, err2 = run_cli("ws", "up", "twotabs", "--config",
+                                    twotabs_path, "--yes")
+        ok &= check("ws up exits non-zero when some tabs fail (E)",
+                    code2 != 0)
+        ok &= check("...wording a partial failure differently from a "
+                    "total one",
+                    "every tab failed" not in err2 and "1/2" in err2)
+
+        # --- a clean build still exits 0 with nothing on stderr ---
+        async def _clean_build(connection, tabs, warmup, target):
+            return []
+        wsbuildmod.build = _clean_build
+        code3, out3, err3 = run_cli("ws", "up", "twotabs", "--config",
+                                    twotabs_path, "--yes")
+        ok &= check("a clean ws up still exits 0 (regression guard)",
+                    code3 == 0 and err3 == "")
+
+        # --- VERIFY case: every tab's dir is missing -> real failure, not
+        # a silent no-op ---
+        nodir_path = os.path.join(tempfile.mkdtemp(), "nodir.toml")
+        with open(nodir_path, "w") as fh:
+            fh.write('[[nodir]]\nname = "gone"\n'
+                     'dir = "/no/such/directory/at/all"\ncmd = "pwd"\n')
+        build_calls_nodir = []
+
+        async def _spy_build_nodir(connection, tabs, warmup, target):
+            build_calls_nodir.append(list(tabs))
+            return []
+        wsbuildmod.build = _spy_build_nodir
+        code4, out4, err4 = run_cli("ws", "up", "nodir", "--config",
+                                    nodir_path, "--yes")
+        ok &= check("ws up on a workspace whose dir does not exist exits "
+                    "non-zero", code4 != 0)
+        ok &= check("...and says so",
+                    "missing" in err4.lower() or "directory" in err4.lower())
+        ok &= check("...never reaching build()", build_calls_nodir == [])
+    finally:
+        wsbuildmod.live_tab_names = orig_live
+        wsbuildmod.build = orig_build
+        cli._ws_iterm = orig_ws_iterm
+
+    return ok
+
+
+class _FakeSession:
+    """A minimal stand-in for iterm2.Session, enough for wsbuild.py's real
+    live_tab_names/snapshot_rows/build to run against without a socket."""
+
+    def __init__(self, session_id, name=None, path="/tmp", fail_read=False):
+        self.session_id = session_id
+        self._name = name
+        self._path = path
+        self._fail_read = fail_read
+        self.sent = []
+
+    async def async_get_variable(self, key):
+        if self._fail_read:
+            raise RuntimeError("boom reading session variable")
+        if key in ("autoName", "session.name"):
+            return self._name
+        if key == "titleOverride":
+            return None
+        if key == "session.path":
+            return self._path
+        return None
+
+    async def async_set_name(self, name):
+        self._name = name
+
+    async def async_split_pane(self, vertical, profile_customizations=None):
+        return _FakeSession(self.session_id + "-pane")
+
+    async def async_send_text(self, text):
+        self.sent.append(text)
+
+
+class _FakeTabHandle:
+    def __init__(self, sessions):
+        self.sessions = sessions
+        self.current_session = sessions[0] if sessions else None
+
+
+class _FakeWindow:
+    def __init__(self, tabs=None):
+        self.tabs = tabs or []
+        self._n = len(self.tabs)
+
+    async def async_create_tab(self, profile_customizations=None):
+        self._n += 1
+        session = _FakeSession(f"new-sess-{self._n}")
+        handle = _FakeTabHandle([session])
+        self.tabs.append(handle)
+        return handle
+
+
+class _FakeApp:
+    def __init__(self, windows):
+        self.terminal_windows = windows
+        self.current_terminal_window = windows[0] if windows else None
+
+
+def _wsbuild_internals_checks(ok):
+    """Tests against wsbuild.py's REAL implementations (not stubbed away,
+    unlike the rest of this file's ws tests) - D (a stale persisted mode is
+    cleared before register()), G (live_tab_names fails unsafe-to-safe, not
+    silently dropping one bad session), and H (snapshot_rows' own-session
+    skip is gated on db.RESERVED_NAMES, not unconditional)."""
+    import asyncio
+    import iterm2 as iterm2mod
+    import wsbuild as wsbuildmod
+    import wsconfig as wsconfigmod
+
+    orig_async_get_app = iterm2mod.async_get_app
+    orig_window_create = iterm2mod.Window.async_create
+    orig_db_connect = db.connect
+    orig_db_register = db.register
+    orig_db_set_arm_request = db.set_arm_request
+    orig_db_set_session_context = db.set_session_context
+    orig_db_set_session_mode = db.set_session_mode
+    orig_db_get_session = db.get_session
+    orig_iterm_id = os.environ.get("ITERM_SESSION_ID")
+
+    try:
+        # --- D: build()'s supervised branch must clear any persisted mode
+        # BEFORE registering, so a stale higher mode from a previous
+        # registration under this name cannot outrank the fresh `arm`
+        # request. ---
+        calls = []
+
+        def _record(tag):
+            def _f(*a, **kw):
+                calls.append(tag)
+                return True
+            return _f
+
+        db.connect = lambda: "FAKE_CONN"
+        db.register = _record("register")
+        db.set_arm_request = _record("set_arm_request")
+        db.set_session_context = _record("set_session_context")
+        db.set_session_mode = _record("set_session_mode")
+
+        async def _get_app_empty(connection):
+            return _FakeApp([])
+
+        async def _create_window(connection, profile_customizations=None):
+            return _FakeWindow(
+                tabs=[_FakeTabHandle([_FakeSession("probe-sess")])])
+
+        iterm2mod.async_get_app = _get_app_empty
+        iterm2mod.Window.async_create = _create_window
+
+        tab = wsconfigmod.Tab(name="probe", dir="/tmp", cmd="", arm="safe")
+        notes = asyncio.run(wsbuildmod.build(None, [tab], warmup=0,
+                                             target="new"))
+        ok &= check("build() reports a clean run for the probe tab "
+                    "(sanity check)", notes == [])
+        ok &= check("build() clears the persisted mode BEFORE registering "
+                    "(D)", calls[:2] == ["set_session_mode", "register"])
+
+        # --- G: any per-session read failure must make live_tab_names
+        # distrust the WHOLE enumeration (return None), not just drop that
+        # one session from the set - dropping it is the unsafe direction. ---
+        async def _get_app_one_bad(connection):
+            good = _FakeSession("s1", name="alpha")
+            bad = _FakeSession("s2", name="beta", fail_read=True)
+            window = _FakeWindow(tabs=[_FakeTabHandle([good]),
+                                       _FakeTabHandle([bad])])
+            return _FakeApp([window])
+        iterm2mod.async_get_app = _get_app_one_bad
+        result = asyncio.run(wsbuildmod.live_tab_names(None))
+        ok &= check("live_tab_names returns None when ANY session read "
+                    "fails, not a set missing just that name (G)",
+                    result is None)
+
+        async def _get_app_healthy(connection):
+            s1 = _FakeSession("s1", name="alpha")
+            s2 = _FakeSession("s2", name="beta")
+            window = _FakeWindow(tabs=[_FakeTabHandle([s1]),
+                                       _FakeTabHandle([s2])])
+            return _FakeApp([window])
+        iterm2mod.async_get_app = _get_app_healthy
+        result2 = asyncio.run(wsbuildmod.live_tab_names(None))
+        ok &= check("...while a fully healthy enumeration still returns "
+                    "the real names (regression guard)",
+                    result2 == {"alpha", "beta"})
+
+        # --- H: snapshot_rows must gate its own-session skip on the name
+        # being in db.RESERVED_NAMES, not on session identity alone - an
+        # ordinary shell's own tab must no longer vanish, and a real
+        # own-panel tab (name IS reserved) must still be excluded from the
+        # saved tabs, but visibly (reserved_own), not silently. ---
+        os.environ["ITERM_SESSION_ID"] = "w0t0p0:OWN-SID"
+        db.connect = lambda: "FAKE_CONN"
+        db.get_session = lambda conn, name: None
+
+        async def _get_app_own_reserved(connection):
+            own = _FakeSession("OWN-SID", name="relay", path="/tmp/own")
+            other = _FakeSession("other-1", name="other", path="/tmp/other")
+            window = _FakeWindow(tabs=[_FakeTabHandle([own]),
+                                       _FakeTabHandle([other])])
+            return _FakeApp([window])
+        iterm2mod.async_get_app = _get_app_own_reserved
+        rows1 = asyncio.run(wsbuildmod.snapshot_rows(None))
+        own_rows = [r for r in rows1 if r.get("reserved_own")]
+        ok &= check('an own session actually named "relay" is flagged, '
+                    "not silently dropped (H)",
+                    len(own_rows) == 1 and own_rows[0]["name"] == "relay")
+        tabs1 = wsconfigmod.snapshot(rows1)
+        ok &= check("...wsconfig.snapshot() excludes the flagged row from "
+                    "the saved tabs",
+                    all(t.name != "relay" for t in tabs1))
+        ok &= check("...while the OTHER live tab is still saved normally",
+                    any(t.name == "other" for t in tabs1))
+
+        async def _get_app_own_ordinary(connection):
+            own = _FakeSession("OWN-SID", name="myshell", path="/tmp/own")
+            window = _FakeWindow(tabs=[_FakeTabHandle([own])])
+            return _FakeApp([window])
+        iterm2mod.async_get_app = _get_app_own_ordinary
+        rows2 = asyncio.run(wsbuildmod.snapshot_rows(None))
+        tabs2 = wsconfigmod.snapshot(rows2)
+        ok &= check("an own-session tab with an ordinary name (a plain "
+                    "shell, not relay's panel) is no longer dropped (H)",
+                    any(t.name == "myshell" for t in tabs2))
+    finally:
+        iterm2mod.async_get_app = orig_async_get_app
+        iterm2mod.Window.async_create = orig_window_create
+        db.connect = orig_db_connect
+        db.register = orig_db_register
+        db.set_arm_request = orig_db_set_arm_request
+        db.set_session_context = orig_db_set_session_context
+        db.set_session_mode = orig_db_set_session_mode
+        db.get_session = orig_db_get_session
+        if orig_iterm_id is None:
+            os.environ.pop("ITERM_SESSION_ID", None)
+        else:
+            os.environ["ITERM_SESSION_ID"] = orig_iterm_id
+
+    return ok
+
+
 def run():
     ok = True
 
@@ -2258,6 +2550,8 @@ def run():
         _events.EVENTS_PATH = _real_path
 
     ok &= _ws_checks(ok)
+    ok &= _fix_wave_ws_checks(ok)
+    ok &= _wsbuild_internals_checks(ok)
 
     conn.close()
     print()
