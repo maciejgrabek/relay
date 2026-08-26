@@ -61,6 +61,13 @@ def validate(table) -> List[str]:
             problems.append(
                 f"{cmd.name}: {cmd.cli} is a worker protocol verb and must "
                 f"never be exposed in the TUI")
+        # Check for empty tokens in key string (e.g., "a,,b")
+        if cmd.key:
+            for part in cmd.key.split(","):
+                if not part.strip():
+                    problems.append(
+                        f"{cmd.name}: empty token in key {cmd.key!r}")
+                    break
         for tok in key_tokens(cmd):
             if tok in seen:
                 problems.append(
@@ -72,9 +79,9 @@ def validate(table) -> List[str]:
 def parse(line: str) -> Tuple[str, List[str], bool]:
     """A typed line into (verb, args, confirmed).
 
-    A single trailing `!` is a suffix on the INVOCATION, not part of a name:
-    `:wipe!` and `:wipe !` both resolve to the `wipe` entry with confirmed
-    set. Completion therefore never offers a name ending in `!`.
+    Trailing `!` characters are a suffix on the INVOCATION, not part of a name:
+    `:wipe!`, `:wipe!!`, and `:wipe !` all resolve to the `wipe` entry with
+    confirmed set. Completion therefore never offers a name ending in `!`.
     """
     parts = line.strip().lstrip(":").split()
     if not parts:
@@ -86,9 +93,11 @@ def parse(line: str) -> Tuple[str, List[str], bool]:
         if not parts:
             return "", [], True
     verb = parts[0]
-    if verb.endswith("!"):
+    # Strip ALL trailing ! and set confirmed if there was at least one
+    original_verb = verb
+    verb = verb.rstrip("!")
+    if verb != original_verb:
         bang = True
-        verb = verb[:-1]
     return verb, parts[1:], bang
 
 

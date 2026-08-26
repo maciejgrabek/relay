@@ -56,11 +56,24 @@ def run():
     ok &= check("join is on the never-expose list",
                 "join" in commands.NEVER_EXPOSE)
 
+    # Check hot_pairs on actual content, not just length
+    hot_pairs = commands.hot_pairs(table)
     ok &= check("hot_pairs returns only hot entries",
-                len(commands.hot_pairs(table))
-                == len([c for c in table if c.hot]))
+                len(hot_pairs) == len([c for c in table if c.hot]))
+    # Verify "up" entry produces correct (key, label) pair
+    ok &= check('hot_pairs includes ("up/k", "move up")',
+                ("up/k", "move up") in hot_pairs)
+
+    # Check help_rows on actual content, not just length
+    help_rows = commands.help_rows(table)
     ok &= check("help_rows returns EVERY entry",
-                len(commands.help_rows(table)) == len(table))
+                len(help_rows) == len(table))
+    # Verify "up" entry with key includes key, help, and :name form
+    ok &= check('help_rows includes ("up k", "move up   (:up)")',
+                ("up k", "move up   (:up)") in help_rows)
+    # Verify "answer" entry with no key renders as :name form only
+    ok &= check('help_rows includes (":answer", "send Enter to the selected session")',
+                (":answer", "send Enter to the selected session") in help_rows)
 
     ok &= check("exact name completes to itself",
                 commands.complete("audit", table) == ["audit"])
@@ -86,6 +99,12 @@ def run():
                 commands.parse(":audit on") == ("audit", ["on"], False))
     ok &= check("parse of an empty line yields no verb",
                 commands.parse("   ") == ("", [], False))
+    ok &= check("parse strips multiple trailing bangs",
+                commands.parse("wipe!!") == ("wipe", [], True))
+    ok &= check("parse strips three trailing bangs",
+                commands.parse("wipe!!!") == ("wipe", [], True))
+    ok &= check("parse of a lone bang yields no verb but confirmed",
+                commands.parse("!") == ("", [], True))
     ok &= check("completion never offers a bang",
                 not any(n.endswith("!") for n in commands.complete("", table)))
 
@@ -101,6 +120,9 @@ def run():
     ok &= check("validate catches a never-expose verb",
                 commands.validate([
                     commands.Cmd(name="reg", help="h", cli="register")]) != [])
+    ok &= check("validate catches an empty token in key",
+                commands.validate([
+                    commands.Cmd(name="x", help="h", action="a", key="a,,b")]) != [])
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
