@@ -319,7 +319,8 @@ KEYBAR = (
     + "\n"
     + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
              ("p", "pause"), ("!", "stop/tell"), ("c", "caffeinate"),
-             (",", "settings"), ("R×2", "restore"),
+             (",", "settings"), ("w", "workspaces"), ("S", "save layout"),
+             ("R×2", "restore"),
              ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
 
 
@@ -1015,6 +1016,8 @@ def help_text(width: int = 96) -> str:
         row("v", "audit view: what relay approved for this session"),
         row("f", "feed: hide / show the live terminal feed pane (persists)"),
         row("t", "timers: schedule payloads to fire into this session (cron-like)"),
+        row("w", "workspaces: the saved tab sets in ~/.relay/workspaces.toml"),
+        row("S", "save this window as a workspace (relay ws up <name> reopens it)"),
         row("m", "mascot: float the creature on your desktop, above other apps"),
         row("c", "caffeinate: let the Mac sleep now, or take the assertion back"),
         row("TAB", "swarm view (kanban + interactions + feed)"),
