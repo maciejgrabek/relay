@@ -3022,10 +3022,46 @@ class RelayApp(App):
             if fn is None:
                 log.write_line(f"{cmd.name}: {cmd.action} is not implemented")
                 return
-            # action_send is parameterised; the rest take no arguments.
-            fn(*args) if cmd.pass_args else fn()
+            if cmd.pass_args:
+                # action_send(key) is the one parameterised action, and it
+                # takes exactly one argument. Review round 2, finding 1: an
+                # arity mismatch here (:digit with none, :digit 1 2 with
+                # two) raised a bare TypeError out of on_input_submitted and
+                # took the whole app down - Textual has no handler above
+                # this, so an uncaught exception here is not a log line, it
+                # is the operator's console dying mid-shift. Finding 2: even
+                # a well-formed single argument was never checked against
+                # what the entry advertises (cmd.args, a literal "a|b|c"
+                # enum) - ":digit foo" typed the string "foo" into the
+                # session as keystrokes instead of refusing it.
+                choices = cmd.args.split("|") if cmd.args else []
+                if len(args) != 1 or (choices and args[0] not in choices):
+                    log.write_line(self._cmd_usage(cmd))
+                    return
+                call_args = (args[0],)
+            else:
+                # Every other action takes no arguments. Extra words the
+                # operator typed are not silently dropped (finding 3): a
+                # session-cycling action like `arm` cannot honour a level
+                # even if one is typed (":arm w1 insane" cannot jump to
+                # insane - action_toggle only cycles), so name what was
+                # ignored instead of pretending it was consumed.
+                call_args = ()
+                if args:
+                    log.write_line(f"{cmd.name}: ignored extra argument(s) "
+                                   f"{' '.join(args)!r}")
+            try:
+                fn(*call_args)
+            except Exception as e:
+                # A broken command must cost a log line, never the session
+                # (finding 1(b)) - no dispatched action may be allowed to
+                # panic the app, known-arity-checked or not.
+                log.write_line(f"{cmd.name}: failed - {e}")
             return
         self._cmd_run_cli(cmd, args, log)      # Task 5
+
+    def _cmd_usage(self, cmd) -> str:
+        return f"{cmd.name}: usage :{cmd.name}" + (f" {cmd.args}" if cmd.args else "")
 
     def _cmd_select(self, name: str) -> bool:
         """Move the cursor to the live session called `name`. False if there

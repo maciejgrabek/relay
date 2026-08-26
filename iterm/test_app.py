@@ -2658,6 +2658,94 @@ async def go():
             "no session selected" in
             "\n".join(ne.query_one(appmod.Log).lines))
 
+    # --- review round 2: arity, choice validation, and honest arg discard -----
+    # Finding 1 (critical): action_send(key) takes exactly one positional
+    # argument with no arity guard in the dispatcher - ":digit" (0 args) or
+    # ":digit 1 2" (2 args) raised a bare TypeError out of on_input_submitted
+    # with nothing above it to catch it, and Textual's app loop died with it.
+    # An operator mistyping a command must never cost them their whole panel.
+    import commands as _cmdmod2
+
+    cg = _TestApp(_two_plain(), dry_run=True)
+    async with cg.run_test() as pilot:
+        await pilot.pause()
+        cg.watcher.registry["s0"] = {"name": "w1", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        cg.watcher.registry["s1"] = {"name": "w2", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        cg._refresh()
+        await pilot.pause()
+
+        async def cmd2(line):
+            await pilot.press("colon")
+            await pilot.pause()
+            cg.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        def logtext2():
+            return "\n".join(cg.query_one(appmod.Log).lines)
+
+        t2 = cg.query_one(appmod.DataTable)
+        t2.move_cursor(row=cg._row_sids.index("s0"))
+        await pilot.pause()
+
+        await cmd2("digit")
+        chk("the app is still running after :digit with no argument "
+            "(the property that matters, not just the log text)",
+            cg.is_running)
+        chk(":digit with no argument logs a usage line instead of calling "
+            "action_send with the wrong arity",
+            "digit: usage :digit 1|2|3" in logtext2())
+        chk(":digit with no argument sent nothing to the session",
+            cg.watcher.sent == [])
+
+        await cmd2("digit 1 2")
+        chk("the app is still running after :digit with two arguments",
+            cg.is_running)
+        chk(":digit 1 2 also logs the usage line rather than calling "
+            "action_send('1', '2')",
+            logtext2().count("digit: usage :digit 1|2|3") >= 2)
+        chk(":digit 1 2 sent nothing to the session",
+            cg.watcher.sent == [])
+
+        # Finding 2: a well-formed single argument still has to be one of
+        # the choices the table advertises - ":digit foo" used to type the
+        # literal string "foo" into the session as keystrokes.
+        await cmd2("digit foo")
+        chk("the app is still running after :digit with an invalid choice",
+            cg.is_running)
+        chk(":digit foo is refused with the usage line, not sent as "
+            "keystrokes", "digit: usage :digit 1|2|3" in logtext2()
+            and cg.watcher.sent == [])
+
+        await cmd2("digit 1")
+        chk(":digit 1 - a valid single choice - actually sends '1'",
+            cg.watcher.sent == [("s0", "1")])
+
+        # Finding 3: args left over after a subject is consumed used to
+        # vanish silently. action_toggle only CYCLES the arm level and
+        # cannot jump to a named one, so ":arm w2 insane" cannot honour
+        # "insane" - but it must say so, and it must still do what it CAN
+        # (cycle s1), not do nothing.
+        chk("s1 starts unarmed", cg.watcher.sessions["s1"].mode == "off")
+        await cmd2("arm w2 insane")
+        chk(":arm w2 insane resolves the subject and moves to w2's row",
+            cg._selected_sid() == "s1")
+        chk(":arm w2 insane logs that the extra argument was ignored, "
+            "naming it - not a silent discard",
+            "arm: ignored extra argument(s) 'insane'" in logtext2())
+        chk(":arm w2 insane still cycles arm on s1 (what it CAN do)",
+            cg.watcher.sessions["s1"].mode == "safe")
+        chk(":arm w2 insane never jumps straight to insane - "
+            "action_toggle only cycles, and the table no longer promises "
+            "otherwise", cg.watcher.sessions["s1"].mode != "insane")
+        arm_cmd = next(c for c in _cmdmod2.CMD if c.name == "arm")
+        chk("the table's own args hint for arm no longer advertises a "
+            "level it cannot deliver",
+            "[level]" not in arm_cmd.args)
+
     ok = _command_table_checks(ok)
     ok = _dispatch_checks(ok)
 

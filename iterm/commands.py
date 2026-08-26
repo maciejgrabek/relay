@@ -189,7 +189,11 @@ CMD = (
         key="down,j", hot=True, bar="move"),
     Cmd(name="arm", help="cycle arm: off -> safe -> wild -> insane",
         action="action_toggle", key="space", hot=True, subject=True,
-        args="[session] [level]", bar="arm"),
+        # Only "[session]" - action_toggle CYCLES the arm level and cannot
+        # jump to a named one, so advertising "[level]" here (as an earlier
+        # draft did) promised a capability the dispatcher cannot deliver.
+        # Review round 2, finding 3.
+        args="[session]", bar="arm"),
     # ENTER is NOT in BINDINGS: the DataTable consumes it and app.py warns
     # that binding it too would double-fire. So this entry carries no key,
     # and KEYBAR names ENTER literally (Task 2 step 4).
