@@ -274,6 +274,62 @@ dir = "~"
     ok &= check('a name with "#" survives save -> load',
                 "a#b" in wsconfig.load(path9)[1])
 
+    # FINDING (task 7 re-review): a quoted header must unescape back to the
+    # real name, or remove()/save(force=True) silently corrupt instead of
+    # touching the right block.
+    quote_name = 'say"hi"'
+    path10 = _write("")
+    wsconfig.save(path10, quote_name, [wsconfig.Tab(name="t1", dir="/tmp")])
+    removed = wsconfig.remove(path10, quote_name)
+    ok &= check('remove() of a quote-containing name reports a hit',
+                removed)
+    ok &= check('remove() of a quote-containing name actually removes it',
+                quote_name not in wsconfig.load(path10)[1])
+
+    path11 = _write("")
+    wsconfig.save(path11, quote_name, [wsconfig.Tab(name="t1", dir="/tmp")])
+    wsconfig.save(path11, quote_name, [wsconfig.Tab(name="t2", dir="/tmp")],
+                 force=True)
+    _, after_force_q = wsconfig.load(path11)
+    ok &= check('force-save of a quote-containing name replaces, not appends',
+                [t.name for t in after_force_q[quote_name]] == ["t2"])
+
+    backslash_name = "a\\b"
+    path12 = _write("")
+    wsconfig.save(path12, backslash_name, [wsconfig.Tab(name="t1", dir="/tmp")])
+    removed_bs = wsconfig.remove(path12, backslash_name)
+    ok &= check('remove() of a backslash-containing name reports a hit',
+                removed_bs)
+    ok &= check('remove() of a backslash-containing name actually removes it',
+                backslash_name not in wsconfig.load(path12)[1])
+
+    path13 = _write("")
+    wsconfig.save(path13, backslash_name, [wsconfig.Tab(name="t1", dir="/tmp")])
+    wsconfig.save(path13, backslash_name,
+                 [wsconfig.Tab(name="t2", dir="/tmp")], force=True)
+    _, after_force_bs = wsconfig.load(path13)
+    ok &= check('force-save of a backslash-containing name replaces, not appends',
+                [t.name for t in after_force_bs[backslash_name]] == ["t2"])
+
+    # FINDING (task 7 re-review): a config that exists but cannot be read
+    # (permission denied, or any other OSError) must raise ConfigError, not
+    # the raw OSError - _wssave_commit's except clause only catches the
+    # former.
+    path14 = _write('[[x]]\nname = "a"\ndir = "~"\n')
+    os.chmod(path14, 0o000)
+    try:
+        raised_os = ""
+        try:
+            wsconfig.load(path14)
+        except wsconfig.ConfigError as exc:
+            raised_os = str(exc)
+        except PermissionError:
+            raised_os = ""
+        ok &= check('an unreadable config raises ConfigError, not PermissionError',
+                    bool(raised_os))
+    finally:
+        os.chmod(path14, 0o644)
+
     # Prefix case: removing "dev" should not affect "devtools"
     prefix_file = '''[[dev]]
 name = "x"

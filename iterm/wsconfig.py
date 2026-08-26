@@ -140,6 +140,14 @@ def load(path: Optional[str] = None) -> Tuple[dict, Dict[str, List[Tab]]]:
         raise ConfigError(f"no config at {p}")
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{p} is not valid TOML: {exc}")
+    except OSError as exc:
+        # Anything else that open()/read() can raise - permission denied, a
+        # directory sitting at the path, etc. Kept distinct from the
+        # FileNotFoundError case above (caught first, since it is itself an
+        # OSError subclass): callers such as _wssave_commit tell "absent"
+        # from "broken" apart by trying os.path.exists() first, so this
+        # message must not read like the missing-file one.
+        raise ConfigError(f"could not read {p}: {exc}")
 
     settings = raw.pop("settings", {})
     if not isinstance(settings, dict):
@@ -235,10 +243,33 @@ def render(name: str, tabs: List[Tab]) -> str:
     return "\n".join(lines)
 
 
+def _unescape_basic(s: str) -> str:
+    """Reverse a TOML basic string's escaping - the inverse of _q(). _q()
+    only ever produces \\\\ (backslash) and \\" (quote), and always escapes
+    backslashes before quotes, so a left-to-right scan that greedily
+    consumes those two two-character sequences decodes it unambiguously,
+    including runs like \\\\" that come from a name containing both."""
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in ('"', "\\"):
+            out.append(s[i + 1])
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def _is_header(line: str) -> Optional[str]:
     """The table name a line declares, or None. Handles [x] and [[x]].
 
     Also handles inline comments and quoted names (with both " and ').
+    A double-quoted header is a TOML basic string (escapes apply) and a
+    single-quoted one is a literal string (no escapes) - they are unquoted
+    differently, or a name like `say"hi"` compares unequal to itself after
+    a save/load round trip.
     """
     s = line.strip()
 
@@ -258,9 +289,10 @@ def _is_header(line: str) -> Optional[str]:
     else:
         return None
 
-    # Strip both " and ' quotes
-    if (name.startswith('"') and name.endswith('"')) or \
-       (name.startswith("'") and name.endswith("'")):
+    # Basic string: unescape. Literal string: taken verbatim, no escapes.
+    if name.startswith('"') and name.endswith('"'):
+        return _unescape_basic(name[1:-1])
+    if name.startswith("'") and name.endswith("'"):
         return name[1:-1]
     return name
 
