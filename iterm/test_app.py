@@ -2746,6 +2746,84 @@ async def go():
             "level it cannot deliver",
             "[level]" not in arm_cmd.args)
 
+        # --- review round 3: an async action must not be called unawaited --
+        # action_quit is `async def` - fn(*call_args) on a coroutine
+        # function only BUILDS the coroutine and drops it: no exception, no
+        # effect, just a "was never awaited" RuntimeWarning, and ":quit" -
+        # the single most obvious thing anyone types - silently did
+        # nothing. A spy in place of the real action_quit proves dispatch
+        # actually reaches it (scheduled via call_next), not merely that
+        # nothing raised.
+        quit_calls = []
+
+        async def _quit_spy():
+            quit_calls.append(1)
+
+        cg.action_quit = _quit_spy
+        await cmd2("quit")
+        chk(":quit actually invokes action_quit (an async action gets "
+            "scheduled, not dropped)", quit_calls == [1])
+        chk("the app is still running after :quit reaches a stubbed "
+            "action_quit", cg.is_running)
+
+    # A generic guard so the NEXT async action cannot regress the same way:
+    # install an async spy in place of EVERY table entry's action (even
+    # ones that are sync today - the spy itself is always a coroutine
+    # function) and drive each one through the real dispatcher. If routing
+    # ever again calls a coroutine function directly instead of scheduling
+    # it, the corresponding spy is built and discarded just like
+    # action_quit was, and this loop catches it for any entry, not just
+    # today's one case.
+    da = _TestApp({"s0": SessionInfo("s0", title="t0", window_idx=0,
+                                     tab_idx=0, last_screen=["x"])},
+                  dry_run=True)
+    async with da.run_test() as pilot:
+        await pilot.pause()
+        da.watcher.registry["s0"] = {"name": "w1", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        da._refresh()
+        await pilot.pause()
+
+        # Captured before any entry is spied - "commands" (:commands, key
+        # colon) IS action_command_mode, the very method that opens
+        # #cmdline. Once its turn in the loop replaces it with a spy,
+        # pressing "colon" would no longer open anything for every entry
+        # that follows - a bound method captured now keeps calling the
+        # real implementation regardless of what a later setattr shadows it
+        # with on the instance.
+        real_open_cmdline = da.action_command_mode
+
+        for c in _cmdmod2.CMD:
+            if not c.action:
+                continue
+
+            called = []
+
+            async def _spy(*a, _called=called):
+                _called.append(a)
+
+            setattr(da, c.action, _spy)
+
+            line = c.name
+            if c.confirm:
+                line += "!"
+            if c.pass_args:
+                choices = c.args.split("|") if c.args else []
+                line += " " + (choices[0] if choices else "x")
+            elif c.subject:
+                line += " w1"
+
+            real_open_cmdline()
+            await pilot.pause()
+            da.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            chk(f":{c.name} reaches its action (dispatched, not dropped "
+                f"unawaited, however the real action is called)",
+                len(called) == 1)
+
     ok = _command_table_checks(ok)
     ok = _dispatch_checks(ok)
 

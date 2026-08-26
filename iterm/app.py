@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import hashlib
+import inspect
 import os
 import subprocess
 import sys
@@ -3050,13 +3051,35 @@ class RelayApp(App):
                 if args:
                     log.write_line(f"{cmd.name}: ignored extra argument(s) "
                                    f"{' '.join(args)!r}")
-            try:
-                fn(*call_args)
-            except Exception as e:
-                # A broken command must cost a log line, never the session
-                # (finding 1(b)) - no dispatched action may be allowed to
-                # panic the app, known-arity-checked or not.
-                log.write_line(f"{cmd.name}: failed - {e}")
+            if inspect.iscoroutinefunction(fn):
+                # Review round 3: action_quit is `async def` (the only
+                # coroutine action among all 36 entries today, but nothing
+                # stops the next one from being async too). Calling it like
+                # every other action - `fn(*call_args)` - just BUILDS the
+                # coroutine and immediately discards it: no exception, no
+                # effect, only a "was never awaited" RuntimeWarning, and
+                # `:quit` - the single most obvious thing to type - silently
+                # does nothing. Schedule it through Textual's own callback
+                # mechanism instead of calling it directly; call_next awaits
+                # sync and async callables alike via Textual's `invoke()`,
+                # so this path also has to keep its own exception guard
+                # (finding 1(b)'s try/except does not reach a callback that
+                # runs after this method has already returned).
+                async def _run_async_action(_fn=fn, _args=call_args):
+                    try:
+                        await _fn(*_args)
+                    except Exception as e:
+                        self.query_one(Log).write_line(
+                            f"{cmd.name}: failed - {e}")
+                self.call_next(_run_async_action)
+            else:
+                try:
+                    fn(*call_args)
+                except Exception as e:
+                    # A broken command must cost a log line, never the
+                    # session (finding 1(b)) - no dispatched action may be
+                    # allowed to panic the app, known-arity-checked or not.
+                    log.write_line(f"{cmd.name}: failed - {e}")
             return
         self._cmd_run_cli(cmd, args, log)      # Task 5
 
