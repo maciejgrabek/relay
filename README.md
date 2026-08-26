@@ -1254,7 +1254,9 @@ relay ws save <name> [--all] [--force] [--config <path>]
 relay ws up <name> [--here] [--new] [--dry-run] [--yes] [--config <path>]
     Build a workspace. Always prints a plan first; without --yes it asks to
     confirm before opening anything, and --dry-run stops after the plan.
-    --here puts the tabs in the current window, --new always opens new ones.
+    --here puts the first window's tabs in the current window; any tab
+    assigned `window = 2` or higher still opens its own new window. --new
+    always opens new windows.
 
     Any tab whose name is already a live tab is skipped, not rebuilt - this
     is what makes `ws up` idempotent, and it stops a workspace from stealing
