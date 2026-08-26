@@ -123,6 +123,7 @@ def run():
 
     ok = _round_trip(ok)
     ok = _snapshot_checks(ok)
+    ok = _fix_wave_checks(ok)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
@@ -424,6 +425,154 @@ def _snapshot_checks(ok):
     ok &= check("snapshot output round-trips even with nameless rows in input",
                 len(reloaded["test"]) == 2 and
                 [t.name for t in reloaded["test"]] == ["a", "b"])
+
+    return ok
+
+
+def _fix_wave_checks(ok):
+    """Final review's fix wave: A (settings collision), B (control-char
+    escaping), C (validate-before-replace), F (plan_text's worker cmd), and
+    I.2/I.3 (quote-aware bracket scan, a discriminating atomicity test)."""
+
+    # --- A: a workspace named "settings" must be refused, not destroy the
+    # file - both with and without a pre-existing real [settings] table.
+    path_a1 = _write("")
+    raised_a1 = ""
+    try:
+        wsconfig.save(path_a1, "settings", [wsconfig.Tab(name="t", dir="/tmp")])
+    except wsconfig.ConfigError as exc:
+        raised_a1 = str(exc)
+    ok &= check('save refuses a workspace named "settings"',
+                "settings" in raised_a1)
+    ok &= check('a refused "settings" save leaves the file untouched',
+                open(path_a1).read() == "")
+    ok &= check('a refused "settings" save leaves no .tmp file behind',
+                not os.path.exists(path_a1 + ".tmp"))
+
+    path_a2 = _write('[settings]\ntarget = "current"\n')
+    raised_a2 = ""
+    try:
+        wsconfig.save(path_a2, "settings", [wsconfig.Tab(name="t", dir="/tmp")])
+    except wsconfig.ConfigError as exc:
+        raised_a2 = str(exc)
+    ok &= check('save refuses "settings" even with a real [settings] table '
+                "already present", bool(raised_a2))
+
+    # --- B: a newline (or other control character) in a tab name must be
+    # escaped, not written raw - the file must still parse, and the name
+    # must round-trip intact.
+    newline_name = "bad\nname"
+    path_b1 = _write("")
+    wsconfig.save(path_b1, "nlws", [wsconfig.Tab(name=newline_name, dir="/tmp")])
+    with open(path_b1) as fh:
+        raw_nl_text = fh.read()
+    ok &= check("a newline in a tab name is escaped, not written literally",
+                "bad\nname" not in raw_nl_text and "\\n" in raw_nl_text)
+    _, loaded_nl = wsconfig.load(path_b1)
+    ok &= check("a tab name containing a newline survives save -> load",
+                loaded_nl["nlws"][0].name == newline_name)
+
+    ctrl_name = "a\tb\rc"
+    path_b2 = _write("")
+    wsconfig.save(path_b2, "ctrlws", [wsconfig.Tab(name=ctrl_name, dir="/tmp")])
+    _, loaded_ctrl = wsconfig.load(path_b2)
+    ok &= check("tab/CR control characters in a name survive save -> load",
+                loaded_ctrl["ctrlws"][0].name == ctrl_name)
+
+    # --- C: whatever produces the new content, if it does not parse,
+    # save()/remove() must refuse and leave the original file exactly as it
+    # was - a general net, exercised here by forcing render()/strip_block()
+    # to misbehave rather than chasing one specific corruption mechanism.
+    path_c1 = _write(FULL)
+    with open(path_c1) as fh:
+        original_c1 = fh.read()
+    orig_render = wsconfig.render
+    wsconfig.render = lambda name, tabs: "[[broken\nnot valid toml at all"
+    try:
+        raised_c1 = ""
+        try:
+            wsconfig.save(path_c1, "brand_new_ws",
+                         [wsconfig.Tab(name="t", dir="/tmp")])
+        except wsconfig.ConfigError as exc:
+            raised_c1 = str(exc)
+        ok &= check("save() refuses content that would not parse (C)",
+                    bool(raised_c1))
+        ok &= check("...and leaves the original file untouched",
+                    open(path_c1).read() == original_c1)
+        ok &= check("...and leaves no .tmp file behind",
+                    not os.path.exists(path_c1 + ".tmp"))
+    finally:
+        wsconfig.render = orig_render
+
+    path_c2 = _write(FULL)
+    with open(path_c2) as fh:
+        original_c2 = fh.read()
+    orig_strip = wsconfig.strip_block
+    wsconfig.strip_block = lambda text, name: "[[broken\nnot valid toml at all"
+    try:
+        raised_c2 = ""
+        try:
+            wsconfig.remove(path_c2, "dragen")
+        except wsconfig.ConfigError as exc:
+            raised_c2 = str(exc)
+        ok &= check("remove() refuses content that would not parse (C)",
+                    bool(raised_c2))
+        ok &= check("...and leaves the original file untouched",
+                    open(path_c2).read() == original_c2)
+        ok &= check("...and leaves no .tmp file behind",
+                    not os.path.exists(path_c2 + ".tmp"))
+    finally:
+        wsconfig.strip_block = orig_strip
+
+    # --- F: plan_text must not show a worker tab's `cmd` as something that
+    # will run - build()'s worker branch never sends it.
+    worker_tab = wsconfig.Tab(name="w1", dir="/tmp", cmd="ls",
+                              arm="wild", prompt="do work")
+    text_f = wsconfig.plan_text("wsf", [worker_tab])
+    ok &= check("plan_text does not present a worker's cmd as `$ ...`",
+                "$ ls" not in text_f)
+    ok &= check("plan_text flags the worker's cmd as ignored instead",
+                "ignored" in text_f and "ls" in text_f)
+
+    # --- I.2: the header bracket scan must be quote-aware - a name
+    # containing "]]" used to truncate the header early, making --force
+    # append a duplicate instead of replacing.
+    bracket_name = "a]]b"
+    path_i2 = _write("")
+    wsconfig.save(path_i2, bracket_name, [wsconfig.Tab(name="t1", dir="/tmp")])
+    wsconfig.save(path_i2, bracket_name, [wsconfig.Tab(name="t2", dir="/tmp")],
+                 force=True)
+    _, after_bracket = wsconfig.load(path_i2)
+    ok &= check('force-save of a "]"-containing name replaces, not '
+                "duplicates (I.2)",
+                [t.name for t in after_bracket[bracket_name]] == ["t2"])
+
+    # --- I.3: a discriminating atomicity test. The old version passed
+    # against code that never wrote a temp file at all; this one injects a
+    # failure mid-write (os.replace itself blowing up) and asserts the
+    # ORIGINAL file survives completely intact, with no stray .tmp left over.
+    path_i3 = _write(FULL)
+    with open(path_i3) as fh:
+        original_i3 = fh.read()
+    orig_replace = os.replace
+
+    def _boom_replace(*a, **kw):
+        raise OSError("simulated failure mid-write")
+    os.replace = _boom_replace
+    try:
+        raised_i3 = False
+        try:
+            wsconfig.save(path_i3, "willfail", [wsconfig.Tab(name="t", dir="/tmp")])
+        except OSError:
+            raised_i3 = True
+        ok &= check("a failure during the atomic replace propagates "
+                    "(I.3)", raised_i3)
+        ok &= check("...and leaves the ORIGINAL file completely intact",
+                    open(path_i3).read() == original_i3)
+        ok &= check("...and does not leave a stray .tmp file behind",
+                    not os.path.exists(path_i3 + ".tmp"))
+    finally:
+        os.replace = orig_replace
 
     return ok
 

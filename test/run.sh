@@ -9,7 +9,7 @@ set -uo pipefail
 # Defense-in-depth: no test (present or future) should ever be able to write
 # the developer's real ~/.relay/config. A throwaway path for the whole suite.
 export RELAY_CONFIG="$(mktemp -d)/relay-test-config"
-# Same defense for the workspaces file: any suite touching workspaces.py must
+# Same defense for the workspaces file: any suite touching wsconfig.py must
 # never write the developer's real ~/.relay/workspaces.toml.
 export RELAY_WORKSPACES="$(mktemp -d)/relay-test-workspaces.toml"
 # Same defense for the two append-only logs. notify_mac() emits an event on

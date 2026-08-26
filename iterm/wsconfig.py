@@ -176,12 +176,31 @@ def group_windows(tabs: List[Tab]) -> List[Tuple[int, List[Tab]]]:
     return [(w, groups[w]) for w in order]
 
 
+_TOML_BASIC_ESCAPES = {
+    "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t",
+    "\b": "\\b", "\f": "\\f",
+}
+
+
 def _q(value: str) -> str:
-    """A TOML basic string. Only backslash and quote need escaping here; a
-    workspace name or command containing a raw newline is not something we
-    round-trip, and load() would reject the result loudly rather than quietly."""
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    """A TOML basic string, safe for any Unicode scalar value.
+
+    Backslash and quote need escaping to keep the string delimited; control
+    characters (a raw newline above all) need it too, because a tab's
+    `autoName` is not something relay controls - any program's title escape
+    sequence can set it - so a careless or hostile tab title containing a
+    literal newline would otherwise write a broken line straight into
+    workspaces.toml and take the whole file down on the next load()."""
+    out = []
+    for ch in str(value):
+        esc = _TOML_BASIC_ESCAPES.get(ch)
+        if esc is not None:
+            out.append(esc)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7f:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
 
 
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -243,23 +262,67 @@ def render(name: str, tabs: List[Tab]) -> str:
     return "\n".join(lines)
 
 
+_TOML_BASIC_UNESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r",
+                         "t": "\t", "b": "\b", "f": "\f"}
+
+
 def _unescape_basic(s: str) -> str:
-    """Reverse a TOML basic string's escaping - the inverse of _q(). _q()
-    only ever produces \\\\ (backslash) and \\" (quote), and always escapes
-    backslashes before quotes, so a left-to-right scan that greedily
-    consumes those two two-character sequences decodes it unambiguously,
-    including runs like \\\\" that come from a name containing both."""
+    """Reverse a TOML basic string's escaping - the inverse of _q(). A
+    left-to-right scan that greedily consumes each recognized two-character
+    (or, for \\uXXXX, six-character) escape decodes it unambiguously,
+    including runs like \\\\" that come from a name containing both a
+    backslash and a quote."""
     out = []
     i = 0
-    while i < len(s):
+    n = len(s)
+    while i < n:
         c = s[i]
-        if c == "\\" and i + 1 < len(s) and s[i + 1] in ('"', "\\"):
-            out.append(s[i + 1])
-            i += 2
-        else:
-            out.append(c)
-            i += 1
+        if c == "\\" and i + 1 < n:
+            nxt = s[i + 1]
+            if nxt in _TOML_BASIC_UNESCAPES:
+                out.append(_TOML_BASIC_UNESCAPES[nxt])
+                i += 2
+                continue
+            if nxt == "u" and i + 6 <= n:
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+        out.append(c)
+        i += 1
     return "".join(out)
+
+
+def _find_close(s: str, close: str) -> int:
+    """Index where `close` ("]" or "]]") first appears OUTSIDE any quoted
+    span, or -1. Quote-aware so a name containing a literal "]" (legal
+    inside a quoted TOML key) cannot be mistaken for the header's own
+    closing bracket - a naive `.index(close)` truncates there instead,
+    corrupting the name and making strip_block/save(force=True) miss the
+    block it was meant to replace."""
+    i = 0
+    n = len(s)
+    quote = None
+    while i < n:
+        c = s[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ('"', "'"):
+            quote = c
+            i += 1
+            continue
+        if s[i:i + len(close)] == close:
+            return i
+        i += 1
+    return -1
 
 
 def _is_header(line: str) -> Optional[str]:
@@ -275,11 +338,13 @@ def _is_header(line: str) -> Optional[str]:
 
     # Strip inline comment - it comes after the closing bracket
     if s.startswith("[["):
-        if "]]" in s:
-            s = s[:s.index("]]") + 2]
+        end = _find_close(s, "]]")
+        if end != -1:
+            s = s[:end + 2]
     elif s.startswith("["):
-        if "]" in s:
-            s = s[:s.index("]") + 1]
+        end = _find_close(s, "]")
+        if end != -1:
+            s = s[:end + 1]
 
     # Extract table name
     if s.startswith("[[") and s.endswith("]]"):
@@ -315,8 +380,71 @@ def strip_block(text: str, name: str) -> str:
     return "\n".join(out)
 
 
+def _check_writable(text: str, context: str) -> None:
+    """Validate `text` as a complete workspaces.toml before it is ever
+    written to disk - shared by save() and remove(), called on the FULL
+    rendered content, right before the atomic replace.
+
+    Two distinct failure classes this catches, both destroying every OTHER
+    workspace in the file if left to load() to discover later:
+
+    - A workspace name that collides with a reserved top-level key. A
+      workspace named "settings" renders `[[settings]]`, which either
+      conflicts outright with a real `[settings]` table (a TOML syntax
+      error) or, with no such table present, parses fine as a list under
+      the "settings" key - which load()'s `isinstance(settings, dict)`
+      check then refuses. Caught here directly, with the same check load()
+      itself does, so the file is never written in the first place.
+    - Any other, unknown corruption mechanism (a strip_block edge case, a
+      quoting bug not yet found) - caught generically, because this is
+      exactly the parse load() itself will do on the next read.
+    """
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{context} would leave an unparsable file: {exc}")
+
+    settings = raw.pop("settings", {})
+    if not isinstance(settings, dict):
+        raise ConfigError(
+            f'{context}: "settings" must be a table - a workspace cannot '
+            f'be named "settings", or otherwise collide with a reserved '
+            f"top-level key")
+    for tname, value in raw.items():
+        if not isinstance(value, list):
+            raise ConfigError(
+                f'{context}: "{tname}" must be a list of tabs - declare '
+                f"tabs as [[{tname}]], not [{tname}]")
+        for i, t in enumerate(value):
+            _parse_tab(t, f'workspace "{tname}" tab {i + 1}')
+
+
+def _atomic_write(path: str, text: str) -> None:
+    """Write `text` to `path` via a temp file + os.replace, cleaning up the
+    temp file on any failure so a bad write never leaves a stray .tmp beside
+    (or, worse, in place of) the real file."""
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def save(path: str, name: str, tabs: List[Tab], force: bool = False) -> None:
-    """Write `name` into the file at `path`, creating it if absent. Atomic."""
+    """Write `name` into the file at `path`, creating it if absent. Atomic.
+
+    The original file is left completely untouched if anything goes wrong -
+    including a name that cannot round-trip (_check_writable, below) and a
+    failure during the write/replace itself (_atomic_write)."""
     try:
         with open(path) as fh:
             text = fh.read()
@@ -334,27 +462,24 @@ def save(path: str, name: str, tabs: List[Tab], force: bool = False) -> None:
 
     body = render(name, tabs)
     joined = (text.rstrip("\n") + "\n\n" + body) if text.strip() else body
+    final = joined.rstrip("\n") + "\n"
 
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(joined.rstrip("\n") + "\n")
-    os.replace(tmp, path)
+    _check_writable(final, f'saving workspace "{name}"')
+    _atomic_write(path, final)
 
 
 def remove(path: str, name: str) -> bool:
-    """Drop a workspace. True when it was there, False when it was not. Atomic."""
+    """Drop a workspace. True when it was there, False when it was not.
+    Atomic - see save()'s docstring."""
     _, existing = load(path)
     if name not in existing:
         return False
     with open(path) as fh:
         text = fh.read()
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(strip_block(text, name).rstrip("\n") + "\n")
-    os.replace(tmp, path)
+    final = strip_block(text, name).rstrip("\n") + "\n"
+
+    _check_writable(final, f'removing workspace "{name}"')
+    _atomic_write(path, final)
     return True
 
 
@@ -368,9 +493,19 @@ def snapshot(rows: List[dict]) -> List[Tab]:
     Rows whose name is blank or all whitespace are dropped, not emitted: a tab
     with no name cannot be addressed in a workspace and cannot round-trip
     through render()/load().
+
+    A row flagged "reserved_own" (wsbuild.snapshot_rows: the tab you were
+    standing in, when IT is actually relay's own panel) is dropped the same
+    way - a name in db.RESERVED_NAMES could never be saved anyway (build()
+    refuses it), so keeping it here would only pollute the file. Unlike the
+    unconditional own-session drop this replaces, cmd_ws can see this one
+    coming (the row is still present, just marked) and report it instead of
+    silently losing the tab you typed the command in.
     """
     tabs = []
     for r in rows:
+        if r.get("reserved_own"):
+            continue
         name = str(r.get("name", "")).strip()
         if not name:
             continue
@@ -411,8 +546,18 @@ def plan_text(name: str, tabs: List[Tab], missing_dirs=(),
                 marks.append("worker")
             if tab.dir in missing:
                 marks.append("missing dir - will be skipped")
+            cmd = ""
+            if tab.cmd:
+                if tab.is_worker:
+                    # build()'s worker branch hands the tab entirely to
+                    # spawn_worker (name, project, prompt, dir, role, arm) -
+                    # tab.cmd is never sent. Showing it as `$ ...` here would
+                    # advertise a command that will never run.
+                    marks.append(f"cmd ignored, worker runs prompt: "
+                                 f"{tab.cmd!r}")
+                else:
+                    cmd = f"   $ {tab.cmd}"
             suffix = f"   [{', '.join(marks)}]" if marks else ""
-            cmd = f"   $ {tab.cmd}" if tab.cmd else ""
             lines.append(f"    {tab.name:<16} {_tilde(tab.dir)}{cmd}{suffix}")
             for pane in tab.panes:
                 where = "beside" if pane.split == "v" else "below"
