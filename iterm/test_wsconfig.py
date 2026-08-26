@@ -323,6 +323,35 @@ def _snapshot_checks(ok):
     ok &= check("plan_text reports skipped names",
                 "monitor" in text and "already live" in text)
     ok &= check("plan_text marks a supervised tab", "safe" in text)
+
+    ok &= check("snapshot drops a row with no name key",
+                len(wsconfig.snapshot([{"dir": "/tmp"}, {"name": "a", "dir": "/tmp"}])) == 1)
+    nameless_result = wsconfig.snapshot([{"dir": "/tmp"}, {"name": "a", "dir": "/tmp"}])
+    ok &= check("snapshot surviving tabs have names",
+                all(t.name for t in nameless_result) and nameless_result[0].name == "a")
+
+    ok &= check("snapshot drops a row with blank name",
+                len(wsconfig.snapshot([{"name": "   ", "dir": "/tmp"}, {"name": "b", "dir": "/tmp"}])) == 1)
+    blank_result = wsconfig.snapshot([{"name": "   ", "dir": "/tmp"}, {"name": "b", "dir": "/tmp"}])
+    ok &= check("snapshot surviving tabs after blank name drop",
+                len(blank_result) == 1 and blank_result[0].name == "b")
+
+    none_dir_result = wsconfig.snapshot([{"name": "x", "dir": None}])
+    ok &= check("snapshot with dir: None produces expanded home, not literal None",
+                none_dir_result[0].dir == os.path.expanduser("~") and "None" not in none_dir_result[0].dir)
+
+    rows_with_nameless = [
+        {"name": "a", "dir": "/tmp"},
+        {"name": "", "dir": "/tmp"},
+        {"name": "b", "dir": "/tmp"},
+    ]
+    snapshot_tabs = wsconfig.snapshot(rows_with_nameless)
+    rendered = wsconfig.render("test", snapshot_tabs)
+    _, reloaded = wsconfig.load(_write(rendered))
+    ok &= check("snapshot output round-trips even with nameless rows in input",
+                len(reloaded["test"]) == 2 and
+                [t.name for t in reloaded["test"]] == ["a", "b"])
+
     return ok
 
 

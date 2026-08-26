@@ -315,12 +315,21 @@ def snapshot(rows: List[dict]) -> List[Tab]:
     `cmd` is deliberately left empty: a running tab cannot report the command
     that was typed into it, and guessing from the foreground job would write
     "zsh" into every entry. The operator fills it in.
+
+    Rows whose name is blank or all whitespace are dropped, not emitted: a tab
+    with no name cannot be addressed in a workspace and cannot round-trip
+    through render()/load().
     """
-    return [Tab(name=str(r.get("name", "")),
-                dir=_expand(str(r.get("dir", "~"))),
-                arm=str(r.get("arm", "") or ""),
-                window=int(r.get("window", 1) or 1))
-            for r in rows]
+    tabs = []
+    for r in rows:
+        name = str(r.get("name", "")).strip()
+        if not name:
+            continue
+        tabs.append(Tab(name=name,
+                        dir=_expand(r.get("dir") or "~"),
+                        arm=str(r.get("arm", "") or ""),
+                        window=int(r.get("window", 1) or 1)))
+    return tabs
 
 
 def skip_live(tabs: List[Tab], live_tab_names) -> Tuple[List[Tab], List[str]]:
