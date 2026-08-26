@@ -2537,22 +2537,31 @@ async def go():
     # dispatch through _cmdline_submit, the same way an operator would type
     # it, so that neutering the confirm gate (or the lookup, or _cmd_select)
     # turns a check here red rather than only a hand test nobody re-runs.
-    def _two_named():
-        s0 = SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
-                          last_screen=["x"])
-        s1 = SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
-                          last_screen=["x"])
-        # SessionInfo has no `name` field of its own (the swarm registry
-        # carries names separately) - _cmd_select still reads `info.name`
-        # off the SessionInfo, so a stub sets it directly. Dataclasses
-        # without __slots__ take the assignment fine.
-        s0.name = "w1"
-        s1.name = "w2"
-        return {"s0": s0, "s1": s1}
+    def _two_plain():
+        return {
+            "s0": SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                              last_screen=["x"]),
+            "s1": SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
+                              last_screen=["x"]),
+        }
 
-    cd = _TestApp(_two_named(), dry_run=True)
+    cd = _TestApp(_two_plain(), dry_run=True)
     async with cd.run_test() as pilot:
         await pilot.pause()
+        # Names live in watcher.registry (keyed by session id), not on
+        # SessionInfo - the same map _parked_recipient reads. Review round 1
+        # caught an earlier draft of _cmd_select reading `info.name` off
+        # SessionInfo, which has no such field and can never match a real
+        # session. s1's entry deliberately omits "name" (a row can legitimately
+        # lack one - e.g. mid-registration) to prove the lookup does not
+        # crash on it.
+        cd.watcher.registry["s0"] = {"name": "w1", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        # No "name" key at all - _refresh() (app.py) still expects "role"
+        # and "task_now" on every registry entry it renders, so those stay;
+        # only the field _cmd_select reads is missing.
+        cd.watcher.registry["s1"] = {"project": "demo", "role": "worker",
+                                     "task_now": ""}
         cd._refresh()
         await pilot.pause()
 
@@ -2598,20 +2607,40 @@ async def go():
             "nothing orphaned" in logtext())
 
         # --- subject resolution: an explicit name moves the cursor first ---
+        # The name comes from watcher.registry (a real, DB-backed swarm
+        # name), not any attribute of SessionInfo - this is the case that
+        # was dead code before review round 1's fix to _cmd_select.
         chk("cursor is still on s1 before the named arm",
             cd._selected_sid() == "s1")
         await cmd("arm w1")
-        chk(":arm w1 moves the cursor onto the session named w1, not "
-            "whatever row happened to be selected",
+        chk(":arm w1 moves the cursor onto the session registered as w1 "
+            "(resolved via watcher.registry, not a name on SessionInfo)",
             cd._selected_sid() == "s0")
         chk(":arm w1 then runs arm on that row",
             cd.watcher.sessions["s0"].mode == "safe")
         chk("the other session is untouched",
             cd.watcher.sessions["s1"].mode == "off")
 
+        before_cursor = cd._selected_sid()
         await cmd("arm nope")
         chk(":arm nope refuses instead of guessing a target",
             "no live session named 'nope'" in logtext())
+        chk(":arm nope does NOT move the cursor when no session carries "
+            "that name", cd._selected_sid() == before_cursor)
+
+        # A registry entry with no "name" key (s1's) must not crash the
+        # lookup - _cmd_select walks every live row on every call, so this
+        # has already been exercised above, but assert it directly too.
+        no_crash = True
+        try:
+            found = cd._cmd_select("nothing-matches-and-s1-has-no-name-key")
+        except Exception:
+            no_crash = False
+            found = None
+        chk("a registry entry with no 'name' key does not crash the lookup",
+            no_crash)
+        chk("...and correctly reports no match",
+            found is False)
 
     ne = _TestApp({}, dry_run=True)
     async with ne.run_test() as pilot:

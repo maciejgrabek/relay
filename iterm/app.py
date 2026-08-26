@@ -3030,7 +3030,13 @@ class RelayApp(App):
     def _cmd_select(self, name: str) -> bool:
         """Move the cursor to the live session called `name`. False if there
         is no such session - the caller reports it rather than acting on
-        whatever row happened to be selected."""
+        whatever row happened to be selected.
+
+        `SessionInfo` (watcher.py) carries no `name` field of its own - the
+        swarm name lives in `self.watcher.registry`, keyed by session id,
+        the same map `_parked_recipient` reads. Looking up `info.name`
+        instead (as an earlier draft of this method did) always returns ""
+        and this can never match a real session - fixed in review round 1."""
         if not self.watcher:
             return False
         grid = self.query_one(DataTable)
@@ -3039,8 +3045,8 @@ class RelayApp(App):
         for row, sid in enumerate(self._row_sids):
             if sid is None:
                 continue
-            info = self.watcher.sessions.get(sid)
-            label = getattr(info, "name", "") or ""
+            reg = (self.watcher.registry or {}).get(sid)
+            label = (reg or {}).get("name", "")
             if label == name:
                 grid.move_cursor(row=row)
                 return True
