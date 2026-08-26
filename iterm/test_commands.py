@@ -74,9 +74,22 @@ def run():
     # Verify "up" entry with key includes key, help, and :name form
     ok &= check('help_rows includes ("up k", "move up   (:up)")',
                 ("up k", "move up   (:up)") in help_rows)
-    # Verify "answer" entry with no key renders as :name form only
-    ok &= check('help_rows includes (":answer", "send Enter to the selected session")',
-                (":answer", "send Enter to the selected session") in help_rows)
+    # "answer" binds no real Textual key (ENTER is consumed by the DataTable
+    # - binding it too would double-fire), but it still needs a legend: an
+    # unbound key that is invisible everywhere is the exact bug class this
+    # table exists to prevent. `bar_key` supplies that legend without
+    # claiming a key token (see key_tokens check below).
+    answer_cmd = next(c for c in commands.CMD if c.name == "answer")
+    ok &= check("answer claims no real key token",
+                commands.key_tokens(answer_cmd) == [])
+    ok &= check("answer has a display-only bar_key",
+                answer_cmd.bar_key == "⏎")
+    ok &= check('help_rows includes ("⏎", "send Enter to the selected '
+                'session   (:answer)")',
+                ("⏎", "send Enter to the selected session   (:answer)")
+                in help_rows)
+    ok &= check("answer is on the hot bar (ENTER's legend belongs there too)",
+                answer_cmd.hot is True)
 
     # Task 3 review finding 1: `colon` shipped with no _KEY_DISPLAY entry, so
     # the ?-overlay rendered the literal Textual token ("colon") instead of

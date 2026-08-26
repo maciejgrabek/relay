@@ -367,7 +367,7 @@ def _compact_bar_pairs(pairs):
 # Generated, never hand-written. Two hand-maintained legends are exactly how
 # `w` and `S` shipped working but invisible; the table is the only list now.
 KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD))
-               + [(":", "commands")])
+               + [(":", "cmd")])
 
 
 def _tree_fingerprint(workdir: str) -> str:

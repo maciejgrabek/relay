@@ -45,6 +45,13 @@ class Cmd:
                                # used by the `?` overlay. A full help
                                # sentence on the bar is how it overflowed
                                # an 80-column terminal in the first place.
+    bar_key: str = ""         # display-only key for an entry that claims no
+                               # real Textual binding (`key=""`) - e.g. ENTER,
+                               # which the DataTable already consumes, so
+                               # binding it too would double-fire. Never fed
+                               # to key_tokens()/BINDINGS agreement: it is not
+                               # a claim on a key, only a legend for one that
+                               # exists outside this table.
 
 
 def key_tokens(cmd: Cmd) -> List[str]:
@@ -68,6 +75,7 @@ _KEY_DISPLAY = {
     "space": "SPACE",
     "escape": "ESC",
     "colon": ":",
+    "tab": "TAB",
 }
 
 
@@ -153,7 +161,11 @@ def hot_pairs(table) -> List[Tuple[str, str]]:
 def _bar_key(cmd: Cmd) -> str:
     """How a key reads in the bar: displayed, not Textual's raw token."""
     toks = key_tokens(cmd)
-    return "/".join(_display_key(t) for t in toks) if toks else f":{cmd.name}"
+    if toks:
+        return "/".join(_display_key(t) for t in toks)
+    if cmd.bar_key:
+        return cmd.bar_key
+    return f":{cmd.name}"
 
 
 def _bar_label(cmd: Cmd) -> str:
@@ -171,9 +183,16 @@ def help_rows(table) -> List[Tuple[str, str]]:
     rows = []
     for cmd in table:
         toks = key_tokens(cmd)
-        left = " ".join(_display_key(t) for t in toks) if toks else f":{cmd.name}"
-        right = cmd.help
         if toks:
+            left = " ".join(_display_key(t) for t in toks)
+        elif cmd.bar_key:
+            # A key with no real Textual binding (ENTER, consumed by the
+            # DataTable) still gets a legend here - see `bar_key` on Cmd.
+            left = cmd.bar_key
+        else:
+            left = f":{cmd.name}"
+        right = cmd.help
+        if toks or cmd.bar_key:
             right = f"{right}   (:{cmd.name})"
         rows.append((left, right))
     return rows
@@ -195,12 +214,15 @@ CMD = (
         # Review round 2, finding 3.
         args="[session]", bar="arm"),
     # ENTER is NOT in BINDINGS: the DataTable consumes it and app.py warns
-    # that binding it too would double-fire. So this entry carries no key,
-    # and KEYBAR names ENTER literally (Task 2 step 4).
+    # that binding it too would double-fire. So this entry carries no `key`
+    # (nothing to agree with BINDINGS over) but still claims a legend via
+    # `bar_key` - the exact bug class this table exists to prevent is a key
+    # that works but is invisible, and an unbound key is no exception.
     Cmd(name="answer", help="send Enter to the selected session",
-        action="action_send_enter"),
+        action="action_send_enter", key="", bar_key="⏎", hot=True,
+        bar="answer"),
     Cmd(name="tab", help="jump to the selected session's iTerm2 tab",
-        action="action_focus", key="n", hot=True, bar="go to tab"),
+        action="action_focus", key="n", hot=True, bar="jump"),
     Cmd(name="swarm", help="swarm view: kanban, interactions and feed",
         action="action_swarm_view", key="tab", hot=True, bar="swarm"),
     Cmd(name="pause", help="pause or resume relay's acting",
