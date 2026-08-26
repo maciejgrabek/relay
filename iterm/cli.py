@@ -2318,10 +2318,25 @@ def cmd_restore(args) -> int:
 def _ws_iterm(coro_factory, what: str):
     """Run one iTerm coroutine, returning (value, error_message).
 
-    Anything escaping a coroutine handed to run_until_complete gets a printed
-    traceback and sys.exit(1) from the iterm2 library, which no outer
-    `except Exception` can catch - so the coroutine catches its own and this
-    helper turns a refused connection into an ordinary error string.
+    retry=False, not True: with retry=True the library's own reconnect loop
+    (connection.py's `while not done`) never sets `done` on a refused
+    connection - it just sleeps and loops forever - so `ws up` would hang
+    silently instead of failing. retry=False is what makes a refused
+    connection raise/exit at all.
+
+    Two different failure shapes come out of that, and both must become a
+    plain error string instead of a crash: a connection refused outright
+    (iTerm not running, API disabled) reaches us as SystemExit (the library's
+    own module-level run_until_complete does `except ConnectionRefusedError:
+    sys.exit(1)`); a stale-cookie auth failure reaches us as a bare
+    websockets exception instead, since only the ConnectionRefusedError path
+    is converted to SystemExit. Catching Exception too is what makes that
+    second shape safe.
+
+    Anything escaping a coroutine actually running the connection (i.e. once
+    connected) gets a printed traceback and sys.exit(1) from the iterm2
+    library, which no outer `except Exception` can catch - so the coroutine
+    catches its own.
     """
     import iterm2
     box = {"value": None, "err": ""}
@@ -2333,10 +2348,17 @@ def _ws_iterm(coro_factory, what: str):
             box["err"] = f"{type(exc).__name__}: {exc}"
 
     try:
-        iterm2.run_until_complete(run, True)
-    except SystemExit:
-        return None, f"could not connect to iTerm to {what} (is it running?)"
+        iterm2.run_until_complete(run, False)
+    except (SystemExit, Exception):                  # noqa: BLE001
+        return None, (f"could not connect to iTerm to {what} - is it "
+                      f"running, and is its Python API enabled? "
+                      f"(iTerm2 > Preferences > General > Magic)")
     return box["value"], box["err"]
+
+
+_WS_NO_LIVE_GUARD = ("could not read which tabs are already open - refusing "
+                     "to build, because the guard that stops a restore from "
+                     "stealing a live session's name cannot be trusted")
 
 
 def cmd_ws(args) -> int:
@@ -2360,6 +2382,12 @@ def cmd_ws(args) -> int:
         dropped = len(rows or []) - len(tabs)
         if dropped:
             print(f"  ! skipped {dropped} tab(s) with no name")
+        # A split tab is saved as its one active pane, silently, unless said
+        # here - the same class of loss as a dropped nameless tab.
+        split = sum(1 for r in (rows or []) if r.get("split"))
+        if split:
+            print(f"  ! {split} tab(s) had split panes; only the first "
+                  f"was saved")
         try:
             wsconfig.save(path, args.name, tabs, force=args.force)
         except wsconfig.ConfigError as exc:
@@ -2398,44 +2426,62 @@ def cmd_ws(args) -> int:
     if not tabs:
         return _err(f'workspace "{args.name}" has no tabs')
 
+    import asyncio
     import wsbuild
-    # Two connections on purpose: the confirmation prompt reads stdin, and
-    # blocking on that inside the event loop would stall the iTerm connection.
-    live, err = _ws_iterm(wsbuild.live_tab_names, "check what is already open")
+
+    async def _up(connection):
+        # ONE connection for the whole verb - probe, plan, confirm and build
+        # all share it. Two connections (as this used to be) let a second
+        # connection's window-creation notifications land on the first
+        # connection's already-abandoned socket, which prints a 15KB
+        # traceback on teardown; worse, a tab could appear live in the gap
+        # between the first connection's probe and the second's build,
+        # making the guard stale by the time it matters. A bare input() would
+        # block this same event loop, so the confirmation runs on the
+        # executor instead, which keeps the connection pumping while the
+        # operator types.
+        live = await wsbuild.live_tab_names(connection)
+        if live is None:
+            # Not the same as "nothing is open": the enumeration itself
+            # failed, and building against an empty guard would rebind names
+            # that are live.
+            return {"error": _WS_NO_LIVE_GUARD}
+
+        build, skipped = wsconfig.skip_live(tabs, live)
+        missing = {t.dir for t in build if t.dir and not os.path.isdir(t.dir)}
+        build = [t for t in build if t.dir not in missing]
+
+        print(wsconfig.plan_text(args.name, tabs, missing_dirs=missing,
+                                   skipped=skipped))
+        if args.dry_run:
+            return {"stopped": True}
+        if not build:
+            print("nothing to open.")
+            return {"stopped": True}
+        if not args.yes:
+            loop = asyncio.get_running_loop()
+            confirmed = await loop.run_in_executor(
+                None, _confirm, f"open {len(build)} tab(s)?")
+            if not confirmed:
+                print("aborted.")
+                return {"stopped": True}
+
+        target = "current" if args.here else (
+            "new" if args.new else str(settings.get("target", "new")))
+        warmup = float(settings.get("warmup", 1.5))
+        notes = await wsbuild.build(connection, build, warmup, target)
+        return {"notes": notes}
+
+    result, err = _ws_iterm(_up, "open the workspace")
     if err:
         return _err(err)
-    if live is None:
-        # Not the same as "nothing is open": the enumeration itself failed, and
-        # building against an empty guard would rebind names that are live.
-        return _err("could not read which tabs are already open - refusing to "
-                    "build, because the guard that stops a restore from "
-                    "stealing a live session's name cannot be trusted")
-
-    build, skipped = wsconfig.skip_live(tabs, live or set())
-    missing = {t.dir for t in build if t.dir and not os.path.isdir(t.dir)}
-    build = [t for t in build if t.dir not in missing]
-
-    print(wsconfig.plan_text(args.name, tabs, missing_dirs=missing,
-                               skipped=skipped))
-    if args.dry_run:
-        return 0
-    if not build:
-        print("nothing to open.")
-        return 0
-    if not args.yes and not _confirm(f"open {len(build)} tab(s)?"):
-        print("aborted.")
-        return 0
-
-    target = "current" if args.here else (
-        "new" if args.new else str(settings.get("target", "new")))
-    warmup = float(settings.get("warmup", 1.5))
-    notes, err = _ws_iterm(
-        lambda c: wsbuild.build(c, build, warmup, target), "open the workspace")
-    if err:
-        return _err(err)
-    for note in notes or []:
-        print(f"  ! {note}")
-    print(f"opened {args.name}")
+    result = result or {}
+    if "error" in result:
+        return _err(result["error"])
+    if "notes" in result:
+        for note in result["notes"]:
+            print(f"  ! {note}")
+        print(f"opened {args.name}")
     return 0
 
 

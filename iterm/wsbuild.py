@@ -202,8 +202,22 @@ async def snapshot_rows(connection, all_windows: bool = False) -> list:
     watcher and is deliberately not persisted (see watcher.py), so it comes
     back empty - which is correct: the way to make a tab come back armed is to
     give it an `arm` key, which registers it.
+
+    Two rows are skipped outright, never counted as "no name" drops:
+    relay's own panel tab (matched by ITERM_SESSION_ID, same trick as
+    selftest.py) - a TUI is not a command and would round-trip into a bare
+    shell - and any name in db.RESERVED_NAMES, since a saved `arm` key on
+    "relay" would make build() refuse it anyway.
+
+    Each row also carries a "split" flag (not one of the four keys
+    wsconfig.snapshot() reads, and harmless to it): True when the tab held
+    more than one session. A split cannot be captured this way - only the
+    tab's own active session is read - so the caller reports the loss rather
+    than silently saving a one-pane approximation of a split tab.
     """
     import iterm2
+
+    own_sid = os.environ.get("ITERM_SESSION_ID", "").split(":", 1)[-1]
 
     app = await iterm2.async_get_app(connection)
     if all_windows:
@@ -219,11 +233,15 @@ async def snapshot_rows(connection, all_windows: bool = False) -> list:
             session = _first_session(tab)
             if session is None:
                 continue
+            if session.session_id == own_sid:
+                continue
             # autoName, not session.name: session.name carries the job
             # suffix ("DRAGEN CODE (-zsh)") so a saved name would never match
             # its own live tab again. Same read relay uses at selftest.py:196.
             name = (await session.async_get_variable("autoName")
                     or await session.async_get_variable("session.name"))
+            if name and str(name) in db.RESERVED_NAMES:
+                continue
             path = await session.async_get_variable("session.path")
             arm = ""
             if name:
@@ -233,5 +251,6 @@ async def snapshot_rows(connection, all_windows: bool = False) -> list:
                 mode = (row["mode"] if row is not None else "") or ""
                 arm = mode if mode in wsconfig.ARM_MODES else ""
             rows.append({"name": str(name or ""), "dir": str(path or ""),
-                         "arm": arm, "window": index})
+                         "arm": arm, "window": index,
+                         "split": len(tab.sessions) > 1})
     return rows

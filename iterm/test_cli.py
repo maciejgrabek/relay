@@ -107,6 +107,129 @@ def _ws_checks(ok):
     code, _, err = run_cli("ws", "list", "--config", "/nonexistent/x.toml")
     ok &= check("a missing config file is a user error, not a crash",
                 code == 1 and "no config" in err)
+
+    # --yes is accepted (SUPPRESSed, not absent) on list/save/rm: the TUI's
+    # _shell_verb helper appends it to every verb it shells out to, and a
+    # parser that rejected it would make those keys silently fail. Checked
+    # via parse_args directly - no iTerm connection involved either way.
+    for sub in ("list", "rm", "save"):
+        argv = ["ws", sub, "--config", path, "--yes"]
+        if sub in ("rm", "save"):
+            argv.insert(2, "somename")
+        args = cli.build_parser().parse_args(argv)
+        ok &= check(f"ws {sub} accepts --yes", args.yes is True)
+
+    # --- up: live_tab_names() returning None vs set() must be provably
+    # distinct - nothing above exercises wsbuild at all, so nothing would
+    # fail today if the `live is None` guard were deleted.
+    import asyncio
+    import wsbuild as wsbuildmod
+    orig_ws_iterm = cli._ws_iterm
+    orig_live = wsbuildmod.live_tab_names
+    orig_build = wsbuildmod.build
+    orig_snapshot_rows = wsbuildmod.snapshot_rows
+
+    def _fake_ws_iterm(coro_factory, what):
+        """Stand-in for cli._ws_iterm: runs the coroutine in-process against
+        a dummy connection object, with no real iTerm socket involved - same
+        trick the suite already uses to stub spawn.spawn_worker."""
+        try:
+            return asyncio.run(coro_factory(None)), ""
+        except Exception as exc:                    # noqa: BLE001
+            return None, f"{type(exc).__name__}: {exc}"
+
+    cli._ws_iterm = _fake_ws_iterm
+
+    upws_path = os.path.join(tempfile.mkdtemp(), "upws.toml")
+    with open(upws_path, "w") as fh:
+        fh.write('[[upws]]\nname = "gt"\ndir = "/tmp"\ncmd = "pwd"\n')
+
+    try:
+        async def _none_live(connection):
+            return None
+        wsbuildmod.live_tab_names = _none_live
+        build_calls = []
+
+        async def _spy_build(connection, tabs, warmup, target):
+            build_calls.append(list(tabs))
+            return []
+        wsbuildmod.build = _spy_build
+
+        code, _, err = run_cli("ws", "up", "upws", "--config", upws_path,
+                               "--yes")
+        ok &= check("live_tab_names() -> None refuses to build (exit 1)",
+                    code == 1)
+        ok &= check("the refusal names the guard it will not trust",
+                    "guard" in err)
+        ok &= check("live_tab_names() -> None never reaches build()",
+                    build_calls == [])
+
+        async def _empty_live(connection):
+            return set()
+        wsbuildmod.live_tab_names = _empty_live
+        code, out, err = run_cli("ws", "up", "upws", "--config", upws_path,
+                                 "--yes")
+        ok &= check("live_tab_names() -> empty set() builds normally "
+                    "(proven distinct from None)",
+                    code == 0 and "opened upws" in out)
+        ok &= check("the empty-set run actually called build() with the tab",
+                    len(build_calls) == 1 and build_calls[0][0].name == "gt")
+    finally:
+        wsbuildmod.live_tab_names = orig_live
+        wsbuildmod.build = orig_build
+
+    # --- save: force-to-clobber, and the exact dropped-tab / split-tab counts
+    try:
+        def _rows(*dicts):
+            async def _snap(connection, all_windows=False):
+                return list(dicts)
+            return _snap
+
+        save_path = os.path.join(tempfile.mkdtemp(), "saved.toml")
+        wsbuildmod.snapshot_rows = _rows(
+            {"name": "savetest", "dir": "/tmp", "arm": "", "window": 1,
+             "split": False})
+        code, _, _ = run_cli("ws", "save", "savetest", "--config", save_path)
+        ok &= check("ws save creates a new workspace", code == 0)
+
+        code, _, err = run_cli("ws", "save", "savetest", "--config",
+                               save_path)
+        ok &= check("ws save refuses to clobber without --force",
+                    code == 1 and "already exists" in err)
+        code, _, _ = run_cli("ws", "save", "savetest", "--config", save_path,
+                             "--force")
+        ok &= check("ws save --force replaces it", code == 0)
+
+        wsbuildmod.snapshot_rows = _rows(
+            {"name": "named", "dir": "/tmp", "arm": "", "window": 1,
+             "split": False},
+            {"name": "", "dir": "/tmp", "arm": "", "window": 1,
+             "split": False},
+            {"name": "   ", "dir": "/tmp", "arm": "", "window": 1,
+             "split": False})
+        code, out, _ = run_cli("ws", "save", "dropcount", "--config",
+                               os.path.join(tempfile.mkdtemp(), "d.toml"))
+        ok &= check("save reports the exact count of nameless tabs dropped",
+                    code == 0 and "skipped 2 tab(s) with no name" in out)
+
+        wsbuildmod.snapshot_rows = _rows(
+            {"name": "split1", "dir": "/tmp", "arm": "", "window": 1,
+             "split": True},
+            {"name": "split2", "dir": "/tmp", "arm": "", "window": 1,
+             "split": True},
+            {"name": "whole", "dir": "/tmp", "arm": "", "window": 1,
+             "split": False})
+        code, out, _ = run_cli("ws", "save", "splitcount", "--config",
+                               os.path.join(tempfile.mkdtemp(), "s.toml"))
+        ok &= check("save reports the exact count of split tabs it "
+                    "flattened to one pane",
+                    code == 0
+                    and "2 tab(s) had split panes; only the first "
+                        "was saved" in out)
+    finally:
+        wsbuildmod.snapshot_rows = orig_snapshot_rows
+        cli._ws_iterm = orig_ws_iterm
+
     return ok
 
 
