@@ -3065,12 +3065,18 @@ class RelayApp(App):
                 # so this path also has to keep its own exception guard
                 # (finding 1(b)'s try/except does not reach a callback that
                 # runs after this method has already returned).
-                async def _run_async_action(_fn=fn, _args=call_args):
+                async def _run_async_action(_fn=fn, _args=call_args, _log=log):
                     try:
                         await _fn(*_args)
                     except Exception as e:
-                        self.query_one(Log).write_line(
-                            f"{cmd.name}: failed - {e}")
+                        # Reuse the `log` captured up top rather than
+                        # re-querying: query_one(Log) can itself raise (the
+                        # widget torn down, the DOM mid-rebuild), and that
+                        # would escape this except block straight into
+                        # Textual's message pump - the synchronous branch
+                        # below already avoids this exact trap by doing the
+                        # same reuse.
+                        _log.write_line(f"{cmd.name}: failed - {e}")
                 self.call_next(_run_async_action)
             else:
                 try:
@@ -3193,7 +3199,21 @@ class RelayApp(App):
         if self._cmdline is not None:
             line = event.value
             self._cmdline_close()
-            self._cmdline_submit(line)
+            try:
+                self._cmdline_submit(line)
+            except Exception as e:
+                # _cmdline_submit's own per-branch guards only wrap the
+                # DISPATCH once a command is already resolved - its
+                # prologue (query_one(Log), _cmd_lookup, the confirm log
+                # line, and _cmd_select's query_one(DataTable) +
+                # move_cursor) runs unguarded ahead of that. A typed line
+                # must never be able to take the whole app down before
+                # dispatch even starts, so this call site gets the same
+                # guard every branch inside it already has.
+                try:
+                    self.query_one(Log).write_line(f"command failed: {e}")
+                except Exception:
+                    pass      # nothing left to report to; never re-raise
             return
         if self._parked_edit is not None:
             self._parked_edit_save()
