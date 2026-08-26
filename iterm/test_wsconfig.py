@@ -122,6 +122,7 @@ def run():
     ok &= check("ROLES matches db.ROLES", _roles_match())
 
     ok = _round_trip(ok)
+    ok = _snapshot_checks(ok)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
@@ -279,6 +280,50 @@ def _save_into_new_file():
     p = os.path.join(d, "sub", "workspaces.toml")
     wsconfig.save(p, "x", [wsconfig.Tab(name="a", dir="/tmp")])
     return "x" in wsconfig.load(p)[1]
+
+
+def _snapshot_checks(ok):
+    rows = [
+        {"name": "DRAGEN DOCS", "dir": "/Users/x/Work/dragen",
+         "arm": "safe", "window": 1},
+        {"name": "monitor", "dir": "/Users/x/Work/dragen",
+         "arm": "", "window": 1},
+        {"name": "logs", "dir": "/Users/x/Work/dragen",
+         "arm": "", "window": 2},
+    ]
+    tabs = wsconfig.snapshot(rows)
+    ok &= check("snapshot keeps every row", len(tabs) == 3)
+    ok &= check("snapshot carries the name", tabs[0].name == "DRAGEN DOCS")
+    ok &= check("snapshot carries the arm", tabs[0].arm == "safe")
+    ok &= check("snapshot carries the window", tabs[2].window == 2)
+    ok &= check("snapshot leaves cmd empty - a running tab cannot report it",
+                tabs[0].cmd == "")
+    ok &= check("snapshot tolerates a missing arm key",
+                wsconfig.snapshot([{"name": "a", "dir": "/tmp"}])[0].arm == "")
+
+    build, skipped = wsconfig.skip_live(tabs, {"monitor"})
+    ok &= check("skip_live drops a live name", [t.name for t in build]
+                == ["DRAGEN DOCS", "logs"])
+    ok &= check("skip_live reports what it dropped", skipped == ["monitor"])
+    build, skipped = wsconfig.skip_live(tabs, set())
+    ok &= check("skip_live with nothing live builds everything",
+                len(build) == 3 and skipped == [])
+    build, skipped = wsconfig.skip_live(tabs, {"DRAGEN DOCS", "monitor",
+                                                 "logs"})
+    ok &= check("skip_live with everything live builds nothing",
+                build == [] and len(skipped) == 3)
+
+    text = wsconfig.plan_text("dragen", tabs,
+                                missing_dirs={"/Users/x/Work/dragen"},
+                                skipped=["monitor"])
+    ok &= check("plan_text names the workspace", "dragen" in text)
+    ok &= check("plan_text groups by window",
+                "window 1" in text and "window 2" in text)
+    ok &= check("plan_text flags a missing directory", "missing" in text)
+    ok &= check("plan_text reports skipped names",
+                "monitor" in text and "already live" in text)
+    ok &= check("plan_text marks a supervised tab", "safe" in text)
+    return ok
 
 
 if __name__ == "__main__":

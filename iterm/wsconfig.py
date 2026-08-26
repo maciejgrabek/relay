@@ -307,3 +307,58 @@ def remove(path: str, name: str) -> bool:
         fh.write(strip_block(text, name).rstrip("\n") + "\n")
     os.replace(tmp, path)
     return True
+
+
+def snapshot(rows: List[dict]) -> List[Tab]:
+    """Live tab records into Tabs.
+
+    `cmd` is deliberately left empty: a running tab cannot report the command
+    that was typed into it, and guessing from the foreground job would write
+    "zsh" into every entry. The operator fills it in.
+    """
+    return [Tab(name=str(r.get("name", "")),
+                dir=_expand(str(r.get("dir", "~"))),
+                arm=str(r.get("arm", "") or ""),
+                window=int(r.get("window", 1) or 1))
+            for r in rows]
+
+
+def skip_live(tabs: List[Tab], live_tab_names) -> Tuple[List[Tab], List[str]]:
+    """Split into (to build, skipped-because-already-live).
+
+    One rule covers both duplicate restores and name theft: db.register()
+    rebinds an existing name to a new session id, so building a tab whose name
+    is already live would steal that session's identity. Skipping instead makes
+    `ws up` idempotent AND safe, without failing the whole restore over one
+    conflict.
+    """
+    live = set(live_tab_names or ())
+    build = [t for t in tabs if t.name not in live]
+    skipped = [t.name for t in tabs if t.name in live]
+    return build, skipped
+
+
+def plan_text(name: str, tabs: List[Tab], missing_dirs=(),
+              skipped=()) -> str:
+    """The --dry-run rendering, in the shape of restore_plan_text."""
+    missing = set(missing_dirs or ())
+    lines = [f"WORKSPACE {name}"]
+    for window, wintabs in group_windows(tabs):
+        lines.append(f"  window {window}")
+        for tab in wintabs:
+            marks = []
+            if tab.arm:
+                marks.append(f"armed {tab.arm}")
+            if tab.prompt:
+                marks.append("worker")
+            if tab.dir in missing:
+                marks.append("missing dir - will be skipped")
+            suffix = f"   [{', '.join(marks)}]" if marks else ""
+            cmd = f"   $ {tab.cmd}" if tab.cmd else ""
+            lines.append(f"    {tab.name:<16} {_tilde(tab.dir)}{cmd}{suffix}")
+            for pane in tab.panes:
+                where = "beside" if pane.split == "v" else "below"
+                lines.append(f"      {where}: {pane.cmd or _tilde(pane.dir or tab.dir)}")
+    if skipped:
+        lines.append(f"  skipped (already live): {', '.join(skipped)}")
+    return "\n".join(lines)
