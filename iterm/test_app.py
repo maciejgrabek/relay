@@ -2601,8 +2601,11 @@ async def go():
 
         # --- the confirm gate: this is the one that must never regress -----
         await cmd("wipe")
-        chk(":wipe alone is refused and prints what it would do",
-            "Re-run as :wipe! to confirm" in logtext())
+        chk(":wipe alone is refused and prints what it would do, and the "
+            "gate names BOTH ways in rather than claiming the bang alone "
+            "confirms",
+            ":wipe! unlocks it" in logtext()
+            and "press W" in logtext() and ":wipe! again" in logtext())
         chk(":wipe alone never reaches action_wipe "
             "(which would have logged 'nothing orphaned')",
             "nothing orphaned" not in logtext())
@@ -3173,6 +3176,34 @@ def lock_tests():
     chk("startup prunes the event log only when the file channel is on",
         "if cfg.events_file:" in _boot
         and _boot.index("if cfg.events_file:") < _boot.index("events.prune_old("))
+
+    # --- fix 4: the confirm gate must not describe two confirm protocols
+    # at once, and each ARMED message must name BOTH entrances (the key
+    # and :cmd!) rather than only the one the operator did not use to get
+    # there ------------------------------------------------------------
+    import commands as _cmdmod
+    for _name in ("restore", "wipe", "zap", "extreme"):
+        _c = next(x for x in _cmdmod.CMD if x.name == _name)
+        chk(f"{_name}'s help no longer claims a second confirm protocol "
+            f"(double-press confirms)", "double-press" not in _c.help)
+
+    _gate_src = inspect.getsource(appmod.RelayApp._cmdline_submit)
+    chk("the confirm gate no longer claims the bang itself confirms "
+        "(the old 'Re-run as :cmd! to confirm' wording)",
+        "Re-run as :" not in _gate_src)
+    chk("the confirm gate says what the bang actually does: unlock the "
+        "action's own arm-then-confirm, not confirm outright",
+        "unlocks it" in _gate_src and "again to confirm" in _gate_src)
+
+    for _name, _action, _key in (("restore", "action_restore", "R"),
+                                 ("wipe", "action_wipe", "W"),
+                                 ("zap", "action_zap", "Z"),
+                                 ("extreme", "action_extreme", "E")):
+        _src = inspect.getsource(getattr(appmod.RelayApp, _action))
+        chk(f"{_name} ARMED message names the key entrance ({_key})",
+            f"press {_key}" in _src)
+        chk(f"{_name} ARMED message also names the :{_name}! entrance",
+            f":{_name}!" in _src)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok

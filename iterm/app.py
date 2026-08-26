@@ -3002,9 +3002,17 @@ class RelayApp(App):
             log.write_line(f"unknown command {name!r}{hint}")
             return
         if cmd.confirm and not bang:
-            # A destructive command must never be one keystroke from running.
-            log.write_line(f"{cmd.name}: {cmd.help}. Re-run as :{cmd.name}! "
-                           f"to confirm.")
+            # A destructive command must never be one keystroke from
+            # running. But the ACTION itself (action_restore/_wipe/_zap/
+            # _extreme) runs its OWN arm-then-confirm state machine on top
+            # of this gate - typing the bang only gets past THIS gate and
+            # into that state machine, which still demands its own second
+            # press (the bound key, or another `:cmd!`) before anything is
+            # deleted. The old wording here named the bang itself as the
+            # confirmation, which was never true - it only arms.
+            log.write_line(
+                f"{cmd.name}: {cmd.help}. :{cmd.name}! unlocks it - "
+                f"press {cmd.key} or type :{cmd.name}! again to confirm.")
             return
         if cmd.subject and not args and self._selected_sid() is None:
             log.write_line(f"{cmd.name}: no session selected, and none named")
@@ -3989,7 +3997,8 @@ class RelayApp(App):
                            lambda: setattr(self, "_restore_armed", False))
             n = self.watcher.orphan_count
             self.query_one(Log).write_line(
-                f"restore ARMED: press R again to respawn {n} dead worker(s) "
+                f"restore ARMED: press R again or type :restore! to "
+                f"respawn {n} dead worker(s) "
                 f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._restore_armed = False
@@ -4093,7 +4102,8 @@ class RelayApp(App):
                            lambda: setattr(self, "_wipe_armed", False))
             n = self.watcher.orphan_count
             self.query_one(Log).write_line(
-                f"wipe ARMED: press W again to DELETE {n} dead session(s)' work "
+                f"wipe ARMED: press W again or type :wipe! to DELETE {n} "
+                f"dead session(s)' work "
                 f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._wipe_armed = False
@@ -4137,7 +4147,8 @@ class RelayApp(App):
                                              limit=10**9))
             parked_note = f" [{n_live} live + {n_parked} parked]" if n_parked else ""
             log.write_line(
-                f"zap ARMED: press Z again to DELETE ALL of project '{p}' "
+                f"zap ARMED: press Z again or type :zap! to DELETE ALL of "
+                f"project '{p}' "
                 f"({nt} tasks{parked_note} + {ns} sessions + {nm} messages, "
                 f"auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
@@ -4178,8 +4189,9 @@ class RelayApp(App):
                            lambda: setattr(self, "_extreme_armed", None)
                            if self._extreme_armed == sid else None)
             log.write_line(
-                f"extreme ARMED: press E again to configure the push "
-                f"prompt (auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
+                f"extreme ARMED: press E again or type :extreme! to "
+                f"configure the push prompt "
+                f"(auto-cancels in {int(self._CONFIRM_WINDOW)}s)")
             return
         self._extreme_armed = None
         self._extreme_form_open(sid, info)

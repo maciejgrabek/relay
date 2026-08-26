@@ -249,13 +249,19 @@ CMD = (
     Cmd(name="commands", help="open the command line", action="action_command_mode",
         key="colon"),
 
-    Cmd(name="restore", help="respawn dead task-owners (double-press confirms)",
+    # "(double-press confirms)" used to live in these four `help` strings -
+    # dropped (review's fix 4): a `!` on the cmdline and a second key press
+    # are BOTH just the arm step for these, not two different confirm
+    # protocols, and the sentence claimed both were "confirm" at once. The
+    # cmdline confirm gate (app.py's _cmdline_submit) and the ARMED log
+    # lines below carry the accurate wording now.
+    Cmd(name="restore", help="respawn dead task-owners",
         action="action_restore", key="R", confirm=True),
-    Cmd(name="wipe", help="delete dead sessions' work (double-press confirms)",
+    Cmd(name="wipe", help="delete dead sessions' work",
         action="action_wipe", key="W", confirm=True),
-    Cmd(name="zap", help="delete a whole project (double-press confirms)",
+    Cmd(name="zap", help="delete a whole project",
         action="action_zap", key="Z", confirm=True),
-    Cmd(name="extreme", help="EXTREME an INSANE session (double-press confirms)",
+    Cmd(name="extreme", help="EXTREME an INSANE session",
         action="action_extreme", key="E", confirm=True, subject=True),
 
     # action_send is parameterised - `action_send(key)` - so these carry the
