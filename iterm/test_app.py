@@ -6,6 +6,7 @@ Uses Textual's headless run_test() with a stub watcher (no iTerm2 needed).
 import asyncio
 import inspect
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -3013,6 +3014,80 @@ async def go():
             "dispatcher call site, not just inside its own body",
             "recap: failed - boom" in logtextcs())
         chk("the app survives a broken _cmd_run_cli", cs.is_running)
+
+        # --- review round 2: overlapping same-verb commands must not be ---
+        # --- attributable to the wrong invocation --------------------------
+        # exclusive=False (finding 1's fix) means two `:` commands genuinely
+        # overlap now - this was structurally impossible before, since a
+        # second submission could not even start until the first
+        # subprocess.run returned. Dispatch the SAME verb twice back to
+        # back, gate the FIRST one so it finishes SECOND, and prove the
+        # output that arrives first (the second dispatch's) is never
+        # mistaken for the first's, and vice versa once it does arrive.
+        event_a = threading.Event()
+        calls = []
+
+        def _tagged(*a, **k):
+            argv = a[0] if a else k.get("args")
+            calls.append(argv)
+            if len(calls) == 1:
+                # The FIRST subprocess.run call (invocation A) - parks here
+                # so it finishes AFTER invocation B, proving genuine
+                # overlap rather than accidental ordering.
+                event_a.wait(5.0)
+                return subprocess.CompletedProcess(argv, 0,
+                                                   stdout="output-of-A\n",
+                                                   stderr="")
+            return subprocess.CompletedProcess(argv, 0,
+                                               stdout="output-of-B\n",
+                                               stderr="")
+
+        appmod.subprocess.run = _tagged
+        try:
+            before_len = len(cs.query_one(appmod.Log).lines)
+            await cmdcs("ws list")     # invocation A: dispatched, gated
+            await cmdcs("ws list")     # invocation B: dispatched, ungated
+            new_now = "\n".join(cs.query_one(appmod.Log).lines[before_len:])
+            echoes = re.findall(r"\$ relay ws list  \[(\d+)\]", new_now)
+            chk("two overlapping :ws list dispatches each get their own "
+                "invocation tag on the echo line",
+                len(echoes) == 2 and echoes[0] != echoes[1])
+            # Fall back to sentinels that cannot appear in the log rather
+            # than unpacking a short list - a missing/duplicate tag must
+            # show up as clean FAILs below (and a crash-free run), not as
+            # an uncaught ValueError that halts the whole suite before the
+            # rest of it (including the command-table checks) ever runs.
+            if len(echoes) == 2 and echoes[0] != echoes[1]:
+                seq_a, seq_b = echoes
+            else:
+                seq_a, seq_b = "NO-TAG-A", "NO-TAG-B"
+
+            # Give B's ungated thread a chance to finish while A is still
+            # parked on event_a - if this is genuinely concurrent, B's
+            # tagged output shows up before A's does.
+            await asyncio.sleep(0.3)
+            await pilot.pause()
+            mid = "\n".join(cs.query_one(appmod.Log).lines[before_len:])
+            chk("invocation B (dispatched second, but ungated) reports "
+                "before invocation A (dispatched first, still gated) - "
+                "proof this is genuine overlap, not serialized dispatch",
+                f"[{seq_b}] output-of-B" in mid
+                and f"[{seq_a}] output-of-A" not in mid)
+
+            event_a.set()
+            await cs.workers.wait_for_complete()
+            await pilot.pause()
+            final = "\n".join(cs.query_one(appmod.Log).lines[before_len:])
+            chk("invocation A's own output eventually arrives tagged with "
+                "A's own invocation number", f"[{seq_a}] output-of-A" in final)
+            chk("A's tag never carries B's output, and B's tag never "
+                "carries A's - each output block is attributable to "
+                "exactly one invocation, however they interleave",
+                f"[{seq_a}] output-of-B" not in final
+                and f"[{seq_b}] output-of-A" not in final)
+        finally:
+            event_a.set()
+            appmod.subprocess.run = real_run
 
     ok = _command_table_checks(ok)
     ok = _dispatch_checks(ok)

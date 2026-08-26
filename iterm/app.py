@@ -3136,11 +3136,25 @@ class RelayApp(App):
         here = os.path.dirname(os.path.abspath(__file__))
         relay_bin = os.path.join(here, "..", "bin", "relay")
         argv = [relay_bin, cmd.cli, *args]
-        log.write_line(f"$ relay {cmd.cli} {' '.join(args)}".rstrip())
-        self.run_worker(self._cmd_run_cli_worker(cmd, argv, log),
+        # Review round 2, finding: exclusive=False (below) means two `:`
+        # commands genuinely overlap now - the echo lines print in order,
+        # but their output blocks arrive whenever each subprocess happens
+        # to finish, which need not be submission order. Two `:ws list` in
+        # quick succession used to be structurally impossible to interleave
+        # (a second submission could not even start until the first
+        # subprocess.run returned); now they can, and untagged output would
+        # let an operator attribute command B's result to command A. A
+        # monotonically increasing per-invocation number, printed on the
+        # echo line and on every line of that invocation's own output,
+        # makes the two unambiguous no matter which finishes first.
+        seq = getattr(self, "_cmd_seq", 0) + 1
+        self._cmd_seq = seq
+        log.write_line(f"$ relay {cmd.cli} {' '.join(args)}".rstrip()
+                       + f"  [{seq}]")
+        self.run_worker(self._cmd_run_cli_worker(cmd, argv, log, seq),
                         exclusive=False)
 
-    async def _cmd_run_cli_worker(self, cmd, argv, log) -> None:
+    async def _cmd_run_cli_worker(self, cmd, argv, log, seq: int) -> None:
         try:
             proc = await asyncio.to_thread(
                 subprocess.run, argv, capture_output=True, text=True,
@@ -3153,18 +3167,18 @@ class RelayApp(App):
             # going in the background") told the operator to wait for
             # something already dead. Say what actually happened: the
             # command was killed, and no output is coming.
-            log.write_line(f"  {cmd.cli}: killed after "
+            log.write_line(f"  [{seq}] {cmd.cli}: killed after "
                            f"{self._CMD_TIMEOUT:.0f}s with no output")
             return
         except Exception as exc:                    # noqa: BLE001
-            log.write_line(f"  {cmd.cli} failed to start: {exc}")
+            log.write_line(f"  [{seq}] {cmd.cli} failed to start: {exc}")
             return
         for stream in (proc.stdout, proc.stderr):
             for line in (stream or "").splitlines():
                 if line.strip():
-                    log.write_line("  " + line)
+                    log.write_line(f"  [{seq}] " + line)
         if proc.returncode != 0:
-            log.write_line(f"  {cmd.cli}: exit {proc.returncode}")
+            log.write_line(f"  [{seq}] {cmd.cli}: exit {proc.returncode}")
 
     def on_input_submitted(self, event) -> None:
         if self._cmdline is not None:
