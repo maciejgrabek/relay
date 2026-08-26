@@ -137,6 +137,31 @@ def _command_table_checks(ok):
     return ok
 
 
+def _dispatch_checks(ok):
+    """The two behaviours a hand check would not catch reliably."""
+    import commands
+
+    confirmables = [c for c in commands.CMD if c.confirm]
+    ok &= check("every destructive command is confirm=True",
+                {c.name for c in confirmables}
+                >= {"wipe", "zap", "restore", "extreme"})
+    ok &= check("no confirm command is also hot (never one keystroke away)",
+                not any(c.hot for c in confirmables))
+
+    subjects = [c for c in commands.CMD if c.subject]
+    ok &= check("subject commands exist", len(subjects) > 0)
+    ok &= check("every subject command names its args or takes none",
+                all(c.args or not c.pass_args for c in subjects))
+    # The entry's NAME is "digit" (not "send" - see commands.py: `send` is a
+    # NEVER_EXPOSE worker-protocol verb and validate() refuses a name that
+    # collides with one), but its ACTION is action_send - assert on the
+    # action, which is the property this check actually cares about.
+    ok &= check("pass_args is only set where the action takes parameters",
+                {c.action for c in commands.CMD if c.pass_args}
+                == {"action_send"})
+    return ok
+
+
 def _plain(markup) -> str:
     """The text a marked-up overlay line actually renders as.
 
@@ -2498,10 +2523,114 @@ async def go():
         await pilot.press("enter")
         await pilot.pause()
         chk("ENTER closes #cmdline", cl._cmdline is None)
-        chk("ENTER submitted and logged the parsed command",
-            ":pause extra" in "\n".join(cl.query_one(appmod.Log).lines))
+        # Task 3 only logged the parsed line; Task 4 makes ENTER actually
+        # dispatch it. `pause` takes no args (pass_args is only set on
+        # `digit`), so the extra word is dropped and action_pause runs for
+        # real - toggle_pause() flipping is proof ENTER reached the action,
+        # not just the log.
+        chk("ENTER dispatches the parsed command to its action",
+            cl.watcher.paused is True)
+
+    # --- Task 4: dispatch, the confirm gate, and subject resolution -----------
+    # Task 3's cmdline shipped with zero behavioural coverage - only the
+    # parsed line got logged, never actually acted on. These drive real
+    # dispatch through _cmdline_submit, the same way an operator would type
+    # it, so that neutering the confirm gate (or the lookup, or _cmd_select)
+    # turns a check here red rather than only a hand test nobody re-runs.
+    def _two_named():
+        s0 = SessionInfo("s0", title="t0", window_idx=0, tab_idx=0,
+                          last_screen=["x"])
+        s1 = SessionInfo("s1", title="t1", window_idx=0, tab_idx=1,
+                          last_screen=["x"])
+        # SessionInfo has no `name` field of its own (the swarm registry
+        # carries names separately) - _cmd_select still reads `info.name`
+        # off the SessionInfo, so a stub sets it directly. Dataclasses
+        # without __slots__ take the assignment fine.
+        s0.name = "w1"
+        s1.name = "w2"
+        return {"s0": s0, "s1": s1}
+
+    cd = _TestApp(_two_named(), dry_run=True)
+    async with cd.run_test() as pilot:
+        await pilot.pause()
+        cd._refresh()
+        await pilot.pause()
+
+        async def cmd(line):
+            await pilot.press("colon")
+            await pilot.pause()
+            cd.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        def logtext():
+            return "\n".join(cd.query_one(appmod.Log).lines)
+
+        await cmd("wip")
+        chk("an unknown command reports itself and suggests the close match",
+            "unknown command 'wip'" in logtext() and "wipe" in logtext())
+
+        await cmd("zzz")
+        chk("a typo with no matching prefix still reports unknown "
+            "(no table entry starts with 'zzz', so no suggestion is owed)",
+            "unknown command 'zzz'" in logtext())
+
+        before_audit = cd._audit_visible
+        await cmd("audit")
+        chk(":audit dispatches action_audit_view, same as key v",
+            cd._audit_visible != before_audit)
+
+        chk("s0 starts unarmed", cd.watcher.sessions["s0"].mode == "off")
+        t = cd.query_one(appmod.DataTable)
+        t.move_cursor(row=cd._row_sids.index("s1"))
+        await pilot.pause()
+
+        # --- the confirm gate: this is the one that must never regress -----
+        await cmd("wipe")
+        chk(":wipe alone is refused and prints what it would do",
+            "Re-run as :wipe! to confirm" in logtext())
+        chk(":wipe alone never reaches action_wipe "
+            "(which would have logged 'nothing orphaned')",
+            "nothing orphaned" not in logtext())
+        await cmd("wipe!")
+        chk(":wipe! actually runs the action",
+            "nothing orphaned" in logtext())
+
+        # --- subject resolution: an explicit name moves the cursor first ---
+        chk("cursor is still on s1 before the named arm",
+            cd._selected_sid() == "s1")
+        await cmd("arm w1")
+        chk(":arm w1 moves the cursor onto the session named w1, not "
+            "whatever row happened to be selected",
+            cd._selected_sid() == "s0")
+        chk(":arm w1 then runs arm on that row",
+            cd.watcher.sessions["s0"].mode == "safe")
+        chk("the other session is untouched",
+            cd.watcher.sessions["s1"].mode == "off")
+
+        await cmd("arm nope")
+        chk(":arm nope refuses instead of guessing a target",
+            "no live session named 'nope'" in logtext())
+
+    ne = _TestApp({}, dry_run=True)
+    async with ne.run_test() as pilot:
+        await pilot.pause()
+        ne._refresh()
+        await pilot.pause()
+        await pilot.press("colon")
+        await pilot.pause()
+        ne.query_one("#cmdline").value = "arm"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        chk(":arm with no row selected and no name given refuses instead "
+            "of guessing",
+            "no session selected" in
+            "\n".join(ne.query_one(appmod.Log).lines))
 
     ok = _command_table_checks(ok)
+    ok = _dispatch_checks(ok)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok

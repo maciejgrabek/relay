@@ -2983,11 +2983,71 @@ class RelayApp(App):
         except Exception:
             pass          # already gone: closing twice must not raise
 
+    def _cmd_lookup(self, name: str):
+        for cmd in commands.CMD:
+            if cmd.name == name:
+                return cmd
+        return None
+
     def _cmdline_submit(self, line: str) -> None:
+        log = self.query_one(Log)
         name, args, bang = commands.parse(line)
         if not name:
             return
-        self.query_one(Log).write_line(f":{name} {' '.join(args)}".rstrip())
+        cmd = self._cmd_lookup(name)
+        if cmd is None:
+            near = commands.complete(name, commands.CMD)
+            hint = f" - did you mean {', '.join(near)}?" if near else ""
+            log.write_line(f"unknown command {name!r}{hint}")
+            return
+        if cmd.confirm and not bang:
+            # A destructive command must never be one keystroke from running.
+            log.write_line(f"{cmd.name}: {cmd.help}. Re-run as :{cmd.name}! "
+                           f"to confirm.")
+            return
+        if cmd.subject and not args and self._selected_sid() is None:
+            log.write_line(f"{cmd.name}: no session selected, and none named")
+            return
+        if cmd.subject and args:
+            # Spec section 4: an explicit subject. TUI actions all operate on
+            # the cursor row, so honouring `:arm w1 wild` means moving the
+            # cursor to w1 first rather than teaching every action to take a
+            # session argument.
+            if not self._cmd_select(args[0]):
+                log.write_line(f"{cmd.name}: no live session named {args[0]!r}")
+                return
+            args = args[1:]
+        if cmd.action:
+            fn = getattr(self, cmd.action, None)
+            if fn is None:
+                log.write_line(f"{cmd.name}: {cmd.action} is not implemented")
+                return
+            # action_send is parameterised; the rest take no arguments.
+            fn(*args) if cmd.pass_args else fn()
+            return
+        self._cmd_run_cli(cmd, args, log)      # Task 5
+
+    def _cmd_select(self, name: str) -> bool:
+        """Move the cursor to the live session called `name`. False if there
+        is no such session - the caller reports it rather than acting on
+        whatever row happened to be selected."""
+        if not self.watcher:
+            return False
+        grid = self.query_one(DataTable)
+        # _row_sids is an ATTRIBUTE (a list), not a method, and None marks the
+        # divider row between NEEDS ACTION and the roster - skip it.
+        for row, sid in enumerate(self._row_sids):
+            if sid is None:
+                continue
+            info = self.watcher.sessions.get(sid)
+            label = getattr(info, "name", "") or ""
+            if label == name:
+                grid.move_cursor(row=row)
+                return True
+        return False
+
+    def _cmd_run_cli(self, cmd, args, log) -> None:
+        log.write_line(f"{cmd.name}: CLI commands land in the next task")
 
     def on_input_submitted(self, event) -> None:
         if self._cmdline is not None:
