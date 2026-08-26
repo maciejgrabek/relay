@@ -2315,6 +2315,130 @@ def cmd_restore(args) -> int:
     return 0
 
 
+def _ws_iterm(coro_factory, what: str):
+    """Run one iTerm coroutine, returning (value, error_message).
+
+    Anything escaping a coroutine handed to run_until_complete gets a printed
+    traceback and sys.exit(1) from the iterm2 library, which no outer
+    `except Exception` can catch - so the coroutine catches its own and this
+    helper turns a refused connection into an ordinary error string.
+    """
+    import iterm2
+    box = {"value": None, "err": ""}
+
+    async def run(connection):
+        try:
+            box["value"] = await coro_factory(connection)
+        except Exception as exc:                    # noqa: BLE001
+            box["err"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        iterm2.run_until_complete(run, True)
+    except SystemExit:
+        return None, f"could not connect to iTerm to {what} (is it running?)"
+    return box["value"], box["err"]
+
+
+def cmd_ws(args) -> int:
+    import wsconfig
+    path = args.config or wsconfig.default_path()
+    verb = args.ws_verb
+
+    if verb == "save":
+        import wsbuild
+        rows, err = _ws_iterm(
+            lambda c: wsbuild.snapshot_rows(c, all_windows=args.all),
+            "read the current window")
+        if err:
+            return _err(err)
+        tabs = wsconfig.snapshot(rows or [])
+        if not tabs:
+            return _err("no tabs to save")
+        # snapshot() drops rows with a blank name: a tab nobody named cannot be
+        # addressed in a workspace, and emitting one would write `name = ""`,
+        # which load() then refuses. Say so rather than losing tabs silently.
+        dropped = len(rows or []) - len(tabs)
+        if dropped:
+            print(f"  ! skipped {dropped} tab(s) with no name")
+        try:
+            wsconfig.save(path, args.name, tabs, force=args.force)
+        except wsconfig.ConfigError as exc:
+            return _err(str(exc))
+        print(wsconfig.plan_text(args.name, tabs))
+        print(f"saved to {path}")
+        print("a running tab cannot report the command typed into it - "
+              "fill in each tab's cmd by hand")
+        return 0
+
+    try:
+        settings, spaces = wsconfig.load(path)
+    except wsconfig.ConfigError as exc:
+        return _err(str(exc))
+
+    if verb == "list":
+        if not spaces:
+            print("no workspaces defined")
+            return 0
+        for name in sorted(spaces):
+            print(wsconfig.plan_text(name, spaces[name]))
+            print()
+        return 0
+
+    if verb == "rm":
+        if not wsconfig.remove(path, args.name):
+            return _err(f'no workspace named "{args.name}"')
+        print(f"removed {args.name}")
+        return 0
+
+    # verb == "up"
+    if args.name not in spaces:
+        available = ", ".join(sorted(spaces)) or "(none defined)"
+        return _err(f'no workspace named "{args.name}"; available: {available}')
+    tabs = spaces[args.name]
+    if not tabs:
+        return _err(f'workspace "{args.name}" has no tabs')
+
+    import wsbuild
+    # Two connections on purpose: the confirmation prompt reads stdin, and
+    # blocking on that inside the event loop would stall the iTerm connection.
+    live, err = _ws_iterm(wsbuild.live_tab_names, "check what is already open")
+    if err:
+        return _err(err)
+    if live is None:
+        # Not the same as "nothing is open": the enumeration itself failed, and
+        # building against an empty guard would rebind names that are live.
+        return _err("could not read which tabs are already open - refusing to "
+                    "build, because the guard that stops a restore from "
+                    "stealing a live session's name cannot be trusted")
+
+    build, skipped = wsconfig.skip_live(tabs, live or set())
+    missing = {t.dir for t in build if t.dir and not os.path.isdir(t.dir)}
+    build = [t for t in build if t.dir not in missing]
+
+    print(wsconfig.plan_text(args.name, tabs, missing_dirs=missing,
+                               skipped=skipped))
+    if args.dry_run:
+        return 0
+    if not build:
+        print("nothing to open.")
+        return 0
+    if not args.yes and not _confirm(f"open {len(build)} tab(s)?"):
+        print("aborted.")
+        return 0
+
+    target = "current" if args.here else (
+        "new" if args.new else str(settings.get("target", "new")))
+    warmup = float(settings.get("warmup", 1.5))
+    notes, err = _ws_iterm(
+        lambda c: wsbuild.build(c, build, warmup, target), "open the workspace")
+    if err:
+        return _err(err)
+    for note in notes or []:
+        print(f"  ! {note}")
+    print(f"opened {args.name}")
+    return 0
+
+
 # --- parser --------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2582,6 +2706,40 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--yes", action="store_true")
     rs.add_argument("--dry-run", dest="dry_run", action="store_true")
     rs.set_defaults(fn=cmd_restore)
+
+    ws = sub.add_parser("ws", help="named workspaces: save a set of tabs and "
+                                   "reopen it later")
+    ws.set_defaults(fn=cmd_ws)
+    wssub = ws.add_subparsers(dest="ws_verb", required=True)
+
+    wsl = wssub.add_parser("list", help="list defined workspaces")
+    wsl.add_argument("--config", default=None)
+    wsl.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
+
+    wss = wssub.add_parser("save", help="save the current window as a "
+                                        "workspace")
+    wss.add_argument("name")
+    wss.add_argument("--all", action="store_true",
+                     help="every window, not just the current one")
+    wss.add_argument("--force", action="store_true",
+                     help="replace an existing workspace of this name")
+    wss.add_argument("--config", default=None)
+    wss.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
+
+    wsu = wssub.add_parser("up", help="open a workspace")
+    wsu.add_argument("name")
+    wsu.add_argument("--here", action="store_true",
+                     help="put the first window's tabs in the current window")
+    wsu.add_argument("--new", action="store_true",
+                     help="always open new windows")
+    wsu.add_argument("--dry-run", dest="dry_run", action="store_true")
+    wsu.add_argument("--config", default=None)
+    wsu.add_argument("--yes", action="store_true")
+
+    wsr = wssub.add_parser("rm", help="delete a workspace")
+    wsr.add_argument("name")
+    wsr.add_argument("--config", default=None)
+    wsr.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
 
     wp = sub.add_parser("wipe", help="DELETE dead sessions' tasks (or a whole "
                                      "project with --all)")

@@ -54,8 +54,8 @@ def _first_session(handle):
                                       if handle.sessions else None)
 
 
-async def live_tab_names(connection) -> set:
-    """Every live iTerm tab name, registered or not.
+async def live_tab_names(connection):
+    """Every live iTerm tab name, registered or not. None on total failure.
 
     Named live_tab_names, not live_names, because swarm.live_names() already
     exists and means something narrower: the names of live REGISTERED
@@ -92,11 +92,12 @@ async def live_tab_names(connection) -> set:
                         # race) must not take the whole guard down with it.
                         continue
     except Exception:
-        # An empty set here means "guard nothing" - the UNSAFE direction, not
-        # the safe one. A caller that gets a failure signal here (rather than
-        # a small, plausible set) must treat it as a reason to stop, not as
-        # license to build blindly on top of an unknown live state.
-        return set()
+        # None here means "the enumeration itself failed" - distinct from an
+        # empty set, which means "nothing is open" and is a legitimate result.
+        # An empty set on failure would make the guard skip NOTHING, the
+        # UNSAFE direction: a caller must treat None as a reason to stop, not
+        # as license to build blindly on top of an unknown live state.
+        return None
     return names
 
 
@@ -191,3 +192,46 @@ async def build(connection, tabs, warmup: float = 1.5,
             except Exception as exc:                      # noqa: BLE001
                 notes.append(f"send {cmd!r}: {exc}")
     return notes
+
+
+async def snapshot_rows(connection, all_windows: bool = False) -> list:
+    """Live tabs as plain dicts for wsconfig.snapshot().
+
+    `arm` comes from the persisted `sessions.mode` of a registered session with
+    the same name. An unregistered tab's arm level lives only in the running
+    watcher and is deliberately not persisted (see watcher.py), so it comes
+    back empty - which is correct: the way to make a tab come back armed is to
+    give it an `arm` key, which registers it.
+    """
+    import iterm2
+
+    app = await iterm2.async_get_app(connection)
+    if all_windows:
+        windows = list(app.terminal_windows)
+    else:
+        current = app.current_terminal_window
+        windows = [current] if current is not None else []
+
+    conn = None
+    rows = []
+    for index, window in enumerate(windows, start=1):
+        for tab in window.tabs:
+            session = _first_session(tab)
+            if session is None:
+                continue
+            # autoName, not session.name: session.name carries the job
+            # suffix ("DRAGEN CODE (-zsh)") so a saved name would never match
+            # its own live tab again. Same read relay uses at selftest.py:196.
+            name = (await session.async_get_variable("autoName")
+                    or await session.async_get_variable("session.name"))
+            path = await session.async_get_variable("session.path")
+            arm = ""
+            if name:
+                if conn is None:
+                    conn = db.connect()
+                row = db.get_session(conn, str(name))
+                mode = (row["mode"] if row is not None else "") or ""
+                arm = mode if mode in wsconfig.ARM_MODES else ""
+            rows.append({"name": str(name or ""), "dir": str(path or ""),
+                         "arm": arm, "window": index})
+    return rows

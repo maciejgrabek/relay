@@ -79,6 +79,37 @@ def _sess(name):
     return row
 
 
+def _ws_checks(ok):
+    """Only the paths that never touch iTerm: list, rm, and a bad name."""
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(), "workspaces.toml")
+    with open(path, "w") as fh:
+        fh.write('[[dragen]]\nname = "monitor"\ndir = "/tmp"\ncmd = "top"\n')
+
+    code, out, _ = run_cli("ws", "list", "--config", path)
+    ok &= check("ws list exits 0", code == 0)
+    ok &= check("ws list names the workspace", "dragen" in out)
+    ok &= check("ws list shows the tab", "monitor" in out)
+
+    code, _, err = run_cli("ws", "up", "nosuch", "--config", path)
+    ok &= check("ws up on an unknown name fails", code == 1)
+    ok &= check("ws up on an unknown name lists what exists",
+                "dragen" in err)
+
+    code, out, _ = run_cli("ws", "rm", "dragen", "--config", path)
+    ok &= check("ws rm exits 0", code == 0)
+    code, out, _ = run_cli("ws", "list", "--config", path)
+    ok &= check("ws rm actually removed it", "dragen" not in out)
+
+    code, _, err = run_cli("ws", "rm", "dragen", "--config", path)
+    ok &= check("ws rm on a missing name fails", code == 1)
+
+    code, _, err = run_cli("ws", "list", "--config", "/nonexistent/x.toml")
+    ok &= check("a missing config file is a user error, not a crash",
+                code == 1 and "no config" in err)
+    return ok
+
+
 def run():
     ok = True
 
@@ -1990,6 +2021,8 @@ def run():
                     raised is None and _bad in out_ev)
     finally:
         _events.EVENTS_PATH = _real_path
+
+    ok &= _ws_checks(ok)
 
     conn.close()
     print()
