@@ -41,19 +41,27 @@ def first_prompt(name: str, project: str, prompt: str,
 
 async def spawn_worker(name: str, project: str, prompt: str,
                        workdir: str, role: str = "worker",
-                       arm: str = "off") -> str:
+                       arm: str = "off", session=None) -> str:
+    """Open an iTerm2 tab running claude, pre-registered by name.
+
+    `session` lets a caller that has already created a session (the workspace
+    builder, which must apply a per-tab profile at creation time) hand it over
+    instead. None keeps the original behaviour: make our own connection, use
+    the current window or a new one.
+    """
     import iterm2
 
     claude_cmd = shutil.which("claude") or "claude"
-    connection = await iterm2.Connection.async_create()
-    app = await iterm2.async_get_app(connection)
-    win = app.current_terminal_window
-    if win is None:
-        win = await iterm2.Window.async_create(connection)
-        tab = win.current_tab
-    else:
-        tab = await win.async_create_tab()
-    session = tab.current_session
+    if session is None:
+        connection = await iterm2.Connection.async_create()
+        app = await iterm2.async_get_app(connection)
+        win = app.current_terminal_window
+        if win is None:
+            win = await iterm2.Window.async_create(connection)
+            tab = win.current_tab
+        else:
+            tab = await win.async_create_tab()
+        session = tab.current_session
     sid = session.session_id           # bare UUID, matches the watcher's key
 
     # Name the tab so relay's UNIT column and the human both see it.
