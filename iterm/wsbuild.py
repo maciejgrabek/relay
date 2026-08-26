@@ -66,14 +66,37 @@ async def live_tab_names(connection) -> set:
     """
     import iterm2
 
-    app = await iterm2.async_get_app(connection)
     names = set()
-    for window in app.terminal_windows:
-        for tab in window.tabs:
-            for session in tab.sessions:
-                name = await session.async_get_variable("session.name")
-                if name:
-                    names.add(str(name))
+    try:
+        app = await iterm2.async_get_app(connection)
+        for window in app.terminal_windows:
+            for tab in window.tabs:
+                for session in tab.sessions:
+                    try:
+                        # autoName, not session.name: session.name carries a
+                        # live job suffix ("DRAGEN CODE (-zsh)") that never
+                        # matches the saved name ("DRAGEN CODE"), which would
+                        # make skip_live skip nothing and let build() rebind
+                        # a live name to a fresh session - the identity theft
+                        # this guard exists to prevent. Matches the autoName
+                        # precedent at selftest.py:196. session.name is the
+                        # fallback for a session with no autoName at all, not
+                        # the primary read.
+                        name = (await session.async_get_variable("autoName")
+                                or await session.async_get_variable(
+                                    "session.name"))
+                        if name:
+                            names.add(str(name))
+                    except Exception:
+                        # Trap 4: a session closed mid-enumeration (a real
+                        # race) must not take the whole guard down with it.
+                        continue
+    except Exception:
+        # An empty set here means "guard nothing" - the UNSAFE direction, not
+        # the safe one. A caller that gets a failure signal here (rather than
+        # a small, plausible set) must treat it as a reason to stop, not as
+        # license to build blindly on top of an unknown live state.
+        return set()
     return names
 
 
@@ -94,6 +117,19 @@ async def build(connection, tabs, warmup: float = 1.5,
             window = app.current_terminal_window
 
         for tab in wintabs:
+            if tab.supervised and (tab.name in db.RESERVED_NAMES
+                                   or tab.arm not in db.ARM_REQUEST_MODES):
+                # Validate BEFORE creating anything: db.register raises for
+                # RESERVED_NAMES and db.set_arm_request raises for a bad arm
+                # mode, and either raising after register() succeeded would
+                # leave a session registered, unarmed, with no workdir - a
+                # live name pointing at a bare shell - with its cmd and panes
+                # silently dropped because pending.append sits in the same
+                # try block. No window, no tab, no partial registration.
+                notes.append(
+                    f"{tab.name}: refusing to supervise - reserved name or "
+                    f"invalid arm mode {tab.arm!r}")
+                continue
             try:
                 profile = _session_profile(tab.dir, lock_title=not tab.supervised)
                 if window is None:
