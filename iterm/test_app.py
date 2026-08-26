@@ -6,8 +6,11 @@ Uses Textual's headless run_test() with a stub watcher (no iTerm2 needed).
 import asyncio
 import inspect
 import os
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 # Must be set before any cfgmod.save()/load() call the config-editor pilot
 # test below triggers - otherwise it writes straight to the developer's real
@@ -2831,10 +2834,9 @@ async def go():
     # sibling that reports. The first two drive the REAL `bin/relay` binary
     # (no stubbing) so the end-to-end payoff - a refusal actually landing in
     # the log - is proven for real, not against a mock that could drift from
-    # what the CLI actually prints. The timeout and launch-failure paths are
-    # not reliably triggerable from a real invocation on demand, so those two
-    # monkeypatch subprocess.run (the exact pattern already used above for
-    # caffeinate's Popen failure).
+    # what the CLI actually prints. Every path that dispatches a CLI command
+    # is backgrounded via run_worker (review round 1, finding 1), so each
+    # `cmd()` here waits out the worker before reading the log.
     cr = _TestApp(_one(), dry_run=True)
     async with cr.run_test() as pilot:
         await pilot.pause()
@@ -2847,6 +2849,8 @@ async def go():
             cr.query_one("#cmdline").value = line
             await pilot.pause()
             await pilot.press("enter")
+            await pilot.pause()
+            await cr.workers.wait_for_complete()
             await pilot.pause()
 
         def logtextcr():
@@ -2871,26 +2875,10 @@ async def go():
         chk("the refusal actually produced new log output (not a no-op)",
             len(cr.query_one(appmod.Log).lines) > before_len)
 
-        real_run = appmod.subprocess.run
-
-        def _hang(*a, **k):
-            raise appmod.subprocess.TimeoutExpired(cmd="relay", timeout=8.0)
-
-        appmod.subprocess.run = _hang
-        try:
-            await cmdcr("doctor")
-        finally:
-            appmod.subprocess.run = real_run
-        chk("a CLI verb that hangs past the timeout is reported as still "
-            "running, not silently swallowed and not raised",
-            "still running after" in logtextcr())
-        chk("the property that matters most: a long-running verb does not "
-            "freeze the roster - the app is still alive after the timeout",
-            cr.is_running)
-
         def _boom(*a, **k):
             raise OSError("no such file or directory: relay")
 
+        real_run = appmod.subprocess.run
         appmod.subprocess.run = _boom
         try:
             await cmdcr("recap")
@@ -2899,6 +2887,132 @@ async def go():
         chk("a CLI that fails to even start is reported, not swallowed",
             "failed to start" in logtextcr())
         chk("the app survives a launch failure too", cr.is_running)
+
+    # --- review round 1, finding 1: backgrounding + UI responsiveness -----
+    # subprocess.run is blocking, and _cmd_run_cli used to be called
+    # synchronously from _cmdline_submit, on Textual's own event loop - a
+    # CLI command froze the WHOLE roster (no redraw, no keypress, no
+    # watcher poll) for as long as it took. This proves the fix by driving
+    # a subprocess.run stand-in that blocks on a real threading.Event: if
+    # backgrounding ever regresses back to an inline call, awaiting `cmdcs`
+    # below would itself block for the full `release.wait` and every
+    # assertion that follows it (the cursor move, the second command) would
+    # never even run - they would hang, not merely read wrong values.
+    cs = _TestApp(_two_plain(), dry_run=True)
+    async with cs.run_test() as pilot:
+        await pilot.pause()
+        cs.watcher.registry["s0"] = {"name": "w1", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        cs.watcher.registry["s1"] = {"name": "w2", "project": "demo",
+                                     "role": "worker", "task_now": ""}
+        cs._refresh()
+        await pilot.pause()
+
+        async def cmdcs(line):
+            await pilot.press("colon")
+            await pilot.pause()
+            cs.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        def logtextcs():
+            return "\n".join(cs.query_one(appmod.Log).lines)
+
+        real_run = appmod.subprocess.run
+        release = threading.Event()
+
+        def _slow(*a, **k):
+            release.wait(5.0)
+            return subprocess.CompletedProcess(a[0] if a else [], 0,
+                                               stdout="slow-done-marker\n",
+                                               stderr="")
+
+        appmod.subprocess.run = _slow
+        try:
+            t0 = time.monotonic()
+            await cmdcs("ws list")
+            elapsed = time.monotonic() - t0
+            chk("dispatching a slow CLI command returns almost immediately "
+                "- the blocking subprocess.run call is backgrounded, not "
+                "run inline on the event loop (took "
+                f"{elapsed:.2f}s against a 5s-gated subprocess)",
+                elapsed < 2.0)
+            chk("the echo line lands immediately, before the subprocess "
+                "has produced anything",
+                "$ relay ws list" in logtextcs())
+            chk("...but the result has NOT arrived yet - proof this is "
+                "genuinely still in flight, not merely fast",
+                "slow-done-marker" not in logtextcs())
+
+            # The property that matters most: the roster keeps working
+            # while a CLI command is still in flight. The gated subprocess
+            # is still parked on release.wait() right now.
+            t = cs.query_one(appmod.DataTable)
+            t.move_cursor(row=cs._row_sids.index("s1"))
+            await pilot.pause()
+            chk("the roster still responds to input while a CLI command "
+                "is in flight (cursor move went through)",
+                cs._selected_sid() == "s1")
+
+            before_audit = cs._audit_visible
+            await cmdcs("audit")
+            chk("a second command dispatches normally while the first is "
+                "still in flight - the event loop was never blocked",
+                cs._audit_visible != before_audit)
+
+            release.set()
+            await cs.workers.wait_for_complete()
+            await pilot.pause()
+            chk("the backgrounded result eventually lands in the log once "
+                "the subprocess actually finishes",
+                "slow-done-marker" in logtextcs())
+        finally:
+            release.set()
+            appmod.subprocess.run = real_run
+
+        # --- finding 2: the timeout message must not claim ongoing work ---
+        # Verified by experiment: subprocess.run(timeout=...) KILLS the
+        # child before re-raising TimeoutExpired, so the old message
+        # ("still running... left going in the background") described work
+        # that was already dead.
+        def _hang(*a, **k):
+            raise appmod.subprocess.TimeoutExpired(cmd="relay", timeout=8.0)
+
+        appmod.subprocess.run = _hang
+        try:
+            await cmdcs("doctor")
+            await cs.workers.wait_for_complete()
+            await pilot.pause()
+        finally:
+            appmod.subprocess.run = real_run
+        chk("a timeout is reported as a kill, not as ongoing work",
+            "killed after" in logtextcs())
+        chk("the disproven claim ('still running') is gone",
+            "still running" not in logtextcs())
+        chk("the app survives a timeout", cs.is_running)
+
+        # --- finding 3: a caller-side guard around the whole cli branch ---
+        # The action branch has always wrapped its call in try/except; the
+        # cli branch used to rely entirely on _cmd_run_cli's own internal
+        # except clauses - a single point of failure for any future edit
+        # inside that method. Sabotaging _cmd_run_cli itself (not
+        # subprocess.run) proves the guard sits at the CALL SITE, not just
+        # inside the method being called.
+        real_cli = cs._cmd_run_cli
+
+        def _broken(*a, **k):
+            raise RuntimeError("boom")
+
+        cs._cmd_run_cli = _broken
+        try:
+            await cmdcs("recap")
+        finally:
+            cs._cmd_run_cli = real_cli
+        chk("an exception raised by _cmd_run_cli itself is caught at the "
+            "dispatcher call site, not just inside its own body",
+            "recap: failed - boom" in logtextcs())
+        chk("the app survives a broken _cmd_run_cli", cs.is_running)
 
     ok = _command_table_checks(ok)
     ok = _dispatch_checks(ok)

@@ -3081,7 +3081,16 @@ class RelayApp(App):
                     # allowed to panic the app, known-arity-checked or not.
                     log.write_line(f"{cmd.name}: failed - {e}")
             return
-        self._cmd_run_cli(cmd, args, log)
+        try:
+            # Review round 1, finding 3: the action branch above wraps its
+            # call in try/except; this branch relied entirely on
+            # _cmd_run_cli's own except clauses, making it a single point
+            # of failure for any future edit inside that method. Give it
+            # the same caller-side guard - no CLI command may panic the app
+            # any more than a broken action can.
+            self._cmd_run_cli(cmd, args, log)
+        except Exception as e:
+            log.write_line(f"{cmd.name}: failed - {e}")
 
     def _cmd_usage(self, cmd) -> str:
         return f"{cmd.name}: usage :{cmd.name}" + (f" {cmd.args}" if cmd.args else "")
@@ -3114,19 +3123,38 @@ class RelayApp(App):
     _CMD_TIMEOUT = 8.0
 
     def _cmd_run_cli(self, cmd, args, log) -> None:
+        # Review round 1, finding 1 (critical): subprocess.run is a
+        # blocking call, and this method used to be called synchronously
+        # from _cmdline_submit, which runs on Textual's own event loop - so
+        # a CLI command froze the WHOLE roster (no redraw, no keypress, no
+        # watcher poll) for as long as it took, up to the full timeout on a
+        # hang. Every other slow path in this file already goes through
+        # run_worker/call_next; background this one the same way. The echo
+        # line happens HERE, synchronously, so the operator sees the
+        # command was accepted immediately - only the result arrives later,
+        # off of run_worker.
         here = os.path.dirname(os.path.abspath(__file__))
         relay_bin = os.path.join(here, "..", "bin", "relay")
         argv = [relay_bin, cmd.cli, *args]
         log.write_line(f"$ relay {cmd.cli} {' '.join(args)}".rstrip())
+        self.run_worker(self._cmd_run_cli_worker(cmd, argv, log),
+                        exclusive=False)
+
+    async def _cmd_run_cli_worker(self, cmd, argv, log) -> None:
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True,
-                                  timeout=self._CMD_TIMEOUT)
+            proc = await asyncio.to_thread(
+                subprocess.run, argv, capture_output=True, text=True,
+                timeout=self._CMD_TIMEOUT)
         except subprocess.TimeoutExpired:
-            # Long-running verbs must not freeze the roster. Say so rather
-            # than blocking or pretending it finished.
-            log.write_line(f"  {cmd.cli}: still running after "
-                           f"{self._CMD_TIMEOUT:.0f}s - left going in the "
-                           f"background")
+            # Review round 1, finding 2 (critical): subprocess.run(timeout=)
+            # KILLS the child before re-raising TimeoutExpired - verified by
+            # experiment (a probe told to sleep 5s under a 1s timeout never
+            # completed its work). The old message ("still running ... left
+            # going in the background") told the operator to wait for
+            # something already dead. Say what actually happened: the
+            # command was killed, and no output is coming.
+            log.write_line(f"  {cmd.cli}: killed after "
+                           f"{self._CMD_TIMEOUT:.0f}s with no output")
             return
         except Exception as exc:                    # noqa: BLE001
             log.write_line(f"  {cmd.cli} failed to start: {exc}")
