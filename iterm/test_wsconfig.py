@@ -216,6 +216,61 @@ def _round_trip(ok):
     ok &= check("remove drops it", "dragen" not in wsconfig.load(path3)[1])
     ok &= check("remove reports a miss",
                 wsconfig.remove(path3, "nosuch") is False)
+
+    # FINDING 1: header with trailing comment
+    commented = '''[settings]
+warmup = 2.0
+
+[[dragen]] # laptop tabs
+name = "monitor"
+dir = "~/Work/dragen"
+cmd = "top"
+'''
+    path4 = _write(commented)
+    one_tab = [wsconfig.Tab(name="new", dir="/tmp")]
+    wsconfig.save(path4, "dragen", one_tab, force=True)
+    _, result = wsconfig.load(path4)
+    ok &= check("save with force replaces despite trailing comment",
+                result["dragen"] == one_tab)
+
+    # FINDING 2: role without prompt
+    role_no_prompt = [wsconfig.Tab(name="c", dir="/tmp", role="coordinator")]
+    rendered = wsconfig.render("x", role_no_prompt)
+    _, loaded = wsconfig.load(_write(rendered))
+    ok &= check("role without prompt survives round-trip",
+                loaded["x"][0].role == "coordinator")
+
+    # FINDING 4: single-quoted header
+    single_quoted = '''[['dragen']]
+name = "a"
+dir = "~"
+'''
+    stripped_sq = wsconfig.strip_block(single_quoted, "dragen")
+    ok &= check("strip_block matches single-quoted header",
+                "[[" not in stripped_sq)
+
+    # FINDING 3: atomicity
+    path5 = _write(FULL)
+    wsconfig.save(path5, "atomic", [wsconfig.Tab(name="t", dir="/tmp")])
+    ok &= check("save does not leave .tmp file", not os.path.exists(path5 + ".tmp"))
+    _, atomic_check = wsconfig.load(path5)
+    ok &= check("save result still parses", "atomic" in atomic_check)
+
+    # Prefix case: removing "dev" should not affect "devtools"
+    prefix_file = '''[[dev]]
+name = "x"
+dir = "~"
+
+[[devtools]]
+name = "y"
+dir = "~"
+'''
+    path6 = _write(prefix_file)
+    wsconfig.remove(path6, "dev")
+    _, prefix_result = wsconfig.load(path6)
+    ok &= check("remove does not match name prefixes",
+                "dev" not in prefix_result and "devtools" in prefix_result)
+
     return ok
 
 

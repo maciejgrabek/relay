@@ -204,7 +204,7 @@ def render(name: str, tabs: List[Tab]) -> str:
             lines.append(f"arm = {_q(tab.arm)}")
         if tab.prompt:
             lines.append(f"prompt = {_q(tab.prompt)}")
-        if tab.prompt and tab.role != "worker":
+        if tab.role != "worker":
             lines.append(f"role = {_q(tab.role)}")
         if tab.project:
             lines.append(f"project = {_q(tab.project)}")
@@ -219,13 +219,33 @@ def render(name: str, tabs: List[Tab]) -> str:
 
 
 def _is_header(line: str) -> Optional[str]:
-    """The table name a line declares, or None. Handles [x] and [[x]]."""
+    """The table name a line declares, or None. Handles [x] and [[x]].
+
+    Also handles inline comments and quoted names (with both " and ').
+    """
     s = line.strip()
+
+    # Strip inline comment - it comes after the closing bracket
+    if s.startswith("[["):
+        if "]]" in s:
+            s = s[:s.index("]]") + 2]
+    elif s.startswith("["):
+        if "]" in s:
+            s = s[:s.index("]") + 1]
+
+    # Extract table name
     if s.startswith("[[") and s.endswith("]]"):
-        return s[2:-2].strip().strip('"')
-    if s.startswith("[") and s.endswith("]"):
-        return s[1:-1].strip().strip('"')
-    return None
+        name = s[2:-2].strip()
+    elif s.startswith("[") and s.endswith("]"):
+        name = s[1:-1].strip()
+    else:
+        return None
+
+    # Strip both " and ' quotes
+    if (name.startswith('"') and name.endswith('"')) or \
+       (name.startswith("'") and name.endswith("'")):
+        return name[1:-1]
+    return name
 
 
 def strip_block(text: str, name: str) -> str:
@@ -247,7 +267,7 @@ def strip_block(text: str, name: str) -> str:
 
 
 def save(path: str, name: str, tabs: List[Tab], force: bool = False) -> None:
-    """Write `name` into the file at `path`, creating it if absent."""
+    """Write `name` into the file at `path`, creating it if absent. Atomic."""
     try:
         with open(path) as fh:
             text = fh.read()
@@ -269,17 +289,21 @@ def save(path: str, name: str, tabs: List[Tab], force: bool = False) -> None:
     parent = os.path.dirname(os.path.abspath(path))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(path, "w") as fh:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
         fh.write(joined.rstrip("\n") + "\n")
+    os.replace(tmp, path)
 
 
 def remove(path: str, name: str) -> bool:
-    """Drop a workspace. True when it was there, False when it was not."""
+    """Drop a workspace. True when it was there, False when it was not. Atomic."""
     _, existing = load(path)
     if name not in existing:
         return False
     with open(path) as fh:
         text = fh.read()
-    with open(path, "w") as fh:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
         fh.write(strip_block(text, name).rstrip("\n") + "\n")
+    os.replace(tmp, path)
     return True
