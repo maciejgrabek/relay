@@ -1538,7 +1538,7 @@ class RelayApp(App):
                 or self._help_visible or self._timers_visible
                 or self._parked_visible
                 or self._modal_open or self._park is not None
-                or self._intervene is not None)
+                or self._intervene is not None or self._wssave is not None)
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
