@@ -30,6 +30,7 @@ from textual.widgets import DataTable, Static, Log, Input  # noqa: E402
 import audit  # noqa: E402
 import burn as burnmod  # noqa: E402
 import chrome  # noqa: E402
+import commands  # noqa: E402
 try:                                   # the boot screen is a plugin: relay
     import boot as bootmod  # noqa: E402   # must start without it
 except Exception:                      # pragma: no cover - defensive
@@ -311,17 +312,9 @@ def overlay_panel(lines: list, width: int, accent: str) -> str:
     return "\n".join([lines[0]] + body + [chrome.panel_bottom(w, accent)])
 
 
-KEYBAR = (
-    _keys([("↑↓", "move"), ("SPACE", "arm"), ("s", "shadow"), ("ENTER", "answer"),
-           ("1/2/3", "send"), ("n", "go to tab"), ("x", "hide"), ("i", "park"),
-           ("b", "parked"), ("v", "audit"), ("f", "feed"), ("t", "timers"),
-           ("E×2", "extreme")])
-    + "\n"
-    + _keys([("a", "arm all"), ("d", "disarm all"), ("TAB", "swarm"),
-             ("p", "pause"), ("!", "stop/tell"), ("c", "caffeinate"),
-             (",", "settings"), ("w", "workspaces"), ("S", "save layout"),
-             ("R×2", "restore"),
-             ("W×2", "wipe"), ("Z×2", "zap"), ("?", "help"), ("q", "quit")]))
+# Generated, never hand-written. Two hand-maintained legends are exactly how
+# `w` and `S` shipped working but invisible; the table is the only list now.
+KEYBAR = _keys(commands.hot_pairs(commands.CMD) + [(":", "commands")])
 
 
 def _tree_fingerprint(workdir: str) -> str:
@@ -1001,36 +994,7 @@ def help_text(width: int = 96) -> str:
         return f"  [{A}]{key:<9}[/] [{G}]{_fit(what, max(10, w - 13))}[/]"
 
     lines = [
-        row("↑↓ / j k", "move (continuous through NEEDS ACTION and list)"),
-        row("ENTER", "send Enter to the selected session (answer by hand)"),
-        row("1 2 3", "send that digit (pick a menu option by hand)"),
-        row("SPACE", "cycle arm: off -> safe -> wild -> insane -> off"),
-        row("a / d", "arm all (safe) / disarm all"),
-        row("s", "shadow-arm a tab: dry-run, records what it would do without acting"),
-        row("n", "jump to the selected session's iTerm2 tab"),
-        row("x", "hide / show the selected session"),
-        row("i", "park an idea against the selected session (zero context cost)"),
-        row("b", "PARKED: the whole pile - e retitles, d twice drops, enter "
-                "hands one to a session; left/right widens scope to every "
-                "directory"),
-        row("v", "audit view: what relay approved for this session"),
-        row("f", "feed: hide / show the live terminal feed pane (persists)"),
-        row("t", "timers: schedule payloads to fire into this session (cron-like)"),
-        row("w", "workspaces: the saved tab sets in ~/.relay/workspaces.toml"),
-        row("S", "save this window as a workspace (relay ws up <name> reopens it)"),
-        row("m", "mascot: float the creature on your desktop, above other apps"),
-        row("c", "caffeinate: let the Mac sleep now, or take the assertion back"),
-        row("TAB", "swarm view (kanban + interactions + feed)"),
-        row("p", "pause / resume relay's acting - freezes approvals + deliveries, keeps watching"),
-        row("!", "INTERVENE: stop running sessions and/or broadcast to them"),
-        row(",", "settings editor - up/down move, left/right change, p plays a sound"),
-        row("R R", "restore dead task-owners (double-press confirms)"),
-        row("W W", "WIPE dead sessions' work (double-press confirms)"),
-        row("Z Z", "ZAP the whole project - ALL tasks+sessions+messages "
-                   "(double-press confirms)"),
-        row("E E", "EXTREME an INSANE session: auto-push a prompt while idle (double-press)"),
-        row("q", "quit (asks twice only when something is live)"),
-        row("?", "close this help"),
+        *[row(k, what) for k, what in commands.help_rows(commands.CMD)],
         "",
         chrome.rule("arm levels", "what relay may auto-approve", w, DIM,
                     f"bold {WARN}", DIM),

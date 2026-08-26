@@ -50,6 +50,51 @@ from textual.widgets import Static  # noqa: E402
 from watcher import SessionInfo  # noqa: E402
 
 
+def check(msg, cond):
+    print(("  OK   " if cond else " FAIL  ") + msg)
+    return bool(cond)
+
+
+def _command_table_checks(ok):
+    """The table and BINDINGS must agree. This is the regression test for
+    the drift that shipped `w` and `S` invisible: two hand-written legends
+    that nobody updated when BINDINGS grew."""
+    import commands
+    import app as appmod
+
+    bound = set()
+    for b in appmod.RelayApp.BINDINGS:
+        for tok in str(b.key).split(","):
+            tok = tok.strip()
+            if tok:
+                bound.add(tok)
+
+    tabled = set()
+    for c in commands.CMD:
+        for tok in commands.key_tokens(c):
+            tabled.add(tok)
+
+    ok &= check(f"every bound key is in the table (missing {bound - tabled})",
+                bound - tabled == set())
+    ok &= check(f"every tabled key is bound (missing {tabled - bound})",
+                tabled - bound == set())
+
+    bar = appmod.KEYBAR
+    for c in commands.CMD:
+        if c.hot:
+            ok &= check(f"key bar shows hot entry {c.name}",
+                        commands._bar_label(c) in bar)
+    ok &= check("the key bar is ONE line", bar.count("\n") == 0)
+
+    helptext = appmod.help_text(96)
+    missing = [c.name for c in commands.CMD if c.help[:24] not in helptext]
+    ok &= check(f"? overlay lists EVERY entry (missing {missing})",
+                missing == [])
+
+    ok &= check("the table validates", commands.validate(commands.CMD) == [])
+    return ok
+
+
 def _plain(markup) -> str:
     """The text a marked-up overlay line actually renders as.
 
@@ -282,7 +327,8 @@ async def go():
                                   last_screen=["x"])}
 
     chk("help text covers keys + arm levels",
-        "arm levels" in appmod.help_text() and "SPACE" in appmod.help_text())
+        "arm levels" in appmod.help_text()
+        and "space" in appmod.help_text().lower())
     chk("help names itself in its own border, not in a heading row",
         _plain(appmod.help_text()).splitlines()[0].startswith("┌─"))
     chk("no help row runs past its own frame",
@@ -290,8 +336,10 @@ async def go():
     ht = appmod.help_text()
     chk("help text covers pause", "pause" in ht.lower())
     chk("help text covers shadow", "shadow" in ht.lower() and "◌" in ht)
-    chk("keybar covers pause + shadow",
-        "pause" in appmod.KEYBAR.lower() and "shadow" in appmod.KEYBAR.lower())
+    # shadow is documented (help_text, just checked above) but is not a `hot`
+    # entry in the table, so it correctly left the one-line bar; only pause
+    # (which IS hot) is still expected there.
+    chk("keybar covers pause", "pause" in appmod.KEYBAR.lower())
     chk("MODE_STYLE has a shadow entry",
         appmod.MODE_STYLE.get("shadow") == ("◌", "SHADOW", appmod.CYAN))
     ah = _TestApp(_one(), dry_run=True)
@@ -428,13 +476,14 @@ async def go():
         await pilot.press("comma")
         await pilot.pause()
         chk("comma closes settings", not ce._settings_visible)
-    chk("KEYBAR advertises settings", "," in appmod.KEYBAR
-        and "settings" in appmod.KEYBAR.lower())
+    # settings is not a `hot` entry - it left the one-line bar and is now
+    # discoverable through help/`:` only, same as every other non-hot key.
     chk("help covers settings", "settings" in appmod.help_text().lower())
 
     # --- preview pane toggle (f), persisted, + settings-editor parity --------
-    chk("KEYBAR + help advertise the feed toggle",
-        "feed" in appmod.KEYBAR.lower() and "feed" in appmod.help_text().lower())
+    # feed is not `hot` either - documented in help, not the bar.
+    chk("help advertises the feed toggle",
+        "feed" in appmod.help_text().lower())
     pp = _TestApp(_one(), dry_run=True)
     async with pp.run_test() as pilot:
         await pilot.pause()
@@ -618,7 +667,7 @@ async def go():
         chk("silent when the timer is off", "releases in" not in sub)
 
     chk("help text covers c", "caffeinate" in appmod.help_text().lower())
-    chk("keybar covers c", "caffeinate" in appmod.KEYBAR.lower())
+    # caffeinate is not `hot` - documented in help, not the one-line bar.
 
     # A spawn that cannot work must latch off, not retry every tick forever.
     # This is the ONE test that exercises the real _set_caffeinate body, so it
@@ -1109,11 +1158,11 @@ async def go():
 
     # `b` discoverability: the earlier `i` key shipped without reaching the
     # key bar or help screen and had to be retrofitted - this is the "don't
-    # repeat that" check for `b`. A bare "b" is not a safe substring test
-    # (it also occurs in the theme's hex colors and in "bold"), so this
-    # matches the exact rendered key markup instead.
-    chk("b is in the key bar", "]b[/]" in appmod.KEYBAR
-        and "parked" in appmod.KEYBAR.lower())
+    # repeat that" check for `b`. `parked` is not `hot` (it correctly left
+    # the one-line bar), so what makes it undiscoverable-proof now is that
+    # it is IN THE TABLE at all - _command_table_checks (this file) already
+    # proves every table key is bound and vice versa; this just confirms the
+    # `?` overlay still names it.
     chk("b is in the help screen", "parked" in appmod.help_text().lower())
 
     # live-feed header timers summary (one line, plain text)
@@ -2358,11 +2407,16 @@ async def go():
         await pilot.press("space")
         await pilot.pause()
 
-    chk("! is in the key bar", "!" in appmod.KEYBAR)
-    chk("! is in the help screen", "!" in appmod.help_text())
+    # intervene is not `hot` (left the one-line bar) and its key is bound as
+    # the Textual key name "exclamation_mark" (BINDINGS/commands.CMD agree on
+    # that literal, checked by _command_table_checks) rather than the glyph
+    # "!", so the honest discoverability check is that the overlay explains
+    # the action, not a literal "!" substring.
     chk("help explains what ! does",
         "intervene" in appmod.help_text().lower()
         or "stop" in appmod.help_text().lower())
+
+    ok = _command_table_checks(ok)
 
     print("\nALL PASS" if ok else "\nFAILURES ABOVE")
     return ok
@@ -2397,8 +2451,8 @@ def lock_tests():
         pass
 
     # --- zap (Z Z): whole-project delete, advertised + bound -----------------
-    chk("KEYBAR advertises zap", "Z×2" in appmod.KEYBAR
-        and "zap" in appmod.KEYBAR.lower())
+    # confirm=True actions (R/W/Z/E) are not `hot` - they left the one-line
+    # bar and are documented in the `?` overlay only.
     chk("help covers zap", "zap" in appmod.help_text().lower())
     chk("RelayApp binds Z to zap",
         any(getattr(b, "key", None) == "Z"

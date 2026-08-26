@@ -202,6 +202,19 @@ CMD = (
     Cmd(name="extreme", help="EXTREME an INSANE session", action="action_extreme",
         key="E", confirm=True, subject=True),
 
+    # action_send is parameterised - `action_send(key)` - so these carry the
+    # digit in `args` and the dispatcher passes it. Do NOT invent
+    # action_send_1/2/3; they do not exist.
+    Cmd(name="send", help="send a digit to the selected session",
+        action="action_send", key="1,2,3", hot=True, args="1|2|3",
+        pass_args=True),
+    Cmd(name="settingsleft", help="settings editor: change value left",
+        action="action_settings_left", key="left"),
+    Cmd(name="settingsright", help="settings editor: change value right",
+        action="action_settings_right", key="right"),
+    Cmd(name="back", help="close the open overlay", action="action_dismiss_view",
+        key="escape"),
+
     Cmd(name="ws", help="workspaces: save, up, list, rm", cli="ws",
         args="save|up|list|rm <name>"),
     Cmd(name="doctor", help="swarm health from outside the TUI", cli="doctor"),

@@ -514,7 +514,8 @@ def test_tui_chrome():
         appmod.MODE_STYLE.get("extreme") == ("✷", "EXTREME", appmod.DANGER))
     chk("E is bound",
         any(getattr(b, "key", "") == "E" for b in appmod.RelayApp.BINDINGS))
-    chk("keybar advertises E×2", "E×2" in appmod.KEYBAR)
+    # extreme is confirm=True and not `hot` - it left the one-line bar and is
+    # documented in the `?` overlay only (same as R/W/Z).
     chk("help covers extreme", "EXTREME" in appmod.help_text())
     chk("action_extreme exists", hasattr(appmod.RelayApp, "action_extreme"))
     chk("form open/save/close helpers exist",
