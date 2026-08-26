@@ -2824,6 +2824,82 @@ async def go():
                 f"unawaited, however the real action is called)",
                 len(called) == 1)
 
+    # --- Task 5: the CLI backend, with output you can actually see -----------
+    # _shell_verb sends stdout AND stderr to DEVNULL and never checks the
+    # return code - that is why `relay ws save settings` refuses correctly
+    # from a shell and fails SILENTLY from the TUI. `_cmd_run_cli` is the
+    # sibling that reports. The first two drive the REAL `bin/relay` binary
+    # (no stubbing) so the end-to-end payoff - a refusal actually landing in
+    # the log - is proven for real, not against a mock that could drift from
+    # what the CLI actually prints. The timeout and launch-failure paths are
+    # not reliably triggerable from a real invocation on demand, so those two
+    # monkeypatch subprocess.run (the exact pattern already used above for
+    # caffeinate's Popen failure).
+    cr = _TestApp(_one(), dry_run=True)
+    async with cr.run_test() as pilot:
+        await pilot.pause()
+        cr._refresh()
+        await pilot.pause()
+
+        async def cmdcr(line):
+            await pilot.press("colon")
+            await pilot.pause()
+            cr.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        def logtextcr():
+            return "\n".join(cr.query_one(appmod.Log).lines)
+
+        await cmdcr("ws list")
+        chk("real `relay ws list` output reaches the Log pane (proof the "
+            "cli= path is wired to the real binary, not DEVNULL)",
+            "relay ws list" in logtextcr() and "no config at" in logtextcr())
+
+        before_len = len(cr.query_one(appmod.Log).lines)
+        await cmdcr("ws save settings")
+        after = logtextcr()
+        # This exact command is the one named in the task brief as the case
+        # that was invisible before this task: _shell_verb swallowed both
+        # the refusal text and the exit code.
+        chk("a CLI refusal is VISIBLE in the log - this is the exact case "
+            "that failed silently through _shell_verb before this task",
+            "cannot be named" in after or "must be a table" in after)
+        chk("a non-zero exit is reported, not swallowed",
+            "exit 1" in after)
+        chk("the refusal actually produced new log output (not a no-op)",
+            len(cr.query_one(appmod.Log).lines) > before_len)
+
+        real_run = appmod.subprocess.run
+
+        def _hang(*a, **k):
+            raise appmod.subprocess.TimeoutExpired(cmd="relay", timeout=8.0)
+
+        appmod.subprocess.run = _hang
+        try:
+            await cmdcr("doctor")
+        finally:
+            appmod.subprocess.run = real_run
+        chk("a CLI verb that hangs past the timeout is reported as still "
+            "running, not silently swallowed and not raised",
+            "still running after" in logtextcr())
+        chk("the property that matters most: a long-running verb does not "
+            "freeze the roster - the app is still alive after the timeout",
+            cr.is_running)
+
+        def _boom(*a, **k):
+            raise OSError("no such file or directory: relay")
+
+        appmod.subprocess.run = _boom
+        try:
+            await cmdcr("recap")
+        finally:
+            appmod.subprocess.run = real_run
+        chk("a CLI that fails to even start is reported, not swallowed",
+            "failed to start" in logtextcr())
+        chk("the app survives a launch failure too", cr.is_running)
+
     ok = _command_table_checks(ok)
     ok = _dispatch_checks(ok)
 

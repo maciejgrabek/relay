@@ -3081,7 +3081,7 @@ class RelayApp(App):
                     # allowed to panic the app, known-arity-checked or not.
                     log.write_line(f"{cmd.name}: failed - {e}")
             return
-        self._cmd_run_cli(cmd, args, log)      # Task 5
+        self._cmd_run_cli(cmd, args, log)
 
     def _cmd_usage(self, cmd) -> str:
         return f"{cmd.name}: usage :{cmd.name}" + (f" {cmd.args}" if cmd.args else "")
@@ -3111,8 +3111,32 @@ class RelayApp(App):
                 return True
         return False
 
+    _CMD_TIMEOUT = 8.0
+
     def _cmd_run_cli(self, cmd, args, log) -> None:
-        log.write_line(f"{cmd.name}: CLI commands land in the next task")
+        here = os.path.dirname(os.path.abspath(__file__))
+        relay_bin = os.path.join(here, "..", "bin", "relay")
+        argv = [relay_bin, cmd.cli, *args]
+        log.write_line(f"$ relay {cmd.cli} {' '.join(args)}".rstrip())
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=self._CMD_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Long-running verbs must not freeze the roster. Say so rather
+            # than blocking or pretending it finished.
+            log.write_line(f"  {cmd.cli}: still running after "
+                           f"{self._CMD_TIMEOUT:.0f}s - left going in the "
+                           f"background")
+            return
+        except Exception as exc:                    # noqa: BLE001
+            log.write_line(f"  {cmd.cli} failed to start: {exc}")
+            return
+        for stream in (proc.stdout, proc.stderr):
+            for line in (stream or "").splitlines():
+                if line.strip():
+                    log.write_line("  " + line)
+        if proc.returncode != 0:
+            log.write_line(f"  {cmd.cli}: exit {proc.returncode}")
 
     def on_input_submitted(self, event) -> None:
         if self._cmdline is not None:
