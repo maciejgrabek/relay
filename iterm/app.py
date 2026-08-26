@@ -2753,6 +2753,12 @@ class RelayApp(App):
                 self._park["dir"] = not self._park["dir"]
                 self._park_render()
             return
+        if self._wssave is not None:
+            # Priority bindings bypass on_key's swallow entirely, so TAB has
+            # to be handled here or it flips the view while the save prompt
+            # stays open underneath. See commit 5ad1076.
+            self._wssave_close()
+            return
         if self._modal_open:
             # Bound with priority=True (so Tab works while an Input holds
             # focus), which means Textual dispatches this action BEFORE
@@ -3743,10 +3749,21 @@ class RelayApp(App):
         import wsconfig
         # Check here rather than letting the CLI refuse: _shell_verb sends
         # stdout and stderr to DEVNULL, so a refusal there would be invisible.
-        try:
-            _, spaces = wsconfig.load()
-        except wsconfig.ConfigError:
-            spaces = {}
+        # No file yet is the normal first-save case (spaces stays empty, and
+        # `relay ws save` below creates it) - an existing file that fails to
+        # parse is different: proceeding would shell out blind, so that one
+        # blocks instead of silently treating a broken config as empty.
+        path = wsconfig.default_path()
+        spaces = {}
+        if os.path.exists(path):
+            try:
+                _, spaces = wsconfig.load(path)
+            except wsconfig.ConfigError as exc:
+                self._wssave_close()
+                self._modal_show("CONFIG UNREADABLE",
+                                 [f"Could not read {path}:", str(exc)[:60],
+                                  "", "Fix it by hand, then try again."])
+                return
         self._wssave_close()
         if name in spaces:
             self._modal_show("ALREADY EXISTS",

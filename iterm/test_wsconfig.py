@@ -257,6 +257,23 @@ dir = "~"
     _, atomic_check = wsconfig.load(path5)
     ok &= check("save result still parses", "atomic" in atomic_check)
 
+    # FINDING (task 7 review): a workspace name that is not bare-key-safe
+    # must still round-trip through save -> load with the name intact.
+    path7 = _write("")
+    wsconfig.save(path7, "my backend", [wsconfig.Tab(name="t", dir="/tmp")])
+    ok &= check("a name with a space survives save -> load",
+                "my backend" in wsconfig.load(path7)[1])
+
+    path8 = _write("")
+    wsconfig.save(path8, 'say"hi"', [wsconfig.Tab(name="t", dir="/tmp")])
+    ok &= check('a name with a double quote survives save -> load',
+                'say"hi"' in wsconfig.load(path8)[1])
+
+    path9 = _write("")
+    wsconfig.save(path9, "a#b", [wsconfig.Tab(name="t", dir="/tmp")])
+    ok &= check('a name with "#" survives save -> load',
+                "a#b" in wsconfig.load(path9)[1])
+
     # Prefix case: removing "dev" should not affect "devtools"
     prefix_file = '''[[dev]]
 name = "x"

@@ -17,6 +17,7 @@ imported - test_wsconfig.py asserts the two stay in step.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -175,6 +176,21 @@ def _q(value: str) -> str:
     return f'"{escaped}"'
 
 
+_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _header_name(name: str) -> str:
+    """A workspace name as a TOML table-array header name: bare when that is
+    safe (TOML bare keys are letters, digits, `-` and `_`), quoted otherwise.
+
+    A name with a space, a quote, or a `#` is not bare-key-safe - emitting it
+    unquoted produces a header TOML cannot parse (or parses as something
+    else entirely, e.g. `#` starts a comment). `_is_header`/`strip_block`
+    already strip both quote styles when reading a header back, so a quoted
+    name round-trips."""
+    return name if _BARE_KEY.match(name) else _q(name)
+
+
 def _tilde(path: str) -> str:
     home = os.path.expanduser("~")
     return "~" + path[len(home):] if path.startswith(home) else path
@@ -194,8 +210,9 @@ def render(name: str, tabs: List[Tab]) -> str:
     """Tabs back to a TOML block. Only non-default keys are written, so a
     hand-edited file stays as short as what the operator actually meant."""
     lines: List[str] = []
+    header = _header_name(name)
     for tab in tabs:
-        lines.append(f"[[{name}]]")
+        lines.append(f"[[{header}]]")
         lines.append(f"name = {_q(tab.name)}")
         lines.append(f"dir = {_q(_tilde(tab.dir))}")
         if tab.cmd:
