@@ -185,8 +185,15 @@ PREVIEW_MODE_LABEL = {"safe": "SAFE", "wild": "WILD", "insane": "INSANE",
 # join is the difference between fitting and clipping the tail off a bar
 # built from real (if abbreviated) labels rather than single letters.
 def _keys(pairs) -> str:
-    return f" [{DIM}]·[/]".join(
-        f"[{WARN} bold]{k}[/] [{BRIGHT}]{label}[/]" for k, label in pairs)
+    def _one(k, label):
+        # An empty label (the merged arrow-key pair - see
+        # _compact_bar_pairs) renders as the glyph alone: "up/down" arrows
+        # are self-evident, and " [/]" for a blank label would otherwise
+        # leave a dangling trailing space in the plain-text bar.
+        if not label:
+            return f"[{WARN} bold]{k}[/]"
+        return f"[{WARN} bold]{k}[/] [{BRIGHT}]{label}[/]"
+    return f" [{DIM}]·[/]".join(_one(k, label) for k, label in pairs)
 
 
 # --- overlay chrome -----------------------------------------------------------
@@ -329,7 +336,8 @@ def _compact_bar_pairs(pairs):
       still checks them separately) but ONE concept on a bar - "move" said
       twice, once per vim alias, is not two facts. Adjacent hot entries that
       share a label collapse into the arrow glyph every terminal legend
-      already uses for this.
+      already uses for this, and the glyph runs with NO label at all - what
+      `↑↓` does is self-evident in a way "move" never added information to.
     - a run of sequential digit keys (`1/2/3`) reads identically as a range;
       the `?` overlay still spells out every digit.
     """
@@ -338,9 +346,11 @@ def _compact_bar_pairs(pairs):
         if merged and merged[-1][1] == label:
             prev_key, _ = merged.pop()
             primaries = [k.split("/")[0] for k in (prev_key, key)]
-            new_key = ("↑↓" if set(primaries) == {"up", "down"}
-                       else "/".join(primaries))
-            merged.append((new_key, label))
+            if set(primaries) == {"up", "down"}:
+                new_key, new_label = "↑↓", ""
+            else:
+                new_key, new_label = "/".join(primaries), label
+            merged.append((new_key, new_label))
         else:
             merged.append((key, label))
 
@@ -356,7 +366,7 @@ def _compact_bar_pairs(pairs):
 # Generated, never hand-written. Two hand-maintained legends are exactly how
 # `w` and `S` shipped working but invisible; the table is the only list now.
 KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD))
-               + [(":", "cmds")])
+               + [(":", "commands")])
 
 
 def _tree_fingerprint(workdir: str) -> str:

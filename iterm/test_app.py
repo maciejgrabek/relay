@@ -109,10 +109,16 @@ def _command_table_checks(ok):
                 f"(mismatches {mismatched})", mismatched == {})
 
     bar = appmod.KEYBAR
+    # up/down are a special case: _compact_bar_pairs() (app.py) merges them
+    # into one label-less arrow glyph, since two "move" labels for the same
+    # concept is what pushed the generated bar over budget (round 1,
+    # finding 1) - so their OWN bar label is not expected to appear intact,
+    # only the glyph that stands in for both.
     for c in commands.CMD:
-        if c.hot:
+        if c.hot and c.bar != "move":
             ok &= check(f"key bar shows hot entry {c.name}",
                         commands._bar_label(c) in bar)
+    ok &= check("key bar shows the merged up/down arrow glyph", "↑↓" in bar)
     # A newline count is not the property that matters - a 220-character
     # single "line" still clips on an 80-column terminal. #keybar is
     # `height: 2` with `padding: 0 2` (app.py), so the real budget is what

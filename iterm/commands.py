@@ -89,7 +89,12 @@ def validate(table) -> List[str]:
             problems.append(
                 f"{cmd.name}: {cmd.cli} is a worker protocol verb and must "
                 f"never be exposed in the TUI")
-        if cmd.name in NEVER_EXPOSE:
+        # `help` is exempt: NEVER_EXPOSE governs which CLI verbs may be
+        # SHELLED OUT, and the TUI's `?`-overlay command never shells out
+        # anything - it shares a stem with the worker protocol's `help`
+        # verb and nothing else. Every other name still collides for real
+        # (see `digit`, not `send`, below).
+        if cmd.name in NEVER_EXPOSE and cmd.name != "help":
             problems.append(
                 f"{cmd.name}: the entry's own NAME collides with a worker "
                 f"protocol verb - :{cmd.name} would be ambiguous between "
@@ -190,7 +195,7 @@ CMD = (
     Cmd(name="answer", help="send Enter to the selected session",
         action="action_send_enter"),
     Cmd(name="tab", help="jump to the selected session's iTerm2 tab",
-        action="action_focus", key="n", hot=True, bar="focus"),
+        action="action_focus", key="n", hot=True, bar="go to tab"),
     Cmd(name="swarm", help="swarm view: kanban, interactions and feed",
         action="action_swarm_view", key="tab", hot=True, bar="swarm"),
     Cmd(name="pause", help="pause or resume relay's acting",
@@ -228,11 +233,13 @@ CMD = (
         action="action_ws_save", key="S"),
     Cmd(name="intervene", help="stop running sessions and broadcast to them",
         action="action_intervene", key="exclamation_mark"),
-    # NOT named "help": that is also a NEVER_EXPOSE worker-protocol verb, and
-    # the new validate() check below (review round 1, finding 6) refuses an
-    # entry whose own name collides with one - this table's `?`-overlay
-    # command is a different thing from a worker's `relay help`.
-    Cmd(name="keys", help="this help", action="action_help",
+    # `help` collides with a NEVER_EXPOSE worker-protocol verb by NAME, but
+    # validate() exempts this one entry deliberately (review round 2,
+    # finding 1): the TUI's `?`-overlay command never shells out the swarm's
+    # `help` verb, and `:help` is the most discoverable name a discoverability
+    # feature could have - a blanket rename here cost more than the collision
+    # it avoided.
+    Cmd(name="help", help="this help", action="action_help",
         key="question_mark"),
 
     Cmd(name="restore", help="respawn dead task-owners (double-press confirms)",
