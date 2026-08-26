@@ -534,6 +534,40 @@ def _fix_wave_checks(ok):
     ok &= check("plan_text flags the worker's cmd as ignored instead",
                 "ignored" in text_f and "ls" in text_f)
 
+    # A worker tab's plan line must name the actual cmd being ignored, not
+    # imply the worker runs it as its prompt.
+    worker_tab2 = wsconfig.Tab(name="w2", dir="/tmp", cmd="claude",
+                               arm="wild", prompt="do it")
+    text_f2 = wsconfig.plan_text("wsf2", [worker_tab2])
+    ok &= check("plan_text marks the worker's cmd ignored by name",
+                "'claude'" in text_f2 and "ignored" in text_f2)
+    ok &= check("plan_text does not claim the worker runs the cmd as a prompt",
+                "runs prompt: 'claude'" not in text_f2)
+    ok &= check("plan_text does not present the worker's cmd as `$ ...`",
+                "$ claude" not in text_f2)
+
+    # A tab with a prompt but no arm is not a worker - build() takes the
+    # ordinary branch, runs its cmd, and silently drops the prompt. The plan
+    # must say so, not claim it is a worker.
+    unarmed_prompt_tab = wsconfig.Tab(name="u1", dir="/tmp", cmd="top",
+                                      prompt="do it")
+    text_g = wsconfig.plan_text("wsg", [unarmed_prompt_tab])
+    ok &= check("plan_text does not mark an unarmed prompt tab as worker",
+                "worker" not in text_g)
+    ok &= check("plan_text shows the unarmed tab's cmd as one that will run",
+                "$ top" in text_g)
+    ok &= check("plan_text flags the unarmed tab's prompt as ignored",
+                "prompt" in text_g and "ignored" in text_g)
+
+    # A supervised tab with no prompt is not a worker either.
+    armed_no_prompt_tab = wsconfig.Tab(name="s1", dir="/tmp", cmd="htop",
+                                       arm="safe")
+    text_h = wsconfig.plan_text("wsh", [armed_no_prompt_tab])
+    ok &= check("plan_text still shows the armed mark", "armed safe" in text_h)
+    ok &= check("plan_text still shows the armed tab's cmd", "$ htop" in text_h)
+    ok &= check("plan_text does not mark an armed no-prompt tab as worker",
+                "worker" not in text_h)
+
     # --- I.2: the header bracket scan must be quote-aware - a name
     # containing "]]" used to truncate the header early, making --force
     # append a duplicate instead of replacing.

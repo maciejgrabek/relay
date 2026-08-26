@@ -542,8 +542,10 @@ def plan_text(name: str, tabs: List[Tab], missing_dirs=(),
             marks = []
             if tab.arm:
                 marks.append(f"armed {tab.arm}")
-            if tab.prompt:
+            if tab.is_worker:
                 marks.append("worker")
+            elif tab.prompt:
+                marks.append("prompt ignored - tab is not armed")
             if tab.dir in missing:
                 marks.append("missing dir - will be skipped")
             cmd = ""
@@ -553,8 +555,7 @@ def plan_text(name: str, tabs: List[Tab], missing_dirs=(),
                     # spawn_worker (name, project, prompt, dir, role, arm) -
                     # tab.cmd is never sent. Showing it as `$ ...` here would
                     # advertise a command that will never run.
-                    marks.append(f"cmd ignored, worker runs prompt: "
-                                 f"{tab.cmd!r}")
+                    marks.append(f"cmd {tab.cmd!r} ignored - worker runs its prompt")
                 else:
                     cmd = f"   $ {tab.cmd}"
             suffix = f"   [{', '.join(marks)}]" if marks else ""
