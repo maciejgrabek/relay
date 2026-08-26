@@ -2889,6 +2889,34 @@ async def go():
             "failed to start" in logtextcr())
         chk("the app survives a launch failure too", cr.is_running)
 
+        # --- fix 1 (critical): the child must never inherit relay's tty ---
+        # `relay ws up <name>` without --yes calls _confirm() -> input(),
+        # which reads whatever fd is on the OTHER end of stdin. With no
+        # stdin= at all, that fd is relay's own tty - the same one Textual
+        # is reading - so the prompt can steal keystrokes from the panel
+        # and then gets killed at the 8s timeout with its output discarded
+        # either way. Spy on subprocess.run's kwargs directly: this is the
+        # one property a black-box "did it print something" test cannot
+        # observe, since a real child with no controlling tty at all
+        # (exactly this test's own environment) would refuse identically
+        # whether or not the fix is present.
+        seen_kwargs = {}
+
+        def _spy_stdin(*a, **k):
+            seen_kwargs.update(k)
+            return subprocess.CompletedProcess(a[0] if a else [], 0,
+                                               stdout="", stderr="")
+
+        real_run = appmod.subprocess.run
+        appmod.subprocess.run = _spy_stdin
+        try:
+            await cmdcr("doctor")
+        finally:
+            appmod.subprocess.run = real_run
+        chk("fix 1: _cmd_run_cli_worker passes stdin=DEVNULL, so a child "
+            "that prompts on stdin gets EOF instead of relay's own tty",
+            seen_kwargs.get("stdin") is subprocess.DEVNULL)
+
     # --- review round 1, finding 1: backgrounding + UI responsiveness -----
     # subprocess.run is blocking, and _cmd_run_cli used to be called
     # synchronously from _cmdline_submit, on Textual's own event loop - a

@@ -27,13 +27,28 @@ def check(msg, cond):
     return bool(cond)
 
 
-def run_cli(*argv, iterm_id=None):
-    """Invoke cli.main capturing (exit_code, stdout, stderr)."""
+def run_cli(*argv, iterm_id=None, stdin_closed=False):
+    """Invoke cli.main capturing (exit_code, stdout, stderr).
+
+    `stdin_closed` simulates the TUI's own path into this same code: fix 1
+    (iterm/app.py's _cmd_run_cli_worker) runs every `cli=` verb with
+    stdin=subprocess.DEVNULL, so any _confirm() -> input() in here sees an
+    immediately-closed stdin. Swapping sys.stdin for an empty StringIO
+    reproduces that: input() cannot get a real fileno() from it, so it falls
+    back to calling .readline() on the object itself, which returns "" -
+    EOF - and raises EOFError exactly like a closed pipe would.
+    """
     if iterm_id is not None:
         os.environ["ITERM_SESSION_ID"] = iterm_id
     out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        code = cli.main(list(argv))
+    orig_stdin = sys.stdin
+    if stdin_closed:
+        sys.stdin = io.StringIO("")
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(list(argv))
+    finally:
+        sys.stdin = orig_stdin
     return code, out.getvalue(), err.getvalue()
 
 
@@ -96,12 +111,25 @@ def _ws_checks(ok):
     ok &= check("ws up on an unknown name lists what exists",
                 "dragen" in err)
 
-    code, out, _ = run_cli("ws", "rm", "dragen", "--config", path)
-    ok &= check("ws rm exits 0", code == 0)
+    # Fix 2: `ws rm` used to delete with NO confirmation - the only no-bang
+    # delete path in the whole feature. It now gates like cmd_wipe/
+    # cmd_restore: refuse without --yes when stdin is closed (exactly what
+    # the TUI's own cli= dispatch does per fix 1), and proceed with --yes.
+    code, out, _ = run_cli("ws", "rm", "dragen", "--config", path,
+                           stdin_closed=True)
+    ok &= check("ws rm without --yes and with stdin closed exits 0 "
+                "(a refusal, not a crash)", code == 0)
+    ok &= check("ws rm without --yes prints aborted", "aborted" in out)
     code, out, _ = run_cli("ws", "list", "--config", path)
-    ok &= check("ws rm actually removed it", "dragen" not in out)
+    ok &= check("ws rm without --yes did NOT remove the workspace",
+                "dragen" in out)
 
-    code, _, err = run_cli("ws", "rm", "dragen", "--config", path)
+    code, out, _ = run_cli("ws", "rm", "dragen", "--config", path, "--yes")
+    ok &= check("ws rm --yes exits 0", code == 0)
+    code, out, _ = run_cli("ws", "list", "--config", path)
+    ok &= check("ws rm --yes actually removed it", "dragen" not in out)
+
+    code, _, err = run_cli("ws", "rm", "dragen", "--config", path, "--yes")
     ok &= check("ws rm on a missing name fails", code == 1)
 
     code, _, err = run_cli("ws", "list", "--config", "/nonexistent/x.toml")

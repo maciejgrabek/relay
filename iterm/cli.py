@@ -2450,8 +2450,23 @@ def cmd_ws(args) -> int:
         return 0
 
     if verb == "rm":
-        if not wsconfig.remove(path, args.name):
+        if args.name not in spaces:
             return _err(f'no workspace named "{args.name}"')
+        # `ws rm` is the only no-bang delete path in the whole feature - the
+        # `ws` table entry deliberately stays confirm=False (that would
+        # demand `:ws list!` for every verb under `ws`, not just this one),
+        # so the confirmation has to live here, the same way cmd_wipe/
+        # cmd_restore gate their own deletes: print what goes away, then
+        # _confirm() unless --yes. This also closes the same hole for the
+        # plain shell path, which had none either.
+        tabs = spaces[args.name]
+        print(wsconfig.plan_text(args.name, tabs))
+        if not args.yes and not _confirm(
+                f'permanently remove workspace "{args.name}" '
+                f'({len(tabs)} tab(s))?'):
+            print("aborted.")
+            return 0
+        wsconfig.remove(path, args.name)
         print(f"removed {args.name}")
         return 0
 
@@ -2875,7 +2890,8 @@ def build_parser() -> argparse.ArgumentParser:
     wsr = wssub.add_parser("rm", help="delete a workspace")
     wsr.add_argument("name")
     wsr.add_argument("--config", default=None)
-    wsr.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
+    wsr.add_argument("--yes", action="store_true",
+                     help="skip the confirmation prompt")
 
     wp = sub.add_parser("wipe", help="DELETE dead sessions' tasks (or a whole "
                                      "project with --all)")

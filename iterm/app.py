@@ -3156,9 +3156,18 @@ class RelayApp(App):
 
     async def _cmd_run_cli_worker(self, cmd, argv, log, seq: int) -> None:
         try:
+            # stdin=DEVNULL: with no stdin at all, argv is a child of THIS
+            # process and inherits relay's own tty by default. `relay ws up
+            # <name>` without --yes calls _confirm() -> input(), which then
+            # blocks reading the SAME terminal Textual is reading - it can
+            # steal keystrokes from the panel, and gets killed at the 8s
+            # timeout with whatever it printed discarded either way. With
+            # stdin closed, input() raises EOFError immediately, _confirm's
+            # own handler turns that into False, and the CLI's own
+            # "aborted." reaches this log line like any other output.
             proc = await asyncio.to_thread(
                 subprocess.run, argv, capture_output=True, text=True,
-                timeout=self._CMD_TIMEOUT)
+                timeout=self._CMD_TIMEOUT, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             # Review round 1, finding 2 (critical): subprocess.run(timeout=)
             # KILLS the child before re-raising TimeoutExpired - verified by
