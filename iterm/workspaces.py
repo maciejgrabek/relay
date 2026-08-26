@@ -1,37 +1,178 @@
-"""Workspaces: sessions grouped by the directory they were launched in.
+"""Relay workspaces - ~/.relay/workspaces.toml, named sets of tabs.
 
-A workspace is WHERE THE SESSION WAS LAUNCHED, full stop (docs/IDEAS.md #14).
-Not the git root, not a name the operator assigns, and explicitly NOT a live
-cwd that follows whatever `cd` a session runs mid-turn: relay records the
-directory once, at the point it first sees the tab, and never chases it after.
-The operator's mental model is "the tab I opened in the relay repo", not
-"wherever Claude happens to be standing".
+A tab is a directory plus a command. There is no tab-type key: `top`, `ps` and
+`claude` are the same kind of thing. The one part that is not a command is
+supervision, because relay must register a session BEFORE claude boots for the
+arm level to be in place - so `arm` is its own key, and behaviour falls out of
+which keys are present:
 
-Freezing is an ACTIVE choice, not the default - iTerm2 serves a session's path
-live and it already follows `cd`, so the capture side has to snapshot it and
-then deliberately stop reading it (watcher.SessionInfo.home_dir). This module
-is the consumer: it takes whatever key the caller froze and does the ordering.
+    cmd                     plain tab, not registered, not armed
+    cmd + arm               registered under `name`, pre-armed, no prompt
+    cmd + arm + prompt      the existing spawn_worker full-worker path
 
-Two properties make the grouping cheap and safe:
-
-  * The key cannot change in response to session STATE. A row therefore never
-    moves because a session started working or went blocked - the one thing
-    the stable-list-order rule exists to prevent. It moves only when the
-    operator opens or closes a tab, which is a thing they just did.
-
-  * `min_size` is the CALLER's decision, not this module's opinion. The
-    control view rails every directory including one-session ones, so the eye
-    never has to work out whether a row belongs to the group above it; a
-    caller that wants rails only where they carry information passes 2. A key
-    that is empty never groups either way - an unreadable directory is not a
-    workspace, and pretending otherwise would put unrelated tabs in one box.
-
-Order: a group sits where its FIRST member sat, and members keep their
-relative order inside it. So the list is still read top-to-bottom in tab
-order; grouping gathers, it does not sort.
+Pure stdlib, no iterm2/sqlite imports (test_workspaces.py runs it standalone),
+which is also why ARM_MODES/ROLES are duplicated from db.py rather than
+imported - test_workspaces.py asserts the two stay in step.
 """
+from __future__ import annotations
+
 import os
-from typing import Callable, List, Optional, Sequence, Tuple
+import tomllib
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+# Mirrors db.ARM_REQUEST_MODES / db.ROLES. There is deliberately no "off":
+# an unset `arm` is the only way to say "do not supervise this tab".
+ARM_MODES = ("safe", "wild", "insane")
+ROLES = ("worker", "coordinator")
+
+TAB_KEYS = {"name", "dir", "cmd", "arm", "prompt", "role", "project",
+            "window", "panes"}
+PANE_KEYS = {"cmd", "dir", "split"}
+
+
+class ConfigError(Exception):
+    """Valid TOML that is not a valid workspace definition."""
+
+
+@dataclass
+class Pane:
+    cmd: str = ""
+    dir: str = ""            # empty means "inherit the tab's dir"
+    split: str = "v"         # "v" side by side, "h" stacked
+
+
+@dataclass
+class Tab:
+    name: str
+    dir: str = "~"
+    cmd: str = ""
+    arm: str = ""            # "" = unsupervised
+    prompt: str = ""
+    role: str = "worker"
+    project: str = ""
+    window: int = 1
+    panes: List[Pane] = field(default_factory=list)
+
+    @property
+    def supervised(self) -> bool:
+        return bool(self.arm)
+
+    @property
+    def is_worker(self) -> bool:
+        return bool(self.arm and self.prompt)
+
+
+def default_path() -> str:
+    return os.path.expanduser(
+        os.environ.get("RELAY_WORKSPACES", "~/.relay/workspaces.toml"))
+
+
+def _expand(path: str) -> str:
+    return os.path.expanduser(os.path.expandvars(path))
+
+
+def _parse_pane(raw: object, where: str) -> Pane:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: each pane must be a table, got "
+                          f"{type(raw).__name__}")
+    unknown = set(raw) - PANE_KEYS
+    if unknown:
+        raise ConfigError(f"{where}: unknown pane key(s) {sorted(unknown)}; "
+                          f"valid keys are {sorted(PANE_KEYS)}")
+    split = str(raw.get("split", "v")).lower()[:1] or "v"
+    if split not in ("v", "h"):
+        raise ConfigError(f'{where}: split must be "v" or "h", got '
+                          f'{raw.get("split")!r}')
+    return Pane(cmd=str(raw.get("cmd", "")),
+                dir=_expand(str(raw["dir"])) if raw.get("dir") else "",
+                split=split)
+
+
+def _parse_tab(raw: object, where: str) -> Tab:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: each tab must be a table, got "
+                          f"{type(raw).__name__}")
+    unknown = set(raw) - TAB_KEYS
+    if unknown:
+        raise ConfigError(f"{where}: unknown key(s) {sorted(unknown)}; "
+                          f"valid keys are {sorted(TAB_KEYS)}")
+    if not raw.get("name"):
+        raise ConfigError(f'{where}: missing required key "name"')
+
+    arm = str(raw.get("arm", ""))
+    if arm and arm not in ARM_MODES:
+        raise ConfigError(f"{where}: arm must be one of {list(ARM_MODES)} "
+                          f"(or absent for an unsupervised tab), got {arm!r}")
+    role = str(raw.get("role", "worker"))
+    if role not in ROLES:
+        raise ConfigError(f"{where}: role must be one of {list(ROLES)}, "
+                          f"got {role!r}")
+    window = raw.get("window", 1)
+    if not isinstance(window, int) or isinstance(window, bool) or window < 1:
+        raise ConfigError(f"{where}: window must be an integer >= 1, "
+                          f"got {window!r}")
+    panes = [_parse_pane(p, f"{where} pane {i + 1}")
+             for i, p in enumerate(raw.get("panes", []) or [])]
+    return Tab(name=str(raw["name"]),
+               dir=_expand(str(raw.get("dir", "~"))),
+               cmd=str(raw.get("cmd", "")),
+               arm=arm,
+               prompt=str(raw.get("prompt", "")),
+               role=role,
+               project=str(raw.get("project", "")),
+               window=window,
+               panes=panes)
+
+
+def load(path: Optional[str] = None) -> Tuple[dict, Dict[str, List[Tab]]]:
+    """Return (settings, {workspace: [Tab, ...]}). Raises ConfigError.
+
+    Unlike config.load(), this DOES raise: a typo'd key that silently does
+    nothing is worse than a refusal that names it.
+    """
+    p = path or default_path()
+    try:
+        with open(p, "rb") as fh:
+            raw = tomllib.load(fh)
+    except FileNotFoundError:
+        raise ConfigError(f"no config at {p}")
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{p} is not valid TOML: {exc}")
+
+    settings = raw.pop("settings", {})
+    if not isinstance(settings, dict):
+        raise ConfigError('"settings" must be a table')
+
+    spaces: Dict[str, List[Tab]] = {}
+    for name, value in raw.items():
+        if not isinstance(value, list):
+            raise ConfigError(
+                f'"{name}" must be a list of tabs - declare tabs as '
+                f"[[{name}]], not [{name}]")
+        spaces[name] = [_parse_tab(t, f'workspace "{name}" tab {i + 1}')
+                        for i, t in enumerate(value)]
+    return settings, spaces
+
+
+def group_windows(tabs: List[Tab]) -> List[Tuple[int, List[Tab]]]:
+    """Tabs grouped by their `window` key, in first-seen order."""
+    order: List[int] = []
+    groups: Dict[int, List[Tab]] = {}
+    for tab in tabs:
+        if tab.window not in groups:
+            groups[tab.window] = []
+            order.append(tab.window)
+        groups[tab.window].append(tab)
+    return [(w, groups[w]) for w in order]
+
+
+# --- Workspace grouping (for app.py's session view) -------------------------
+# Sessions grouped by the directory they were launched in. A workspace is WHERE
+# THE SESSION WAS LAUNCHED, full stop. Not the git root, not a name the
+# operator assigns. Relay records the directory once, at the point it first
+# sees the tab, and never chases it after.
+from typing import Callable, Sequence
 
 # (key or None, [items]) - key None means "render these bare, no rail".
 Group = Tuple[Optional[str], list]

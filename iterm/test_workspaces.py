@@ -1,21 +1,13 @@
-"""Tests for workspace grouping (pure logic).
+"""Tests for ~/.relay/workspaces.toml. Temp files, no iTerm2 or sqlite imports.
 
 Run: python3 iterm/test_workspaces.py    or    ./test/run.sh
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
-from workspaces import freeze, group, short_path, summary  # noqa: E402
-
-
-class S:
-    def __init__(self, name, wd, armed=False, attn=False, burn=False):
-        self.name, self.wd = name, wd
-        self.armed, self.attn, self.burn = armed, attn, burn
-
-    def __repr__(self):
-        return self.name
+import workspaces  # noqa: E402
 
 
 def check(msg, cond):
@@ -23,108 +15,150 @@ def check(msg, cond):
     return bool(cond)
 
 
-def names(groups):
-    return [(k, [m.name for m in ms]) for k, ms in groups]
+def _write(text):
+    fd, path = tempfile.mkstemp(suffix=".toml")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
+def _err(text):
+    """Return the ConfigError message raised by loading `text`, or ''."""
+    try:
+        workspaces.load(_write(text))
+        return ""
+    except workspaces.ConfigError as exc:
+        return str(exc)
+
+
+FULL = '''
+[settings]
+target = "current"
+warmup = 2.0
+
+[[dragen]]
+name = "monitor"
+dir = "~/Work/dragen"
+cmd = "top"
+
+[[dragen]]
+name = "DRAGEN DOCS"
+dir = "~/Work/dragen"
+cmd = "claude"
+arm = "safe"
+
+[[dragen]]
+name = "ingest"
+dir = "~/Work/dragen"
+cmd = "claude"
+arm = "wild"
+prompt = "audit the ingest pipeline"
+role = "worker"
+project = "dragen"
+
+[[dragen]]
+name = "logs"
+dir = "~/Work/dragen"
+cmd = "tail -f log/dev.log"
+window = 2
+panes = [ { cmd = "ps aux", split = "h" } ]
+'''
 
 
 def run():
     ok = True
-    K = lambda s: s.wd  # noqa: E731
 
-    # --- the core rule: two or more, or no group at all ----------------------
-    a, b, c = S("a", "/w/relay"), S("b", "/w/relay"), S("c", "/w/cloud")
-    ok &= check("two in one directory make a group",
-                names(group([a, b], K)) == [("/w/relay", ["a", "b"])])
-    ok &= check("a directory with one session gets NO group",
-                names(group([a, c], K)) == [(None, ["a"]), (None, ["c"])])
-    ok &= check("groups and solos coexist",
-                names(group([a, b, c], K))
-                == [("/w/relay", ["a", "b"]), (None, ["c"])])
+    settings, spaces = workspaces.load(_write(FULL))
+    ok &= check("settings target is read", settings.get("target") == "current")
+    ok &= check("settings warmup is read", settings.get("warmup") == 2.0)
+    ok &= check("one workspace is found", list(spaces) == ["dragen"])
+    tabs = spaces["dragen"]
+    ok &= check("four tabs are found", len(tabs) == 4)
+    ok &= check("dir is expanded",
+                tabs[0].dir == os.path.expanduser("~/Work/dragen"))
+    ok &= check("a plain tab has no arm", tabs[0].arm == "")
+    ok &= check("arm is read", tabs[1].arm == "safe")
+    ok &= check("prompt is read", tabs[2].prompt == "audit the ingest pipeline")
+    ok &= check("role defaults to worker", tabs[1].role == "worker")
+    ok &= check("window defaults to 1", tabs[0].window == 1)
+    ok &= check("window is read", tabs[3].window == 2)
+    ok &= check("panes are read", len(tabs[3].panes) == 1)
+    ok &= check("pane split is read", tabs[3].panes[0].split == "h")
+    ok &= check("pane inherits an empty dir", tabs[3].panes[0].dir == "")
 
-    # --- order: gather, never sort -------------------------------------------
-    x = [S("t1", "/w/relay"), S("t2", "/w/cloud"), S("t3", "/w/relay"),
-         S("t4", "/w/cloud")]
-    ok &= check("a group sits where its FIRST member sat",
-                [k for k, _ in group(x, K)] == ["/w/relay", "/w/cloud"])
-    ok &= check("members keep their relative order",
-                names(group(x, K)) == [("/w/relay", ["t1", "t3"]),
-                                       ("/w/cloud", ["t2", "t4"])])
-    ok &= check("every input appears exactly once",
-                sorted(m.name for _, ms in group(x, K) for m in ms)
-                == ["t1", "t2", "t3", "t4"])
+    ok &= check("a single-bracket table is refused by name",
+                "[[dragen]]" in _err('[dragen]\nname = "x"\n'))
+    ok &= check("a missing name is refused",
+                "name" in _err('[[d]]\ndir = "~"\n'))
+    ok &= check("an unknown key names the typo",
+                "cmnd" in _err('[[d]]\nname = "x"\ncmnd = "ls"\n'))
+    ok &= check("an unknown key names the tab",
+                "tab 1" in _err('[[d]]\nname = "x"\ncmnd = "ls"\n'))
+    ok &= check("a bad arm is refused",
+                "arm" in _err('[[d]]\nname = "x"\narm = "yolo"\n'))
+    ok &= check("a bad role is refused",
+                "role" in _err('[[d]]\nname = "x"\nprompt = "p"\nrole = "boss"\n'))
+    ok &= check("a bad split is refused",
+                "split" in _err('[[d]]\nname = "x"\n'
+                                'panes = [ { split = "diagonal" } ]\n'))
+    ok &= check("window below 1 is refused",
+                "window" in _err('[[d]]\nname = "x"\nwindow = 0\n'))
+    ok &= check("a missing file is refused",
+                "no config" in _err_missing())
+    ok &= check("invalid TOML is refused",
+                "TOML" in _err('[[d]\nname = "x"\n'))
 
-    # --- the stability guarantee ---------------------------------------------
-    before = names(group(x, K))
-    x[0].attn = True                     # a session changes STATE
-    x[2].armed = True
-    ok &= check("state changes cannot reorder anything",
-                names(group(x, K)) == before)
+    groups = workspaces.group_windows(tabs)
+    ok &= check("windows group in first-seen order",
+                [w for w, _ in groups] == [1, 2])
+    ok &= check("window 1 holds three tabs", len(groups[0][1]) == 3)
 
-    # --- an unreadable directory is not a workspace --------------------------
-    u1, u2 = S("u1", ""), S("u2", "")
-    ok &= check("empty keys never group together",
-                names(group([u1, u2], K)) == [(None, ["u1"]), (None, ["u2"])])
-    ok &= check("an ungroupable session keeps its own slot in the order",
-                names(group([a, u1, b], K))
-                == [("/w/relay", ["a", "b"]), (None, ["u1"])])
+    ok &= check("RELAY_WORKSPACES overrides the default path",
+                _path_with_env("/tmp/ws.toml") == "/tmp/ws.toml")
+    ok &= check("the default path is under ~/.relay",
+                _path_with_env(None).endswith("/.relay/workspaces.toml"))
 
-    # --- min_size is a knob, not a constant ----------------------------------
-    ok &= check("min_size=1 groups a lone session",
-                names(group([c], K, min_size=1)) == [("/w/cloud", ["c"])])
-    ok &= check("min_size=3 leaves a pair ungrouped",
-                names(group([a, b], K, min_size=3))
-                == [(None, ["a"]), (None, ["b"])])
-
-    # --- empty input ---------------------------------------------------------
-    ok &= check("no sessions, no groups", group([], K) == [])
-
-    # --- the freeze: what gets stored as the key -----------------------------
-    ok &= check("nothing frozen yet, no persisted value -> the live path",
-                freeze("", "", "/w/live") == "/w/live")
-    ok &= check("the persisted column beats the live path",
-                freeze("", "/w/persisted", "/w/live") == "/w/persisted")
-    ok &= check("an already-frozen key is NEVER re-frozen",
-                freeze("/w/first", "/w/persisted", "/w/live") == "/w/first")
-    ok &= check("a session that cd'd keeps the directory it started in",
-                freeze("/w/relay", "", "/w/relay/iterm") == "/w/relay")
-    ok &= check("nothing readable yet stays empty, so it groups with nobody",
-                freeze("", "", "") == "")
-
-    # --- display paths -------------------------------------------------------
-    home = "/Users/me"
-    ok &= check("home collapses to ~",
-                short_path("/Users/me/Work/relay", home) == "~/Work/relay")
-    ok &= check("home itself is ~", short_path("/Users/me", home) == "~")
-    ok &= check("a path outside home is left alone",
-                short_path("/opt/src", home) == "/opt/src")
-    ok &= check("a near-miss prefix is NOT collapsed",
-                short_path("/Users/median/x", home) == "/Users/median/x")
-    ok &= check("empty stays empty", short_path("", home) == "")
-
-    # --- the summary that rides the rule -------------------------------------
-    m = [S("a", "/w", armed=True, attn=True), S("b", "/w"), S("c", "/w")]
-    s = summary(m, lambda i: i.armed, lambda i: i.attn, lambda i: i.burn)
-    ok &= check("summary counts sessions first",
-                s[0] == ("3 sessions", "plain"))
-    ok &= check("summary names what a count MEANS, not its colour",
-                ("1 armed", "armed") in s and ("1 needs you", "attention") in s)
-    ok &= check("a zero count is omitted, not printed as 0",
-                all("0 " not in t for t, _ in s))
-    ok &= check("compact form uses the glyphs the rows already use",
-                [t for t, _ in summary(m, lambda i: i.armed, lambda i: i.attn,
-                                       lambda i: i.burn, compact=True)]
-                == ["3", "◉1", "‼1"])
-    ok &= check("compact form still omits zero counts",
-                all("0" not in t for t, _ in
-                    summary([m[1]], lambda i: i.armed, lambda i: i.attn,
-                            compact=True)))
-    ok &= check("one session is singular",
-                summary([m[0]], lambda i: False, lambda i: False)[0]
-                == ("1 session", "plain"))
+    ok &= check("ARM_MODES matches db.ARM_REQUEST_MODES", _arm_modes_match())
+    ok &= check("ROLES matches db.ROLES", _roles_match())
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
     return ok
+
+
+def _err_missing():
+    try:
+        workspaces.load("/nonexistent/dir/workspaces.toml")
+        return ""
+    except workspaces.ConfigError as exc:
+        return str(exc)
+
+
+def _path_with_env(value):
+    old = os.environ.get("RELAY_WORKSPACES")
+    if value is None:
+        os.environ.pop("RELAY_WORKSPACES", None)
+    else:
+        os.environ["RELAY_WORKSPACES"] = value
+    try:
+        return workspaces.default_path()
+    finally:
+        if old is None:
+            os.environ.pop("RELAY_WORKSPACES", None)
+        else:
+            os.environ["RELAY_WORKSPACES"] = old
+
+
+def _arm_modes_match():
+    """db is imported HERE, never at module scope: workspaces.py must stay
+    importable without sqlite3, and this test is the only reason to look."""
+    import db
+    return tuple(workspaces.ARM_MODES) == tuple(db.ARM_REQUEST_MODES)
+
+
+def _roles_match():
+    import db
+    return tuple(workspaces.ROLES) == tuple(db.ROLES)
 
 
 if __name__ == "__main__":
