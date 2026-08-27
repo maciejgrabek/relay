@@ -112,25 +112,36 @@ def _command_table_checks(ok):
     ok &= check(f"every table entry's action matches its binding's action "
                 f"(mismatches {mismatched})", mismatched == {})
 
-    bar = appmod.KEYBAR
-    # up/down are a special case: _compact_bar_pairs() (app.py) merges them
-    # into one label-less arrow glyph, since two "move" labels for the same
-    # concept is what pushed the generated bar over budget (round 1,
-    # finding 1) - so their OWN bar label is not expected to appear intact,
-    # only the glyph that stands in for both.
+    # The bar is built for a WIDTH, not once at import: at 80 columns the
+    # full set of labels does not fit on one line, and the previous answer -
+    # silently dropping a label - is how "move" and "? help" disappeared in
+    # the migration from the hand-written bar. `#keybar` is `height: 2`, so
+    # the second line is budget that was already paid for.
+    wide = appmod.keybar_text(200)
     for c in commands.CMD:
-        if c.hot and c.bar != "move":
+        if c.hot:
             ok &= check(f"key bar shows hot entry {c.name}",
-                        commands._bar_label(c) in bar)
-    ok &= check("key bar shows the merged up/down arrow glyph", "↑↓" in bar)
-    # A newline count is not the property that matters - a 220-character
-    # single "line" still clips on an 80-column terminal. #keybar is
-    # `height: 2` with `padding: 0 2` (app.py), so the real budget is what
-    # actually fits: 76 cells (80 - 2*2 for the padding), measured on the
-    # PLAIN (markup-stripped) bar.
-    bar_width = _cells_wide(bar)
-    ok &= check(f"the key bar has no line break and fits 76 cells (got "
-                f"{bar_width})", "\n" not in bar and bar_width <= 76)
+                        commands._bar_label(c) in wide)
+    ok &= check("key bar keeps the arrow glyph", "↑↓" in wide)
+    ok &= check("key bar labels the arrows 'move' - the glyph alone dropped "
+                "the only word that says what it does",
+                "move" in _plain(wide))
+    ok &= check("key bar names the help overlay", "? help" in _plain(wide))
+    ok &= check("a wide terminal gets ONE line", "\n" not in wide)
+
+    # `padding: 0 2` on both sides, so the budget is width - 4.
+    for w, budget in ((80, 76), (120, 116), (200, 196)):
+        bar = appmod.keybar_text(w)
+        got = _cells_wide(bar)
+        ok &= check(f"the key bar fits {budget} cells at width {w} "
+                    f"(got {got})", got <= budget)
+        ok &= check(f"the key bar uses at most 2 lines at width {w}",
+                    len(bar.splitlines()) <= 2)
+        plain = _plain(bar)
+        for c in commands.CMD:
+            if c.hot and c.bar:
+                ok &= check(f"width {w}: bar still names {c.name}",
+                            commands._bar_label(c) in plain)
 
     helptext = appmod.help_text(96)
     missing = [c.name for c in commands.CMD if c.help[:24] not in helptext]
@@ -2539,6 +2550,40 @@ async def go():
         chk("ESC clears _cmdline", cl._cmdline is None)
         chk("ESC removes the #cmdline widget",
             not any(w.id == "cmdline" for w in cl.query("Input")))
+
+        # The zombie, and it was a DEADLOCK, not just a stray widget.
+        # Textual's Widget.remove() is ASYNCHRONOUS - it returns an
+        # AwaitRemove and the prune lands on a later pump cycle - but
+        # _cmdline_close() fires it unawaited and returns, and
+        # _cmdline_submit then dispatches SYNCHRONOUSLY, still inside the
+        # Input's own message handler. `:commands` - the palette reopening
+        # itself - therefore mounted a SECOND #cmdline while the first was
+        # still pruning, and the pump could not settle: the whole panel
+        # froze until a timeout released it, which reads to an operator as
+        # "every key is dead", not as "one command misbehaved".
+        #
+        # Two independent guards, because one of them is a judgement call
+        # about the table and the other is a fact about the widget:
+        #   1. the palette's own opener is not a typeable command at all
+        #   2. re-entry cannot mount a second widget even if called directly
+        await pilot.press("colon")
+        await pilot.pause()
+        cl.query_one("#cmdline").value = "commands"
+        await pilot.pause()
+        chk("the palette does not offer its own opener as a command",
+            "commands" not in [c.name for c in cl._cmdline_matches()])
+        before = len(cl.query("#cmdline"))
+        cl.action_command_mode()          # the direct path, guard or not
+        await pilot.pause()
+        chk(f"action_command_mode while the palette is open mounts nothing "
+            f"(was {before}, now {len(cl.query('#cmdline'))})",
+            len(cl.query("#cmdline")) == before)
+        chk("...and the same for the list widget",
+            len(cl.query("#cmdlist")) <= 1)
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("ESC still gets you out afterwards",
+            cl._cmdline is None and not cl.query("#cmdline"))
         await pilot.press("colon")
         await pilot.pause()
         cl.query_one("#cmdline").value = "pause extra"

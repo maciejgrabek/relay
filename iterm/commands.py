@@ -56,6 +56,17 @@ class Cmd:
                                # used by the `?` overlay. A full help
                                # sentence on the bar is how it overflowed
                                # an 80-column terminal in the first place.
+    palette: bool = True      # offered by the `/` palette and by TAB
+                               # completion. False for an entry that is a KEY
+                               # and not a verb: cursor movement, the
+                               # overlay-closer, the settings editor's own
+                               # ←→ nudges, and the palette's opener. They
+                               # keep their keys and stay documented in `?`;
+                               # they are simply not things anyone types. An
+                               # earlier version DEMOTED them instead, which
+                               # only applied to the empty query - so typing
+                               # "settings" still answered with
+                               # `settings settingsleft settingsright`.
     bar_key: str = ""         # display-only key for an entry that claims no
                                # real Textual binding (`key=""`) - e.g. ENTER,
                                # which the DataTable already consumes, so
@@ -165,8 +176,14 @@ def parse(line: str) -> Tuple[str, List[str], bool]:
 
 
 def complete(prefix: str, table) -> List[str]:
-    """Command names matching a prefix, sorted. Empty prefix offers all."""
-    return sorted(c.name for c in table if c.name.startswith(prefix))
+    """Typeable command names matching a prefix, sorted.
+
+    Same `palette` filter as `filter_cmds`: TAB and the palette must offer
+    the same set, or TAB completes a name the list in front of you does not
+    contain.
+    """
+    return sorted(c.name for c in table
+                  if c.palette and c.name.startswith(prefix))
 
 
 def hot_pairs(table) -> List[Tuple[str, str]]:
@@ -223,15 +240,6 @@ def help_rows(table) -> List[Tuple[str, str]]:
 # The table. `hot=True` is the hot path only - what an operator does while
 # watching, dozens of times an hour. Everything else stays bound to its key
 # but leaves the bar, and is reachable and discoverable through `:`.
-# Entries that work when typed but that nobody would ever reach for in a
-# palette: cursor movement (the arrow keys are right there), the overlay-closer,
-# the settings-editor nudges, and the palette's own opener. They stay reachable
-# and stay in `?`; they just sink below things worth typing.
-_PALETTE_LAST = frozenset({
-    "up", "down", "back", "settingsleft", "settingsright", "commands",
-})
-
-
 def filter_cmds(query: str, table) -> List["Cmd"]:
     """Commands matching `query`, best match first.
 
@@ -240,21 +248,21 @@ def filter_cmds(query: str, table) -> List["Cmd"]:
     matches still rank above interior ones, so "au" puts `audit` on top rather
     than burying it under something that merely contains "au".
 
-    An empty query returns EVERYTHING. Opening the palette IS the answer to
-    "what can I do here?" - that is the whole point of it.
+    An empty query returns every TYPEABLE command. Opening the palette IS the
+    answer to "what can I do here?" - that is the whole point of it.
 
-    Ordering on an empty query is NOT simply hot-first. `hot` marks the hot
-    PATH - what an operator does constantly by key - which makes those the
-    LEAST likely things to be typed. Nobody opens a palette to run `:up` when
-    the arrow key is under their finger. So pure-navigation and inert entries
-    sink to the bottom and the things worth typing float up.
+    `palette=False` entries are excluded at every query, not sorted last. A
+    key that is not a verb (`up`, `back`, `settingsleft`, the palette's own
+    opener) is noise in a list of things you can do, and sorting it last only
+    hid it from the EMPTY query - `settings` still dragged `settingsleft` and
+    `settingsright` up with it, which is where this was first noticed.
     """
+    offered = [c for c in table if c.palette]
     q = query.strip().lstrip("/:").lower()
     if not q:
-        return ([c for c in table if c.name not in _PALETTE_LAST]
-                + [c for c in table if c.name in _PALETTE_LAST])
-    starts = [c for c in table if c.name.lower().startswith(q)]
-    inside = [c for c in table
+        return offered
+    starts = [c for c in offered if c.name.lower().startswith(q)]
+    inside = [c for c in offered
               if q in c.name.lower() and not c.name.lower().startswith(q)]
     return starts + inside
 
@@ -337,9 +345,9 @@ def help_columns(rows: List[Tuple[str, str]], width: int) -> List[str]:
 
 CMD = (
     Cmd(name="up", help="move up", action="action_cursor_up", key="up,k",
-        hot=True, bar="move"),
+        hot=True, bar="move", palette=False),
     Cmd(name="down", help="move down", action="action_cursor_down",
-        key="down,j", hot=True, bar="move"),
+        key="down,j", hot=True, bar="move", palette=False),
     Cmd(name="arm", help="cycle arm: off -> safe -> wild -> insane",
         action="action_toggle", key="space", hot=True, subject=True,
         # Only "[session]" - action_toggle CYCLES the arm level and cannot
@@ -400,13 +408,21 @@ CMD = (
     # `help` verb, and `:help` is the most discoverable name a discoverability
     # feature could have - a blanket rename here cost more than the collision
     # it avoided.
+    # `hot`: the hand-written bar named `? help` and the generated one did
+    # not, which is the one entry an operator needs when the bar itself is
+    # not enough - discoverability's own entry point, discoverable nowhere.
     Cmd(name="help", help="this help", action="action_help",
-        key="question_mark"),
+        key="question_mark", hot=True, bar="help"),
     # `/` is the primary opener - it is what a Claude Code user reaches for -
     # and `:` stays because it shipped first and vim hands expect it. Both
     # land on the same action, so the palette has one entrance, not two.
+    # palette=False: it is already open. Typing it re-entered
+    # action_command_mode from inside the Input's own message handler, which
+    # mounted a second #cmdline over one that Textual had not finished
+    # pruning, and the pump deadlocked - the whole panel dead until a
+    # timeout let go. app.py guards the mount too; this makes it untypeable.
     Cmd(name="commands", help="open the command line", action="action_command_mode",
-        key="colon,slash", bar_key="/", bar="cmd", hot=True),
+        key="colon,slash", bar_key="/", bar="cmd", hot=True, palette=False),
 
     # "(double-press confirms)" used to live in these four `help` strings -
     # dropped (review's fix 4): a `!` on the cmdline and a second key press
@@ -432,12 +448,15 @@ CMD = (
     Cmd(name="digit", help="send a digit to the selected session",
         action="action_send", key="1,2,3", hot=True, args="1|2|3",
         pass_args=True, bar="send"),
+    # The three below are keys, not verbs: ←→ do nothing at all unless the
+    # settings editor is already open, and ESC closes an overlay you must
+    # already be in. Typing them is never the way anyone reaches them.
     Cmd(name="settingsleft", help="settings editor: change value left",
-        action="action_settings_left", key="left"),
+        action="action_settings_left", key="left", palette=False),
     Cmd(name="settingsright", help="settings editor: change value right",
-        action="action_settings_right", key="right"),
+        action="action_settings_right", key="right", palette=False),
     Cmd(name="back", help="close the open overlay", action="action_dismiss_view",
-        key="escape"),
+        key="escape", palette=False),
 
     Cmd(name="ws", help="workspaces: save, up, list, rm", cli="ws",
         args="save|up|list|rm <name>"),

@@ -482,8 +482,8 @@ can't silently auto-approve.)
 | `t` | **Timers overlay**: the selected session's timers (see [Session timers](#session-timers)); `t` again or `esc` closes it |
 | `m` | **Mascot widget**: open / close the floating desktop creature (see [The desktop widget](#the-desktop-widget)). Inert while an overlay is open, where `m` belongs to that overlay |
 | `c` | **Caffeinate**: release the assertion so the Mac may sleep, or take it back. A release you make by hand is **sticky** - a session waking at 3am won't undo it - where an automatic one (`[power] release_after`) re-acquires the moment anything starts working. The header shows the countdown while it runs, and says so once released. Inert behind an open overlay, like `m` |
-| `?` | Help overlay: key map + arm-level cheat sheet |
-| `:` | Open the **command line**: type any capability by name (see [Commands](#commands-)) |
+| `?` | Help overlay: every command, by key and by name, + the arm-level cheat sheet. Two columns on a terminal 150 cells or wider, one below that |
+| `/` `:` | Open the **command palette**: typing filters every capability by name, `↑↓` picks, `ENTER` runs (see [Commands](#commands-)) |
 | `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |

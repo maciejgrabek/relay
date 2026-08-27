@@ -324,21 +324,18 @@ def overlay_panel(lines: list, width: int, accent: str) -> str:
     return "\n".join([lines[0]] + body + [chrome.panel_bottom(w, accent)])
 
 
-def _compact_bar_pairs(pairs):
-    """`hot_pairs()`, compacted to fit `#keybar`'s real budget.
+def _merge_bar_pairs(pairs):
+    """`hot_pairs()` with the display-only merges the bar has always made.
 
-    `#keybar` is `height: 2` with `padding: 0 2` at 80 columns - 76 usable
-    cells - and a bar built by joining every hot entry's full key/label
-    verbatim ran to 220+ cells (review round 1, finding 1). Two things
-    caused most of that, and both are display-only - the underlying table
-    and its keys are untouched:
+    Neither merge drops a WORD - that was the bug. `↑↓` shipped with no
+    label at all on the theory that arrows are self-evident, which threw away
+    the only thing on the bar that said what they move; the hand-written bar
+    it replaced had said `↑↓ move` since the beginning.
 
     - `up`/`down` are two table entries (so `key_tokens`/BINDINGS agreement
-      still checks them separately) but ONE concept on a bar - "move" said
-      twice, once per vim alias, is not two facts. Adjacent hot entries that
-      share a label collapse into the arrow glyph every terminal legend
-      already uses for this, and the glyph runs with NO label at all - what
-      `↑↓` does is self-evident in a way "move" never added information to.
+      still checks them separately) but ONE concept on a bar - "move" twice,
+      once per vim alias, is not two facts. They collapse to the arrow glyph
+      every terminal legend uses, keeping the single shared label.
     - a run of sequential digit keys (`1/2/3`) reads identically as a range;
       the `?` overlay still spells out every digit.
     """
@@ -348,10 +345,9 @@ def _compact_bar_pairs(pairs):
             prev_key, _ = merged.pop()
             primaries = [k.split("/")[0] for k in (prev_key, key)]
             if set(primaries) == {"up", "down"}:
-                new_key, new_label = "↑↓", ""
+                merged.append(("↑↓", label))
             else:
-                new_key, new_label = "/".join(primaries), label
-            merged.append((new_key, new_label))
+                merged.append(("/".join(primaries), label))
         else:
             merged.append((key, label))
 
@@ -364,12 +360,58 @@ def _compact_bar_pairs(pairs):
     return [(_compact_key(k), label) for k, label in merged]
 
 
+def keybar_text(width: int) -> str:
+    """The key bar, built for a WIDTH rather than once at import.
+
+    A fixed one-line bar is what forced the choice between naming a key and
+    fitting the terminal, and the migration from the hand-written bar
+    resolved it by silently dropping labels: `↑↓` lost "move" and `?` never
+    made it onto the bar at all. Both are back, because the width is known
+    here and `#keybar` is `height: 2` - the second line is budget that was
+    already paid for, and the bar this replaced used it.
+
+    Degrading, in order, stopping as soon as it fits:
+      1. one line, every label
+      2. two lines, every label       (the 80-column case)
+      3. one line per label-less key  (a terminal too narrow for words)
+    Clipping is the floor, never the first answer.
+    """
+    pairs = _merge_bar_pairs(commands.hot_pairs(commands.CMD))
+    budget = max(20, width - 4)          # `padding: 0 2` on both sides
+
+    one = _keys(pairs)
+    if _cells(_plain_markup(one)) <= budget:
+        return one
+
+    half = (len(pairs) + 1) // 2
+    two = _keys(pairs[:half]) + "\n" + _keys(pairs[half:])
+    if all(_cells(_plain_markup(l)) <= budget for l in two.split("\n")):
+        return two
+
+    bare = [(k, "") for k, _ in pairs]
+    half = (len(bare) + 1) // 2
+    return _keys(bare[:half]) + "\n" + _keys(bare[half:])
+
+
+def _plain_markup(text: str) -> str:
+    """Rich markup stripped, so a bar can be measured in the cells it will
+    actually occupy rather than in the characters it is written with."""
+    out, depth = [], 0
+    for ch in text:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
 # Generated, never hand-written. Two hand-maintained legends are exactly how
 # `w` and `S` shipped working but invisible; the table is the only list now.
-# The trailing opener used to be appended here as a literal, which meant the
-# bar named a capability the table did not. It is a `hot` table entry now, so
-# hot_pairs supplies it and there is nothing left to drift.
-KEYBAR = _keys(_compact_bar_pairs(commands.hot_pairs(commands.CMD)))
+# 80 columns is only the STARTING render - on_resize rebuilds it for the
+# terminal actually in front of the operator.
+KEYBAR = keybar_text(80)
 
 
 def _tree_fingerprint(workdir: str) -> str:
@@ -2979,6 +3021,18 @@ class RelayApp(App):
     def action_command_mode(self) -> None:
         if self._any_overlay_open():
             return
+        # `_any_overlay_open()` checks `self._cmdline`, and that is NOT
+        # enough: `_cmdline_close()` nulls the state and then calls Textual's
+        # Widget.remove(), which is ASYNCHRONOUS - it returns an AwaitRemove
+        # and the prune lands on a later pump cycle. Dispatch runs
+        # synchronously inside the Input's own message handler, so between
+        # close and re-open the state says "closed" while the widget is
+        # still in the DOM. Mounting a second #cmdline on top of it
+        # deadlocked the pump: the panel froze until a timeout let go, which
+        # reads as "every key is dead". The DOM, not the state, is the
+        # authority on whether the widget exists.
+        if self.query("#cmdline") or self.query("#cmdlist"):
+            return
         self._cmdline = {"open": True, "cursor": 0}
         inp = Input(placeholder="command (up/down picks, ENTER runs, ESC cancels)",
                     id="cmdline")
@@ -3377,6 +3431,11 @@ class RelayApp(App):
         # panes these render into may not be mounted. A redraw is chrome - it
         # must never be the thing that takes the panel down.
         try:
+            # The bar is laid out for the terminal in front of the operator,
+            # not for the 80 columns assumed at import. Resize fires on
+            # startup too, so this is also how the real first paint happens.
+            self.query_one("#keybar", Static).update(
+                keybar_text(self.size.width))
             if self._parked_visible and self._parked_edit is None:
                 self._render_parked()
             if self._timers_visible and self._timer_form is None:

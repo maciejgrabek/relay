@@ -113,8 +113,9 @@ def run():
                 commands.complete("aud", table) == ["audit"])
     ok &= check("an unknown prefix completes to nothing",
                 commands.complete("zzz", table) == [])
-    ok &= check("an empty prefix offers everything",
-                len(commands.complete("", table)) == len(table))
+    ok &= check("an empty prefix offers every TYPEABLE command",
+                len(commands.complete("", table))
+                == len([c for c in table if c.palette]))
     ok &= check("completion is sorted",
                 commands.complete("", table)
                 == sorted(commands.complete("", table)))
@@ -179,23 +180,54 @@ def _palette_checks(ok):
     """The palette: filtering, ordering, and the two-column help layout."""
     table = commands.CMD
 
+    # A non-verb is EXCLUDED, not demoted. Demotion only ever applied to the
+    # empty query, which is why typing "settings" answered with
+    # `settings settingsleft settingsright` - two modal sub-keys that do
+    # nothing at all unless the settings editor is already open. They keep
+    # their keys and stay documented in `?`; they are simply not commands.
     everything = commands.filter_cmds("", table)
-    ok &= check("an empty query offers every command",
-                len(everything) == len(table))
-    ok &= check("pure-navigation entries sink to the bottom",
-                {c.name for c in everything[-len(commands._PALETTE_LAST):]}
-                == set(commands._PALETTE_LAST))
-    ok &= check("something worth typing is at the top",
-                everything[0].name not in commands._PALETTE_LAST)
+    typeable = [c for c in table if c.palette]
+    ok &= check("an empty query offers every TYPEABLE command",
+                len(everything) == len(typeable))
+    ok &= check("...and no non-verb among them",
+                all(c.palette for c in everything))
+    ok &= check("some entries really are excluded (else this proves nothing)",
+                len(typeable) < len(table))
+
+    for junk in ("settingsleft", "settingsright", "up", "down", "back"):
+        ok &= check(f"{junk} is not typeable at any query",
+                    not any(c.name == junk
+                            for c in commands.filter_cmds(junk, table)))
+    ok &= check("typing 'settings' offers ONLY settings",
+                [c.name for c in commands.filter_cmds("settings", table)]
+                == ["settings"])
+    # The palette reopening itself deadlocked the pump: _cmdline_close()'s
+    # remove() is async, so dispatch mounted a second #cmdline on top of a
+    # widget that had not been pruned yet, and the whole panel froze until a
+    # timeout let go. app.py guards the mount as well; this keeps the path
+    # from being reachable by typing in the first place.
+    ok &= check("the palette's own opener is not a typeable command",
+                not any(c.name == "commands"
+                        for c in commands.filter_cmds("comm", table)))
+
+    # Excluded from the PALETTE is not excluded from the DOCS: `?` is where
+    # a key that is not a verb still has to be discoverable.
+    rows = commands.help_rows(table)
+    ok &= check("`?` still documents every entry, typeable or not",
+                len(rows) == len(table))
+    for junk in ("settingsleft", "settingsright", "back", "commands"):
+        ok &= check(f"`?` still documents {junk}",
+                    any(f":{junk}" in r or junk in r for r in
+                        [f"{k} {h}" for k, h in rows]))
+
+    ok &= check("TAB completion offers no non-verb either",
+                "settingsleft" not in commands.complete("settings", table))
 
     # A genuine INTERIOR match - "work" would not do, since it is a prefix of
     # "workspaces" and a prefix-only implementation would pass.
     ok &= check("an INTERIOR substring matches (prefix-only would not)",
                 any(c.name == "workspaces"
                     for c in commands.filter_cmds("space", table)))
-    ok &= check("another interior match, to be sure",
-                any(c.name == "disarmall"
-                    for c in commands.filter_cmds("sarm", table)))
 
     au = commands.filter_cmds("au", table)
     ok &= check("a prefix match ranks above a substring match",
@@ -217,7 +249,8 @@ def _palette_checks(ok):
     ok &= check("a name and its help both appear",
                 any("arm" in l for l in lines))
     ok &= check("the overflow footer counts what is not shown",
-                any(str(len(table)) in l for l in lines))
+                any(str(len([c for c in table if c.palette])) in l
+                    for l in lines))
     ok &= check("every rendered line fits the width",
                 all(len(l) <= 70 for l in commands.palette_lines(
                     "", table, 0, 70, limit=5)))
