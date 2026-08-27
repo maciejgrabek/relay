@@ -2726,7 +2726,9 @@ class RelayApp(App):
         allow_shell=True because arming an idle shell tab is harmless, where
         braking or typing into one is not. See swarm.resolve_scope.
         """
-        if self._any_overlay_open() and self._cmdline is None:
+        # `_cmdline` is always None by the time an action runs (dispatch
+        # closes the palette first), so the overlay check stands alone.
+        if self._any_overlay_open():
             return
         log = self.query_one(Log)
         parts = [p for p in (rest or "").split() if p]
@@ -2766,25 +2768,33 @@ class RelayApp(App):
         _intervene_execute - one implementation, two front doors."""
         self._scoped_intervene("stop", (rest or "").strip(), "")
 
-    def action_tell(self, rest: str = "") -> None:
-        """`tell [scope] <message>`.
+    def _tell_split(self, rest: str):
+        """`tell`'s line into (scope token, message).
 
-        The first token is consumed as a scope ONLY if it resolves to one, so
+        The first token is a scope ONLY if it RESOLVES to one, so
         `tell rebase onto main` is a message to the selected row rather than
         a hunt for a session called `rebase`. A message that genuinely starts
         with a session's name gets an explicit scope in front of it
         (`tell here w1 is stuck`); there is no quoting syntax and this does
         not add one.
+
+        This lives in ONE place on purpose. The bang gate needs the same
+        answer as the action - how wide does this reach - and computing it
+        twice is the two-lists-that-must-agree bug the verb table exists to
+        prevent. It had already drifted back in once.
         """
         raw = (rest or "").strip()
         parts = raw.split(" ", 1)
-        token, body = "", raw
         if parts and parts[0]:
             probe = self._resolve_scope_arg(parts[0])
             if probe is not None and probe[0] != "none":
-                token = parts[0]
-                body = parts[1] if len(parts) > 1 else ""
-        self._scoped_intervene("tell", token, body.strip())
+                return parts[0], (parts[1] if len(parts) > 1 else "").strip()
+        return "", raw
+
+    def action_tell(self, rest: str = "") -> None:
+        """`tell [scope] <message>` - see _tell_split for the argument rule."""
+        token, body = self._tell_split(rest)
+        self._scoped_intervene("tell", token, body)
 
     def _scoped_intervene(self, mode: str, token: str, body: str) -> None:
         """Resolve, report, and hand off to the overlay's executor.
@@ -3222,15 +3232,11 @@ class RelayApp(App):
         reach = 0
         if cmd.scope and self.watcher:
             if cmd.name == "tell":
-                # tell's scope is the FIRST token, and only when it
-                # RESOLVES - otherwise it is the first word of the message,
-                # and probing the LAST word would measure the blast radius
-                # of "db".
-                scope_tok = args[0] if args else ""
-                if scope_tok:
-                    probe0 = self._resolve_scope_arg(scope_tok)
-                    if probe0 is None or probe0[0] == "none":
-                        scope_tok = ""
+                # The SAME split the action uses - never a second copy of
+                # the rule. tell's scope is the first token and only when it
+                # resolves; probing the last word instead would measure the
+                # blast radius of "db" in `tell all hands off the db`.
+                scope_tok = self._tell_split(" ".join(args))[0]
             else:
                 # Every other scope verb takes its scope last, after an
                 # optional level: `arm safe all`.

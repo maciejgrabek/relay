@@ -2879,6 +2879,34 @@ async def go():
             sc.watcher.sessions["s1"].mode == "off"
             and sc.watcher.sessions["s2"].mode == "off")
 
+        # SPACE is the most-used key in the panel and it is a
+        # PARAMETERISED binding now - `arm('')` rather than `toggle`. Nothing
+        # covered it, and a broken action string fails silently in Textual
+        # (the key simply does nothing), so this walks the whole cycle.
+        if sc._modal_open:
+            await pilot.press("escape")
+            await pilot.pause()
+        sc.watcher.set_all(False)
+        seen = []
+        for _ in range(5):
+            await pilot.press("space")
+            await pilot.pause()
+            seen.append(sc.watcher.sessions["s1"].mode)
+        chk(f"SPACE still cycles off->safe->wild->insane->off (got {seen})",
+            seen == ["safe", "wild", "insane", "off", "safe"])
+        chk("SPACE moves only the selected row",
+            sc.watcher.sessions["s2"].mode == "off")
+
+        # Both bang forms are one flag, the way `/` and `:` are one opener.
+        sc.watcher.set_all(False)
+        await typed("!arm wild all")
+        wild_prefix = sc.watcher.sessions["s2"].mode
+        sc.watcher.set_all(False)
+        await typed("arm wild all!")
+        chk("a leading bang and a trailing one do the same thing",
+            wild_prefix == "wild"
+            and sc.watcher.sessions["s2"].mode == "wild")
+
         # The KEY path is exempt from the bang: a keystroke against the
         # legend on the bar is already the deliberate act.
         if sc._modal_open:
