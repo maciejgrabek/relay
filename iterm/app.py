@@ -1484,7 +1484,10 @@ class RelayApp(App):
         Binding("2", "send('2')", "Send 2"),
         Binding("3", "send('3')", "Send 3"),
         Binding("n", "focus", "Tab"),
-        Binding("space", "toggle", "Arm"),
+        # `arm('')` rather than `toggle`: SPACE is the cycle, which is
+        # `arm` with no level - one verb, reached two ways, instead of the
+        # key owning a capability of its own.
+        Binding("space", "arm('')", "Arm"),
         Binding("p", "pause", "Pause"),
         Binding("i", "park", "Park idea", show=True),
         Binding("b", "parked", "Parked", show=True),
@@ -1492,8 +1495,13 @@ class RelayApp(App):
         Binding("comma", "settings", "Settings"),
         Binding("left", "settings_left", "Change", show=False),
         Binding("right", "settings_right", "Change", show=False),
-        Binding("a", "all", "Arm all"),
-        Binding("d", "none", "Disarm"),
+        # A key is ONE FROZEN INVOCATION of a verb. `a` is not its own
+        # capability, it is `arm safe all`, and carrying the arguments in
+        # the binding is what stops it from drifting from the typed form.
+        # Both are exempt from the bang gate by construction: a keystroke
+        # against the legend on the bar is already the deliberate act.
+        Binding("a", "arm('safe all')", "Arm all"),
+        Binding("d", "arm('off all')", "Disarm"),
         Binding("x", "hide", "Hide"),
         Binding("m", "mascot", "Mascot"),
         Binding("c", "caffeinate", "Caffeinate"),
@@ -2694,19 +2702,112 @@ class RelayApp(App):
         self.watcher.toggle_shadow(sid)
         self._refresh()
 
-    def action_all(self) -> None:
-        if self._any_overlay_open():
-            return
-        if self.watcher:
-            self.watcher.set_all(True)
-            self._refresh()
+    _ARM_LEVELS = ("off", "safe", "wild", "insane")
 
-    def action_none(self) -> None:
-        if self._any_overlay_open():
+    def _resolve_scope_arg(self, token: str, *, allow_shell: bool = False):
+        """`(kind, label, targets)` for a typed scope token, or None when the
+        watcher is not up yet. Deliberately thin: the resolution itself is
+        pure and lives in swarm.resolve_scope, where test_swarm.py covers
+        every case without needing a terminal."""
+        if not self.watcher:
+            return None
+        return swarmlogic.resolve_scope(
+            token, self._intervene_rows(), self._selected_sid() or "",
+            self._own_sid or "", allow_shell=allow_shell)
+
+    def action_arm(self, rest: str = "") -> None:
+        """`arm [level] [scope]`.
+
+        No level cycles the selected row - what SPACE has always done, so the
+        muscle memory survives the verb. A level SETS it, which the TUI could
+        not do at all before: watcher.set_mode existed the whole time and
+        nothing could reach it.
+
+        allow_shell=True because arming an idle shell tab is harmless, where
+        braking or typing into one is not. See swarm.resolve_scope.
+        """
+        if self._any_overlay_open() and self._cmdline is None:
             return
-        if self.watcher:
-            self.watcher.set_all(False)
-            self._refresh()
+        log = self.query_one(Log)
+        parts = [p for p in (rest or "").split() if p]
+        level = ""
+        if parts and parts[0] in self._ARM_LEVELS:
+            level = parts.pop(0)
+        token = parts[0] if parts else ""
+
+        got = self._resolve_scope_arg(token, allow_shell=True)
+        if got is None:
+            return
+        kind, label, targets = got
+        if not targets:
+            log.write_line(f"arm: {label}")
+            return
+        if kind == "selected" and not level:
+            self.action_toggle()          # the cycle, unchanged
+            return
+        # `arm all` with no level means what the `a` key has always meant.
+        level = level or "safe"
+        changed = 0
+        for t in targets:
+            before = self.watcher.sessions[t["sid"]].mode
+            self.watcher.set_mode(t["sid"], level)
+            if self.watcher.sessions[t["sid"]].mode != before:
+                changed += 1
+        self._refresh()
+        log.write_line(f"arm {level} -> {label}: {len(targets)} session(s), "
+                       f"{changed} changed")
+
+    def action_disarm(self, rest: str = "") -> None:
+        """`disarm [scope]` - `arm off` with the level already supplied."""
+        self.action_arm(f"off {(rest or '').strip()}".strip())
+
+    def action_stop(self, rest: str = "") -> None:
+        """The brake, without the overlay. Delivery is the overlay's own
+        _intervene_execute - one implementation, two front doors."""
+        self._scoped_intervene("stop", (rest or "").strip(), "")
+
+    def action_tell(self, rest: str = "") -> None:
+        """`tell [scope] <message>`.
+
+        The first token is consumed as a scope ONLY if it resolves to one, so
+        `tell rebase onto main` is a message to the selected row rather than
+        a hunt for a session called `rebase`. A message that genuinely starts
+        with a session's name gets an explicit scope in front of it
+        (`tell here w1 is stuck`); there is no quoting syntax and this does
+        not add one.
+        """
+        raw = (rest or "").strip()
+        parts = raw.split(" ", 1)
+        token, body = "", raw
+        if parts and parts[0]:
+            probe = self._resolve_scope_arg(parts[0])
+            if probe is not None and probe[0] != "none":
+                token = parts[0]
+                body = parts[1] if len(parts) > 1 else ""
+        self._scoped_intervene("tell", token, body.strip())
+
+    def _scoped_intervene(self, mode: str, token: str, body: str) -> None:
+        """Resolve, report, and hand off to the overlay's executor.
+
+        The report is not decoration: the target set was computed from one
+        typed word, so an operator who is not told what it resolved to is
+        being asked to trust a list they cannot see.
+        """
+        log = self.query_one(Log)
+        if mode == "tell" and not body:
+            # A broadcast of nothing is a mistake, not a command - the
+            # overlay refuses this too (see _intervene_commit).
+            log.write_line("tell: needs a message")
+            return
+        got = self._resolve_scope_arg(token)
+        if got is None:
+            return
+        kind, label, targets = got
+        if not targets:
+            log.write_line(f"{mode}: {label}")
+            return
+        log.write_line(f"{mode} -> {label}: {len(targets)} session(s)")
+        self._intervene_execute(mode, kind, targets, body)
 
     # --- settings editor (, toggles a full-width config overlay) -------------
     def action_settings(self) -> None:
@@ -3100,7 +3201,54 @@ class RelayApp(App):
             hint = f" - did you mean {', '.join(near)}?" if near else ""
             log.write_line(f"unknown command {name!r}{hint}")
             return
-        if cmd.confirm and not bang:
+        # The bang gate, by BLAST RADIUS rather than by verb. A per-verb
+        # `confirm` flag cannot see how far a command actually reached,
+        # which is the only thing that matters: `tell w1 <msg>` is one
+        # session and should fire, `tell all <msg>` is every session and
+        # should not, and they are the same verb. `stop` keeps an
+        # unconditional gate on top, because it interrupts work in flight.
+        # `parse` takes the bang off the VERB (`:wipe!`), which is the only
+        # place it can safely look: a `!` anywhere in `tell w1 ship it!` is
+        # message text, not a confirmation. For a scope verb that carries no
+        # free text, though, `arm safe all!` is what an operator actually
+        # types - the bang belongs to the invocation and lands on its last
+        # word. Allowed there, and nowhere near a message.
+        if cmd.scope and cmd.name != "tell" and args and args[-1].endswith("!"):
+            args = args[:-1] + [args[-1].rstrip("!")]
+            args = [a for a in args if a]
+            bang = True
+
+        reach = 0
+        if cmd.scope and self.watcher:
+            if cmd.name == "tell":
+                # tell's scope is the FIRST token, and only when it
+                # RESOLVES - otherwise it is the first word of the message,
+                # and probing the LAST word would measure the blast radius
+                # of "db".
+                scope_tok = args[0] if args else ""
+                if scope_tok:
+                    probe0 = self._resolve_scope_arg(scope_tok)
+                    if probe0 is None or probe0[0] == "none":
+                        scope_tok = ""
+            else:
+                # Every other scope verb takes its scope last, after an
+                # optional level: `arm safe all`.
+                scope_tok = args[-1] if args else ""
+                if scope_tok in self._ARM_LEVELS:
+                    scope_tok = ""
+            probe = self._resolve_scope_arg(
+                scope_tok, allow_shell=(cmd.name in ("arm", "disarm")))
+            reach = len(probe[2]) if probe else 0
+        if cmd.scope and not bang and (cmd.confirm or reach > 1):
+            why = ("it interrupts work in flight" if cmd.confirm
+                   else f"it reaches {reach} sessions")
+            log.write_line(
+                f"{cmd.name}: {why}. add ! to run it, or narrow the scope")
+            return
+        # The non-scope verbs keep their own gate, which says more than the
+        # generic one can: :wipe! only ARMS the action's own double-press
+        # state machine rather than confirming the deletion outright.
+        if cmd.confirm and not cmd.scope and not bang:
             # A destructive command must never be one keystroke from
             # running. But the ACTION itself (action_restore/_wipe/_zap/
             # _extreme) runs its OWN arm-then-confirm state machine on top
@@ -3142,11 +3290,17 @@ class RelayApp(App):
                 # what the entry advertises (cmd.args, a literal "a|b|c"
                 # enum) - ":digit foo" typed the string "foo" into the
                 # session as keystrokes instead of refusing it.
-                choices = cmd.args.split("|") if cmd.args else []
-                if len(args) != 1 or (choices and args[0] not in choices):
-                    log.write_line(self._cmd_usage(cmd))
-                    return
-                call_args = (args[0],)
+                if cmd.scope:
+                    # A scope verb takes the raw remainder, not one token
+                    # out of an enum: `tell all hands off the db` is a scope
+                    # and five words of message.
+                    call_args = (" ".join(args),)
+                else:
+                    choices = cmd.args.split("|") if cmd.args else []
+                    if len(args) != 1 or (choices and args[0] not in choices):
+                        log.write_line(self._cmd_usage(cmd))
+                        return
+                    call_args = (args[0],)
             else:
                 # Every other action takes no arguments. Extra words the
                 # operator typed are not silently dropped (finding 3): a
@@ -3155,7 +3309,9 @@ class RelayApp(App):
                 # insane - action_toggle only cycles), so name what was
                 # ignored instead of pretending it was consumed.
                 call_args = ()
-                if args:
+                if cmd.scope:
+                    call_args = (" ".join(args),)
+                elif args:
                     log.write_line(f"{cmd.name}: ignored extra argument(s) "
                                    f"{' '.join(args)!r}")
             if inspect.iscoroutinefunction(fn):
@@ -4555,6 +4711,10 @@ class RelayApp(App):
                 "project": reg.get("project", "") if hasattr(reg, "get") else "",
                 "is_shell": swarmlogic.is_shell_job(info.job),
                 "working": info.state == "working",
+                # The ROSTER's own grouping key, so a typed `here` means the
+                # rail the operator can see rather than a second, invisible
+                # definition of the same word.
+                "workspace": self._home_of(info),
             })
         return out
 

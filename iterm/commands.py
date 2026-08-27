@@ -51,6 +51,20 @@ class Cmd:
     confirm: bool = False     # requires an explicit `!` before running
     args: str = ""            # usage hint, e.g. "<name>" or "on|off"
     pass_args: bool = False   # the action takes the typed args as parameters
+    scope: bool = False       # the trailing argument is a SCOPE (all | here
+                               # | <session> | <workspace>), resolved against
+                               # live rows by app.py. Distinct from
+                               # `subject`: a subject names ONE session and
+                               # moves the cursor to it, where a scope names
+                               # a SET and moves nothing.
+    key_args: str = ""        # the fixed arguments this entry's KEY fires
+                               # with. `a` is not a capability of its own, it
+                               # is `arm safe all` on one press. Keeping the
+                               # arguments in the table is what stops a key
+                               # from drifting away from its typed form, and
+                               # a key invocation is exempt from the bang
+                               # gate: the keystroke against a legend on the
+                               # bar IS the deliberate act the bang demands.
     bar: str = ""             # SHORT label for the one-line key bar (hot
                                # entries only); `help` stays the long form
                                # used by the `?` overlay. A full help
@@ -130,6 +144,15 @@ def validate(table) -> List[str]:
         # anything - it shares a stem with the worker protocol's `help`
         # verb and nothing else. Every other name still collides for real
         # (see `digit`, not `send`, below).
+        if cmd.key_args and not cmd.key:
+            problems.append(
+                f"{cmd.name}: key_args without a key - fixed arguments with "
+                f"nothing to fire them is a row that can never run")
+        if cmd.scope and cmd.subject:
+            problems.append(
+                f"{cmd.name}: scope and subject are exclusive - a subject "
+                f"names one session and moves the cursor to it, a scope "
+                f"names a set and moves nothing")
         if cmd.name in NEVER_EXPOSE and cmd.name != "help":
             problems.append(
                 f"{cmd.name}: the entry's own NAME collides with a worker "
@@ -368,13 +391,17 @@ CMD = (
         hot=True, bar="move", palette=False),
     Cmd(name="down", help="move down", action="action_cursor_down",
         key="down,j", hot=True, bar="move", palette=False),
-    Cmd(name="arm", help="cycle arm: off -> safe -> wild -> insane",
-        action="action_toggle", key="space", hot=True, subject=True,
-        # Only "[session]" - action_toggle CYCLES the arm level and cannot
-        # jump to a named one, so advertising "[level]" here (as an earlier
-        # draft did) promised a capability the dispatcher cannot deliver.
-        # Review round 2, finding 3.
-        args="[session]", bar="arm"),
+    # `[level]` is honest now: action_arm SETS a named level where
+    # action_toggle could only cycle. watcher.set_mode existed the whole
+    # time and nothing in the TUI could reach it.
+    Cmd(name="arm", help="arm: no level cycles, a level sets it",
+        action="action_arm", key="space", hot=True, scope=True,
+        args="[level] [scope]", bar="arm"),
+    # Its own action rather than `key_args="off"`: key_args is what a KEY
+    # fires with, and disarm has no key - its `off` is a default argument of
+    # the typed verb. One field, one meaning.
+    Cmd(name="disarm", help="disarm: sugar for `arm off`",
+        action="action_disarm", scope=True, pass_args=True, args="[scope]"),
     # ENTER is NOT in BINDINGS: the DataTable consumes it and app.py warns
     # that binding it too would double-fire. So this entry carries no `key`
     # (nothing to agree with BINDINGS over) but still claims a legend via
@@ -392,10 +419,15 @@ CMD = (
     Cmd(name="quit", help="quit relay", action="action_quit", key="q",
         hot=True, bar="quit"),
 
-    Cmd(name="armall", help="arm every session at safe", action="action_all",
-        key="a"),
-    Cmd(name="disarmall", help="disarm every session", action="action_none",
-        key="d"),
+    # `a` and `d` are not capabilities of their own - they are `arm` at a
+    # scope, which is exactly the argument the operator had no way to say
+    # before. These two rows exist ONLY to give those keys a home the
+    # BINDINGS agreement test can check; `palette=False` means neither is a
+    # name anyone can type, so one capability stops wearing three.
+    Cmd(name="armall", help="arm every session at safe (the `a` key)",
+        action="action_arm", key="a", key_args="safe all", palette=False),
+    Cmd(name="disarmall", help="disarm every session (the `d` key)",
+        action="action_arm", key="d", key_args="off all", palette=False),
     Cmd(name="shadow", help="shadow-arm: dry-run, records without acting",
         action="action_shadow", key="s", subject=True),
     Cmd(name="hide", help="hide or show the selected session",
@@ -431,6 +463,18 @@ CMD = (
     # `hot`: the hand-written bar named `? help` and the generated one did
     # not, which is the one entry an operator needs when the bar itself is
     # not enough - discoverability's own entry point, discoverable nowhere.
+    # STOP and TELL were MODES inside the intervene overlay, cycled with the
+    # arrow keys after pressing `!`. Neither had a key, so a table built from
+    # BINDINGS could not see them and `:stop` matched nothing at all. Both
+    # dispatch into the overlay's own _intervene_execute: one delivery path,
+    # two front doors.
+    Cmd(name="stop", help="brake: ESC into every working session in scope",
+        action="action_stop", scope=True, confirm=True, pass_args=True,
+        args="[scope]"),
+    Cmd(name="tell", help="type a message into every session in scope",
+        action="action_tell", scope=True, pass_args=True,
+        args="[scope] <message>"),
+
     Cmd(name="help", help="this help", action="action_help",
         key="question_mark", hot=True, bar="help"),
     # `/` is the primary opener - it is what a Claude Code user reaches for -

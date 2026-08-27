@@ -171,9 +171,36 @@ def _dispatch_checks(ok):
     # NEVER_EXPOSE worker-protocol verb and validate() refuses a name that
     # collides with one), but its ACTION is action_send - assert on the
     # action, which is the property this check actually cares about.
-    ok &= check("pass_args is only set where the action takes parameters",
-                {c.action for c in commands.CMD if c.pass_args}
-                == {"action_send"})
+    # Was a hardcoded {"action_send"}, which had to be edited every time a
+    # parameterised action was added and said nothing about whether the
+    # action could actually TAKE the argument. Ask the method instead: an
+    # arity mismatch here raises a bare TypeError out of on_input_submitted,
+    # which is the operator's console dying mid-shift, not a log line.
+    for c in commands.CMD:
+        if not c.pass_args:
+            continue
+        fn = getattr(appmod.RelayApp, c.action, None)
+        ok &= check(f"{c.name}: {c.action} exists to take its argument",
+                    fn is not None)
+        if fn is None:
+            continue
+        params = [p for p in inspect.signature(fn).parameters
+                  if p != "self"]
+        ok &= check(f"{c.name}: {c.action} accepts a parameter",
+                    len(params) >= 1)
+    # And the converse: an action that REQUIRES an argument must be marked
+    # pass_args, or dispatch calls it with none and takes the app down.
+    for c in commands.CMD:
+        if c.pass_args or not c.action:
+            continue
+        fn = getattr(appmod.RelayApp, c.action, None)
+        if fn is None:
+            continue
+        required = [p for n, p in inspect.signature(fn).parameters.items()
+                    if n != "self" and p.default is inspect.Parameter.empty
+                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+        ok &= check(f"{c.name}: {c.action} needs no argument it will not get",
+                    not required)
     return ok
 
 
@@ -231,6 +258,15 @@ class StubWatcher:
     def set_all(self, a):
         for i in self.sessions.values():
             i.mode = "safe" if a else "off"
+
+    # Mirrors watcher.set_mode: the real one refuses a mode outside MODES and
+    # a session it cannot arm, so a stub that accepted anything would let a
+    # typo pass here and fail only in front of an operator.
+    MODES = ("off", "shadow", "safe", "wild", "insane", "extreme")
+
+    def set_mode(self, s, mode):
+        if mode in self.MODES and s in self.sessions:
+            self.sessions[s].mode = mode
 
     def toggle_hidden(self, s):
         self.sessions[s].hidden = not self.sessions[s].hidden
@@ -414,7 +450,7 @@ async def go():
     # with the SPACE row deleted entirely - assert the actual generated row.
     import commands as _cmdmod
     chk('help_rows renders the arm key as the SPACE row, not "space"',
-        ("SPACE", "cycle arm: off -> safe -> wild -> insane   (:arm)")
+        ("SPACE", "arm: no level cycles, a level sets it   (:arm)")
         in _cmdmod.help_rows(_cmdmod.CMD))
     chk("help names itself in its own border, not in a heading row",
         _plain(appmod.help_text()).splitlines()[0].startswith("┌─"))
@@ -2683,26 +2719,30 @@ async def go():
         chk(":wipe! actually runs the action",
             "nothing orphaned" in logtext())
 
-        # --- subject resolution: an explicit name moves the cursor first ---
-        # The name comes from watcher.registry (a real, DB-backed swarm
-        # name), not any attribute of SessionInfo - this is the case that
-        # was dead code before review round 1's fix to _cmd_select.
+        # --- scope resolution: a named session is acted on WHERE IT IS ---
+        # `arm` used to be subject=True, which reached a named session by
+        # moving the cursor onto it first. It is scope=True now, and the
+        # difference is the point: a subject names one session and drags the
+        # selection with it, a scope names a SET and moves nothing. Arming a
+        # session in another workspace should not relocate the operator.
+        # The name still comes from watcher.registry (a real, DB-backed
+        # swarm name), not any attribute of SessionInfo.
         chk("cursor is still on s1 before the named arm",
             cd._selected_sid() == "s1")
-        await cmd("arm w1")
-        chk(":arm w1 moves the cursor onto the session registered as w1 "
+        await cmd("arm safe w1")
+        chk(":arm safe w1 arms the session registered as w1 "
             "(resolved via watcher.registry, not a name on SessionInfo)",
-            cd._selected_sid() == "s0")
-        chk(":arm w1 then runs arm on that row",
             cd.watcher.sessions["s0"].mode == "safe")
+        chk(":arm safe w1 does NOT move the cursor - a scope names a set, "
+            "not a place to stand", cd._selected_sid() == "s1")
         chk("the other session is untouched",
             cd.watcher.sessions["s1"].mode == "off")
 
         before_cursor = cd._selected_sid()
-        await cmd("arm nope")
-        chk(":arm nope refuses instead of guessing a target",
-            "no live session named 'nope'" in logtext())
-        chk(":arm nope does NOT move the cursor when no session carries "
+        await cmd("arm safe nope")
+        chk(":arm safe nope refuses instead of guessing a target",
+            "no session or workspace named 'nope'" in logtext())
+        chk(":arm safe nope does NOT move the cursor when nothing carries "
             "that name", cd._selected_sid() == before_cursor)
 
         # A registry entry with no "name" key (s1's) must not crash the
@@ -2730,10 +2770,125 @@ async def go():
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        chk(":arm with no row selected and no name given refuses instead "
+        chk(":arm with no row selected and no scope given refuses instead "
             "of guessing",
-            "no session selected" in
+            "the selected session" in
             "\n".join(ne.query_one(appmod.Log).lines))
+
+    # --- scope verbs: arm / disarm / stop / tell -----------------------------
+    # The whole point of the verb table: one capability with an argument,
+    # instead of `armall`/`disarmall` as separate names and STOP/TELL
+    # trapped inside the intervene overlay's mode cycle.
+    sc = _TestApp({
+        "s1": SessionInfo("s1", title="one", window_idx=0, tab_idx=0,
+                          last_screen=["x"]),
+        "s2": SessionInfo("s2", title="two", window_idx=0, tab_idx=1,
+                          last_screen=["x"]),
+    }, dry_run=False)
+    async with sc.run_test() as pilot:
+        await pilot.pause()
+        sc._refresh()
+        await pilot.pause()
+
+        async def typed(line):
+            # stop/tell end by SHOWING their report in the modal, and the
+            # palette correctly refuses to open behind an overlay - so
+            # dismiss it first, exactly as an operator reading the report
+            # would. Not a workaround: a `typed()` that opened the palette
+            # anyway would be testing a path the app does not have.
+            if sc._modal_open:
+                await pilot.press("escape")
+                await pilot.pause()
+            await pilot.press("colon")
+            await pilot.pause()
+            sc.query_one("#cmdline").value = line
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+        await typed("arm safe")
+        chk("`arm safe` SETS the level rather than cycling",
+            sc.watcher.sessions["s1"].mode == "safe")
+        await typed("arm wild")
+        chk("`arm wild` sets a named level from any starting level",
+            sc.watcher.sessions["s1"].mode == "wild")
+        await typed("arm")
+        chk("bare `arm` still cycles, exactly as SPACE does",
+            sc.watcher.sessions["s1"].mode == "insane")
+        await typed("arm off")
+        chk("`arm off` disarms the selected row",
+            sc.watcher.sessions["s1"].mode == "off")
+
+        await typed("arm safe all")
+        chk("a multi-session scope refuses without the bang",
+            sc.watcher.sessions["s2"].mode != "safe")
+        await typed("arm safe all!")
+        chk("...and fires with it",
+            sc.watcher.sessions["s1"].mode == "safe"
+            and sc.watcher.sessions["s2"].mode == "safe")
+
+        await typed("disarm all!")
+        chk("disarm is arm off",
+            sc.watcher.sessions["s1"].mode == "off"
+            and sc.watcher.sessions["s2"].mode == "off")
+
+        sc._intervene_calls.clear()
+        await typed("stop")
+        chk("stop refuses without the bang even on ONE session",
+            sc._intervene_calls == [])
+        await typed("stop!")
+        chk("stop! brakes", len(sc._intervene_calls) == 1)
+        chk("...through the overlay's own execute path, in stop mode",
+            sc._intervene_calls[-1][0] == "stop")
+
+        sc._intervene_calls.clear()
+        await typed("tell rebase onto main")
+        chk("tell to ONE session needs no bang",
+            len(sc._intervene_calls) == 1)
+        if sc._intervene_calls:
+            mode, _scope, targets, body = sc._intervene_calls[-1]
+            chk("...in tell mode", mode == "tell")
+            chk("...carrying the whole message, scope word and all",
+                body == "rebase onto main")
+            chk("...to the selected row only", len(targets) == 1)
+
+        sc._intervene_calls.clear()
+        await typed("tell all hands off the db")
+        chk("tell at a multi-session scope refuses without the bang",
+            sc._intervene_calls == [])
+        await typed("tell! all hands off the db")
+        chk("...and fires with the bang on the verb, where a bang in "
+            "the message text cannot be mistaken for one",
+            len(sc._intervene_calls) == 1)
+        if sc._intervene_calls:
+            chk("...without eating the scope word as message text",
+                sc._intervene_calls[-1][3] == "hands off the db")
+
+        sc._intervene_calls.clear()
+        await typed("tell")
+        chk("tell with no message refuses", sc._intervene_calls == [])
+
+        sc.watcher.set_all(False)
+        await typed("arm safe nosuchsession!")
+        chk("an unresolvable scope acts on nothing",
+            sc.watcher.sessions["s1"].mode == "off"
+            and sc.watcher.sessions["s2"].mode == "off")
+
+        # The KEY path is exempt from the bang: a keystroke against the
+        # legend on the bar is already the deliberate act.
+        if sc._modal_open:
+            await pilot.press("escape")
+            await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        chk("the `a` key arms everything with no bang, via key_args",
+            sc.watcher.sessions["s1"].mode == "safe"
+            and sc.watcher.sessions["s2"].mode == "safe")
+        await pilot.press("d")
+        await pilot.pause()
+        chk("the `d` key disarms everything, via key_args",
+            sc.watcher.sessions["s1"].mode == "off"
+            and sc.watcher.sessions["s2"].mode == "off")
 
     # --- review round 2: arity, choice validation, and honest arg discard -----
     # Finding 1 (critical): action_send(key) takes exactly one positional
@@ -2801,27 +2956,28 @@ async def go():
         chk(":digit 1 - a valid single choice - actually sends '1'",
             cg.watcher.sent == [("s0", "1")])
 
-        # Finding 3: args left over after a subject is consumed used to
-        # vanish silently. action_toggle only CYCLES the arm level and
-        # cannot jump to a named one, so ":arm w2 insane" cannot honour
-        # "insane" - but it must say so, and it must still do what it CAN
-        # (cycle s1), not do nothing.
+        # This used to assert the OPPOSITE, and correctly so at the time:
+        # action_toggle could only CYCLE, so ":arm w2 insane" could not
+        # honour "insane" and had to say the argument was discarded. The
+        # verb table's whole point is that it no longer has to - action_arm
+        # SETS a named level, so the level is now honoured rather than
+        # apologised for. The order is `arm <level> <scope>`.
         chk("s1 starts unarmed", cg.watcher.sessions["s1"].mode == "off")
-        await cmd2("arm w2 insane")
-        chk(":arm w2 insane resolves the subject and moves to w2's row",
-            cg._selected_sid() == "s1")
-        chk(":arm w2 insane logs that the extra argument was ignored, "
-            "naming it - not a silent discard",
-            "arm: ignored extra argument(s) 'insane'" in logtext2())
-        chk(":arm w2 insane still cycles arm on s1 (what it CAN do)",
-            cg.watcher.sessions["s1"].mode == "safe")
-        chk(":arm w2 insane never jumps straight to insane - "
-            "action_toggle only cycles, and the table no longer promises "
-            "otherwise", cg.watcher.sessions["s1"].mode != "insane")
+        before_cursor2 = cg._selected_sid()
+        await cmd2("arm insane w2")
+        chk(":arm insane w2 jumps straight to the named level - what the "
+            "TUI could not do at all before (watcher.set_mode existed the "
+            "whole time and nothing could reach it)",
+            cg.watcher.sessions["s1"].mode == "insane")
+        chk(":arm insane w2 does NOT move the cursor - a scope names a "
+            "set, not a place to stand",
+            cg._selected_sid() == before_cursor2)
+        chk(":arm insane w2 reports what it resolved to, because the "
+            "target set came from one typed word",
+            "session w2" in logtext2())
         arm_cmd = next(c for c in _cmdmod2.CMD if c.name == "arm")
-        chk("the table's own args hint for arm no longer advertises a "
-            "level it cannot deliver",
-            "[level]" not in arm_cmd.args)
+        chk("the table's args hint now advertises the level it CAN deliver",
+            "[level]" in arm_cmd.args and "[scope]" in arm_cmd.args)
 
         # --- review round 3: an async action must not be called unawaited --
         # action_quit is `async def` - fn(*call_args) on a coroutine

@@ -169,10 +169,60 @@ def run():
     ok &= check("EXPOSE and NEVER_EXPOSE do not overlap",
                 commands.EXPOSE & commands.NEVER_EXPOSE == set())
 
+    ok = _verb_checks(ok)
     ok = _palette_checks(ok)
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
+def _verb_checks(ok):
+    """The table names CAPABILITIES, not keys.
+
+    A key is one frozen invocation of a verb - `a` is `arm safe all` - so a
+    capability can never again exist under two names because the operator
+    had no way to say the argument that distinguished them.
+    """
+    table = commands.CMD
+    names = {c.name for c in table}
+    by = {c.name: c for c in table}
+
+    for verb in ("arm", "disarm", "stop", "tell"):
+        ok &= check(f"{verb} is a command", verb in names)
+    ok &= check("arm takes a level and a scope",
+                by["arm"].args == "[level] [scope]")
+    ok &= check("disarm takes a scope", by["disarm"].args == "[scope]")
+    ok &= check("stop takes a scope", by["stop"].args == "[scope]")
+    ok &= check("tell takes a scope and a message",
+                by["tell"].args == "[scope] <message>")
+
+    for verb in ("arm", "disarm", "stop", "tell"):
+        ok &= check(f"{verb} is scope-aware", by[verb].scope)
+    for verb in ("hide", "shadow", "park"):
+        ok &= check(f"{verb} stays a single-session subject command",
+                    by[verb].subject and not by[verb].scope)
+
+    # armall/disarmall survive ONLY as invisible rows carrying their keys,
+    # so BINDINGS still has a table entry to agree with. They are not names.
+    for gone in ("armall", "disarmall"):
+        ok &= check(f"{gone} cannot be typed",
+                    not any(c.name == gone
+                            for c in commands.filter_cmds(gone, table)))
+    ok &= check("the a key fires `arm safe all`",
+                any(c.key == "a" and c.key_args == "safe all"
+                    and c.action == by["arm"].action for c in table))
+    ok &= check("the d key fires `arm off all`",
+                any(c.key == "d" and c.key_args == "off all"
+                    and c.action == by["arm"].action for c in table))
+    ok &= check("arm itself carries no fixed arguments",
+                by["arm"].key_args == "")
+
+    ok &= check("stop always demands the bang", by["stop"].confirm)
+    ok &= check("tell does not, so one session can be told immediately",
+                not by["tell"].confirm)
+
+    ok &= check("the table still validates", commands.validate(table) == [])
     return ok
 
 
