@@ -29,7 +29,7 @@ arm/disarm them with the arrow keys.
   ──────────── live terminal feed of the selected session shows below ────────────
 
   ↑↓ move · SPACE arm · s shadow · ENTER answer · 1/2/3 send · n go to tab · x hide · i park · b parked · v audit · f feed · t timers · E×2 extreme
-  a arm all · d disarm all · TAB swarm · p pause · ! stop/tell · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
+  a arm all · d disarm all · TAB swarm · p pause · / commands · ! stop/tell · , settings · R×2 restore · W×2 wipe · Z×2 zap · ? help · q quit
 ```
 
 The list is on top and the selected session's **live terminal feed** is stacked
@@ -469,7 +469,7 @@ can't silently auto-approve.)
 | `Enter` | **Send Enter** to the selected session (answer its prompt by hand) |
 | `1` `2` `3` | **Send that digit** to the selected session |
 | `Space` | Cycle arm: off -> `◉` safe -> `▲` wild -> `✦` insane -> off |
-| `a` / `d` | Arm all (safe) / disarm all |
+| `a` / `d` | **Arm all** (safe) / **disarm all** - the key forms of `arm safe all` and `arm off all` |
 | `s` | **Shadow-arm** the selected tab: dry-run only, never acts (see below) |
 | `p` | **Pause / resume** relay's acting: freezes approvals + deliveries, keeps watching (see below) |
 | `!` | **Intervene**: stop running sessions and/or broadcast to them (see [Intervene](#intervene-)) |
@@ -517,10 +517,19 @@ armed or not, **even in `--dry-run`**, because pressing a key is a deliberate
 human action, not automatic injection. So you can keep every session in manual
 mode and just use Relay as one place to navigate between them and answer.
 
-### Commands (`:`)
+### Commands (`/`)
 
-Press `:` to open a command line at the bottom of the panel. `TAB` completes
-the name you've typed so far, `ESC` cancels, and `ENTER` submits.
+Press `/` (or `:`, which shipped first and vim hands expect) to open the
+**command palette** at the bottom of the panel. Typing **filters** the list
+below it - by substring, not prefix, so `space` finds `workspaces` and you
+never have to know a command's first letters. `↑↓` moves the highlight,
+`ENTER` runs the highlighted row rather than the literal text, `TAB`
+completes the name you've typed, and `ESC` cancels.
+
+Opening the palette with an empty query lists **everything** you can do,
+with each verb's arguments beside it. That is the point of it: the palette
+is the answer to "what can I do here?", not a faster way to type a name you
+already know.
 
 Every capability in the panel - every key in the table above, plus a few
 that never had a key - is a named command, and the key bar, the `:`
@@ -533,20 +542,74 @@ be bound, completed, or shown, and one that is in it shows up everywhere by
 construction.
 
 Keys did not change - everything that had a key still has it. The key bar
-only shows eight of those entries, the ones used dozens of times an hour
-(move, arm, go to the tab, swarm view, pause, quit, send a digit); every
-other command kept its key, it simply left the one-line bar, and is still
-listed by key and by name (`:name`) in the `?` overlay.
+only shows the entries used dozens of times an hour (move, arm, answer, go
+to the tab, swarm view, pause, quit, help, the palette, send a digit); every
+other command kept its key, it simply left the bar, and is still listed by
+key and by name (`/name`) in the `?` overlay. The bar is built for your
+terminal's width: one line where everything fits, two where it doesn't,
+rather than dropping a label to make room.
 
-A command that acts on a session (`:arm`, `:shadow`, `:hide`, `:park`,
+#### Scope
+
+Four commands take a **scope** - `arm`, `disarm`, `stop` and `tell`:
+
+| scope | reaches |
+|-------|---------|
+| *(omitted)* | the selected row |
+| `all` | every session relay can act on |
+| `here` | every session in the selected row's workspace |
+| `<name>` | a session by its swarm name, else a workspace by directory name |
+
+A bare name resolves to a **session** first and a **workspace** second - a
+session name was something you assigned, where a workspace name is inferred
+from a path. `here` is the same workspace the roster groups by, so it means
+the rail you can see on screen.
+
+```
+arm safe all!        every session to SAFE          (what `a` does)
+arm insane w1        one session, straight to INSANE
+arm wild here!       everything launched in this directory
+disarm all!          everything to OFF              (what `d` does)
+stop!                brake the selected session
+stop! here           brake this workspace
+tell w1 rebase onto main
+tell! all hands off the db
+```
+
+Every scoped command **reports what it resolved to** and how many sessions
+it reached - the target set is computed from a word you typed, so you always
+see the list it became:
+
+```
+arm safe -> workspace ~/Work/relay: 4 session(s), 2 changed
+tell -> session w1: 1 session(s)
+```
+
+`arm` with no level **cycles** the selected row, exactly as `SPACE` does. A
+level **sets** it.
+
+A command that acts on one session (`:shadow`, `:hide`, `:park`,
 `:extreme`) defaults to the selected row, same as its key would. Name a
-session explicitly to target a different one: `:arm w1` moves the cursor to
-the session registered as `w1` and arms that one, leaving whatever was
-selected untouched.
+session explicitly to target a different one: `:hide w1` moves the cursor to
+the session registered as `w1` and hides that one, leaving whatever was
+selected untouched. (Scope commands differ deliberately: they never move the
+cursor, because a scope names a set rather than a place to stand.)
 
-Four commands are destructive and refuse to run without a trailing `!`:
-`:restore`, `:wipe`, `:zap`, `:extreme`. `:wipe` alone prints what it would
-do and stops there; `:wipe!` clears that gate and falls through to the same
+**`!` is required whenever a command reaches more than one session, and
+always for `stop`.** Without it the command says what it *would* reach and
+stops. A per-command list would miss the point: `tell w1 <msg>` and
+`tell all <msg>` are the same verb, and only the second one deserves a gate.
+Pressing a **key** is exempt - `a` is `arm safe all` and needs no bang,
+because the keystroke against the legend on the bar is already the
+deliberate act.
+
+The bang goes on the verb (`tell! all hands off the db`), or on the trailing
+scope for commands that take no message (`arm safe all!`) - never anywhere a
+`!` could be part of what you're sending.
+
+Four commands are destructive and refuse to run without a trailing `!`
+regardless of scope: `:restore`, `:wipe`, `:zap`, `:extreme`. `:wipe` alone
+prints what it would do and stops there; `:wipe!` clears that gate and falls through to the same
 arm-then-confirm safety its key (`W`) already uses - so from an unarmed
 state the first `:wipe!` arms it, exactly like a first `W` press, and it
 takes a second confirming `:wipe!` (or a `W` press) inside the countdown to
