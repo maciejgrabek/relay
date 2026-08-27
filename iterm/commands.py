@@ -248,6 +248,10 @@ def filter_cmds(query: str, table) -> List["Cmd"]:
     matches still rank above interior ones, so "au" puts `audit` on top rather
     than burying it under something that merely contains "au".
 
+    Only the first token is matched. Everything after the first space is this
+    command's ARGUMENTS, and a filter that swallowed them answered a
+    half-typed `arm all` with "no match" for a command that runs fine.
+
     An empty query returns every TYPEABLE command. Opening the palette IS the
     answer to "what can I do here?" - that is the whole point of it.
 
@@ -258,13 +262,29 @@ def filter_cmds(query: str, table) -> List["Cmd"]:
     `settingsright` up with it, which is where this was first noticed.
     """
     offered = [c for c in table if c.palette]
-    q = query.strip().lstrip("/:").lower()
+    # Only the VERB filters. The whole line used to be matched against
+    # command names, so the first space an operator typed turned a valid
+    # command into "no match for 'arm all'" - and every verb here that takes
+    # an argument was unreachable through the palette the moment its
+    # argument was typed. A trailing `!` is a suffix on the INVOCATION, not
+    # part of a name (see `parse`), so it comes off here too.
+    q = query.strip().lstrip("/:").split(" ")[0].rstrip("!").lower()
     if not q:
         return offered
     starts = [c for c in offered if c.name.lower().startswith(q)]
     inside = [c for c in offered
               if q in c.name.lower() and not c.name.lower().startswith(q)]
     return starts + inside
+
+
+def _palette_name(cmd) -> str:
+    """The name as the palette shows it, with the arguments it accepts.
+
+    A verb whose arguments are invisible is a verb nobody types correctly:
+    `arm` alone reads as a toggle, where `arm [level] [scope]` hands over the
+    whole grammar without anyone having to open `?` to find it.
+    """
+    return f"{cmd.name} {cmd.args}".strip() if cmd.args else cmd.name
 
 
 def palette_lines(query: str, table, cursor: int, width: int,
@@ -284,12 +304,12 @@ def palette_lines(query: str, table, cursor: int, width: int,
     first = max(0, min(cursor - limit + 1, len(matches) - limit))
     first = max(0, first)
     window = matches[first:first + limit]
-    name_w = max((len(c.name) for c in window), default=0)
+    name_w = max((len(_palette_name(c)) for c in window), default=0)
     out = []
     for i, cmd in enumerate(window, start=first):
         mark = "\u25b8" if i == cursor else " "
         out.append(_fit_line(
-            f" {mark} {cmd.name:<{name_w}}  {cmd.help}", width))
+            f" {mark} {_palette_name(cmd):<{name_w}}  {cmd.help}", width))
     hidden = len(matches) - len(window)
     if hidden > 0:
         out.append(_fit_line(

@@ -242,6 +242,28 @@ def _palette_checks(ok):
                 [c.name for c in commands.filter_cmds("/au", table)]
                 == [c.name for c in commands.filter_cmds("au", table)])
 
+    # An ARGUMENT must not break the filter. The whole line was matched
+    # against command names, so `arm all` - a valid command - rendered
+    # "no match for 'arm all'" the instant the space was typed, and every
+    # verb in this table that takes an argument became unreachable through
+    # the palette the moment its argument was typed.
+    ok &= check("a verb with an argument still matches its command",
+                [c.name for c in commands.filter_cmds("arm all", table)]
+                == [c.name for c in commands.filter_cmds("arm", table)])
+    ok &= check("...and with several arguments",
+                any(c.name == "arm"
+                    for c in commands.filter_cmds("arm safe here", table)))
+    ok &= check("trailing whitespace alone does not narrow anything",
+                [c.name for c in commands.filter_cmds("arm ", table)]
+                == [c.name for c in commands.filter_cmds("arm", table)])
+    ok &= check("a bang on the verb still matches",
+                any(c.name == "wipe"
+                    for c in commands.filter_cmds("wipe!", table)))
+
+    hinted = commands.palette_lines("ws", table, 0, 70)
+    ok &= check("a verb's arguments are shown in its palette row",
+                any("save|up|list|rm" in l for l in hinted))
+
     lines = commands.palette_lines("", table, 0, 70, limit=5)
     ok &= check("palette renders at most `limit` rows plus a footer",
                 len(lines) <= 6)
