@@ -3207,12 +3207,13 @@ class RelayApp(App):
         # session and should fire, `tell all <msg>` is every session and
         # should not, and they are the same verb. `stop` keeps an
         # unconditional gate on top, because it interrupts work in flight.
-        # `parse` takes the bang off the VERB (`:wipe!`), which is the only
-        # place it can safely look: a `!` anywhere in `tell w1 ship it!` is
-        # message text, not a confirmation. For a scope verb that carries no
-        # free text, though, `arm safe all!` is what an operator actually
-        # types - the bang belongs to the invocation and lands on its last
-        # word. Allowed there, and nowhere near a message.
+        # `parse` takes the bang off either end of the VERB - `!stop` and
+        # `stop!` are one flag. This handles the third place an operator
+        # reaches for it: the end of the whole line, `arm safe all!`. It is
+        # allowed only for a verb with NO free text, because a `!` at the
+        # end of `tell w1 ship it!` is a message, not a confirmation. The
+        # leading form has no such restriction, which is exactly why it is
+        # the one the docs lead with.
         if cmd.scope and cmd.name != "tell" and args and args[-1].endswith("!"):
             args = args[:-1] + [args[-1].rstrip("!")]
             args = [a for a in args if a]

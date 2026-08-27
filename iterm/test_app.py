@@ -2836,8 +2836,13 @@ async def go():
         await typed("stop")
         chk("stop refuses without the bang even on ONE session",
             sc._intervene_calls == [])
+        await typed("!stop")
+        chk("!stop brakes - the leading bang is the primary form",
+            len(sc._intervene_calls) == 1)
+        sc._intervene_calls.clear()
         await typed("stop!")
-        chk("stop! brakes", len(sc._intervene_calls) == 1)
+        chk("stop! brakes too - the vim form still works", 
+            len(sc._intervene_calls) == 1)
         chk("...through the overlay's own execute path, in stop mode",
             sc._intervene_calls[-1][0] == "stop")
 
@@ -2856,7 +2861,7 @@ async def go():
         await typed("tell all hands off the db")
         chk("tell at a multi-session scope refuses without the bang",
             sc._intervene_calls == [])
-        await typed("tell! all hands off the db")
+        await typed("!tell all hands off the db")
         chk("...and fires with the bang on the verb, where a bang in "
             "the message text cannot be mistaken for one",
             len(sc._intervene_calls) == 1)

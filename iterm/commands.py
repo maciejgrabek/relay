@@ -176,19 +176,34 @@ def validate(table) -> List[str]:
 def parse(line: str) -> Tuple[str, List[str], bool]:
     """A typed line into (verb, args, confirmed).
 
-    Trailing `!` characters are a suffix on the INVOCATION, not part of a name:
-    `:wipe!`, `:wipe!!`, and `:wipe !` all resolve to the `wipe` entry with
-    confirmed set. Completion therefore never offers a name ending in `!`.
+    A `!` is a mark on the INVOCATION, not part of a name. It is accepted at
+    either end of the VERB: `:wipe!`, `:wipe!!` and `:wipe !` are the vim
+    form the `:` opener already borrows from, and `!wipe` is the same thing
+    written first.
+
+    The LEADING form is the one that always works, and that is why it exists.
+    A trailing bang is only unambiguous while nothing else can occupy the end
+    of the line - the moment a verb takes free text, `tell w1 ship it!` ends
+    in a message rather than a confirmation, and no amount of parsing can
+    tell those apart. A prefix sits where message text can never be, so it
+    needs no exception for any verb, present or future.
+
+    Completion therefore never offers a name carrying a bang at either end.
     """
-    parts = line.strip().lstrip(":").split()
-    if not parts:
-        return "", [], False
+    line = line.strip().lstrip("/:").strip()
     bang = False
+    if line.startswith("!"):
+        bang = True
+        line = line.lstrip("!").strip()
+    parts = line.split()
+    if not parts:
+        return "", [], bang
     if parts[-1] == "!":
         bang = True
         parts = parts[:-1]
         if not parts:
             return "", [], True
+
     verb = parts[0]
     # Strip ALL trailing ! and set confirmed if there was at least one
     original_verb = verb
@@ -291,7 +306,8 @@ def filter_cmds(query: str, table) -> List["Cmd"]:
     # an argument was unreachable through the palette the moment its
     # argument was typed. A trailing `!` is a suffix on the INVOCATION, not
     # part of a name (see `parse`), so it comes off here too.
-    q = query.strip().lstrip("/:").split(" ")[0].rstrip("!").lower()
+    q = (query.strip().lstrip("/:").strip().lstrip("!").strip()
+         .split(" ")[0].rstrip("!").lower())
     if not q:
         return offered
     starts = [c for c in offered if c.name.lower().startswith(q)]

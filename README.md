@@ -566,14 +566,14 @@ from a path. `here` is the same workspace the roster groups by, so it means
 the rail you can see on screen.
 
 ```
-arm safe all!        every session to SAFE          (what `a` does)
+!arm safe all        every session to SAFE          (what `a` does)
 arm insane w1        one session, straight to INSANE
-arm wild here!       everything launched in this directory
-disarm all!          everything to OFF              (what `d` does)
-stop!                brake the selected session
-stop! here           brake this workspace
+!arm wild here       everything launched in this directory
+!disarm all          everything to OFF              (what `d` does)
+!stop                brake the selected session
+!stop here           brake this workspace
 tell w1 rebase onto main
-tell! all hands off the db
+!tell all hands off the db
 ```
 
 Every scoped command **reports what it resolved to** and how many sessions
@@ -603,9 +603,17 @@ Pressing a **key** is exempt - `a` is `arm safe all` and needs no bang,
 because the keystroke against the legend on the bar is already the
 deliberate act.
 
-The bang goes on the verb (`tell! all hands off the db`), or on the trailing
-scope for commands that take no message (`arm safe all!`) - never anywhere a
-`!` could be part of what you're sending.
+**Put the `!` first.** `!stop`, `!tell all stand down`, `!arm safe all` -
+the front of the line is the one place a `!` can never be part of what
+you're sending, so the leading form works for every command without an
+exception to remember. It also matches the order you think in: you decide to
+force before you type the verb, not after going back to the end.
+
+The vim form still works, because `:` does: a bang on the verb (`stop!`,
+`:wipe!`) or at the end of a command that takes no message (`arm safe all!`)
+means the same thing. What it can't do is sit at the end of a message -
+`tell w1 ship it!` sends the exclamation mark, it doesn't confirm anything,
+and that ambiguity is exactly why the prefix is the form to reach for.
 
 Four commands are destructive and refuse to run without a trailing `!`
 regardless of scope: `:restore`, `:wipe`, `:zap`, `:extreme`. `:wipe` alone

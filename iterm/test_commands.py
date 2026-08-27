@@ -138,6 +138,32 @@ def run():
                 commands.parse("wipe!!!") == ("wipe", [], True))
     ok &= check("parse of a lone bang yields no verb but confirmed",
                 commands.parse("!") == ("", [], True))
+    # A LEADING bang is the position-independent form, and the reason it
+    # exists: `!` at the end of a line is ambiguous the moment a verb takes
+    # free text (`tell w1 ship it!` ends in message, not confirmation), so
+    # the suffix needed an exception for `tell` that a prefix never needs.
+    ok &= check("parse strips a leading bang",
+                commands.parse("!stop") == ("stop", [], True))
+    ok &= check("a leading bang carries its arguments through",
+                commands.parse("!arm safe all")
+                == ("arm", ["safe", "all"], True))
+    ok &= check("a leading bang survives a palette prefix",
+                commands.parse("/!stop") == ("stop", [], True))
+    ok &= check("a spaced leading bang works too",
+                commands.parse("! stop") == ("stop", [], True))
+    ok &= check("a leading bang leaves a message's own bang alone",
+                commands.parse("!tell w1 ship it!")
+                == ("tell", ["w1", "ship", "it!"], True))
+    ok &= check("no bang anywhere is still no bang",
+                commands.parse("tell w1 ship it!")
+                == ("tell", ["w1", "ship", "it!"], False))
+    ok &= check("a lone leading bang yields no verb but confirmed",
+                commands.parse("!") == ("", [], True))
+
+    ok &= check("the palette filters past a leading bang",
+                [c.name for c in commands.filter_cmds("!sto", table)]
+                == [c.name for c in commands.filter_cmds("sto", table)])
+
     ok &= check("completion never offers a bang",
                 not any(n.endswith("!") for n in commands.complete("", table)))
 
