@@ -1638,8 +1638,83 @@ def test_intervene_targets():
     return ok
 
 
+def test_resolve_scope():
+    print()
+    print("--- resolve_scope ---")
+    ok = True
+
+    def row(sid, name="", ws="", shell=False, working=False):
+        return {"sid": sid, "name": name, "project": "", "workspace": ws,
+                "is_shell": shell, "working": working}
+
+    rows = [
+        row("own", ws="/Users/x/Work/relay"),
+        row("s1", name="w1", ws="/Users/x/Work/relay", working=True),
+        row("s2", name="w2", ws="/Users/x/Work/relay"),
+        row("s3", name="w3", ws="/Users/x/Work/other"),
+        row("sh", ws="/Users/x/Work/relay", shell=True),
+    ]
+
+    def R(tok, sel="s1", **k):
+        return swarm.resolve_scope(tok, rows, sel, "own", **k)
+
+    kind, label, t = R("")
+    ok &= check("an empty token is the selected row",
+                kind == "selected" and [r["sid"] for r in t] == ["s1"])
+
+    kind, label, t = R("all")
+    ok &= check("`all` reaches every controllable session",
+                kind == "all" and {r["sid"] for r in t} == {"s1", "s2", "s3"})
+    ok &= check("`all` never includes relay's own tab",
+                all(r["sid"] != "own" for r in t))
+    ok &= check("`all` excludes a shell tab by default",
+                all(r["sid"] != "sh" for r in t))
+
+    kind, label, t = R("all", allow_shell=True)
+    ok &= check("allow_shell lets arm reach a shell tab",
+                {r["sid"] for r in t} == {"s1", "s2", "s3", "sh"})
+
+    kind, label, t = R("here")
+    ok &= check("`here` is the selected row's workspace",
+                kind == "workspace" and {r["sid"] for r in t} == {"s1", "s2"})
+    ok &= check("`here` names the directory it resolved to", "relay" in label)
+
+    kind, label, t = R("w3")
+    ok &= check("a registry name resolves to that one session",
+                kind == "session" and [r["sid"] for r in t] == ["s3"])
+    ok &= check("a session resolution says so in the label",
+                label == "session w3")
+
+    kind, label, t = R("other")
+    ok &= check("a workspace basename resolves to its whole directory",
+                kind == "workspace" and [r["sid"] for r in t] == ["s3"])
+
+    # A name that is BOTH a session name and a workspace basename takes the
+    # session: a session name was assigned on purpose, a basename is
+    # inferred from a path.
+    both = rows + [row("s9", name="other", ws="/Users/x/Work/nine")]
+    kind, label, t = swarm.resolve_scope("other", both, "s1", "own")
+    ok &= check("session beats workspace when both match",
+                kind == "session" and [r["sid"] for r in t] == ["s9"])
+
+    kind, label, t = R("nosuchthing")
+    ok &= check("an unknown token resolves to nothing",
+                kind == "none" and t == [])
+    ok &= check("...and the label carries the token back for the report",
+                "nosuchthing" in label)
+
+    kind, label, t = swarm.resolve_scope("here", [row("own", ws="")], "own",
+                                         "own")
+    ok &= check("a zero-target resolution is not a silent success", t == [])
+
+    print()
+    print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
 if __name__ == "__main__":
     ok = run()
+    ok = test_resolve_scope() and ok
     ok = test_intervene_targets() and ok
     ok = test_session_working() and ok
     ok = test_input_row_and_drafts() and ok

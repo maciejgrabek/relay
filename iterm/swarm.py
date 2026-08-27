@@ -913,6 +913,64 @@ def is_shell_job(job: str) -> bool:
 
 # --- intervene: target selection and counts ------------------------------------
 
+def resolve_scope(token, rows, selected_sid: str, own_sid: str,
+                  allow_shell: bool = False) -> tuple:
+    """A typed scope token into the sessions it names.
+
+    Returns `(kind, label, targets)`. `kind` is "selected" | "all" |
+    "workspace" | "session" | "none"; `label` is written for the line the
+    operator reads back; `targets` are row dicts, never bare sids, because
+    every caller needs `working` and `name` off them anyway.
+
+    The target set is COMPUTED from a single word, so a caller that does not
+    report what it resolved to is asking the operator to trust a list they
+    cannot see. `kind` and `label` exist to make that report impossible to
+    forget.
+
+    `allow_shell` is the one axis on which the verbs differ: arming an idle
+    shell tab is harmless, where ESC into someone's vim is rude and a typed
+    message would be RUN by a shell. It defaults to False so the dangerous
+    verbs get the safe default and `arm` has to opt out deliberately.
+
+    Arm level is never a filter here, for the same reason intervene_targets
+    does not filter on it: a brake that stops only the sessions you
+    remembered to arm is a bad brake.
+    """
+    usable = [r for r in rows
+              if r["sid"] != own_sid and (allow_shell or not r["is_shell"])]
+    tok = (token or "").strip()
+
+    if not tok:
+        sel = [r for r in usable if r["sid"] == selected_sid]
+        return ("selected", "the selected session", sel)
+
+    if tok == "all":
+        return ("all", "all sessions", usable)
+
+    if tok == "here":
+        # The workspace the ROSTER draws, not the registry's project: `here`
+        # has to mean the rail the operator can see on screen, or the word
+        # means two different things in two places.
+        cur = next((r for r in rows if r["sid"] == selected_sid), None)
+        ws = (cur or {}).get("workspace") or ""
+        if not ws:
+            return ("none", "here (this tab has no workspace)", [])
+        return ("workspace", f"workspace {ws}",
+                [r for r in usable if r.get("workspace") == ws])
+
+    named = [r for r in usable if r.get("name") == tok]
+    if named:
+        return ("session", f"session {tok}", named)
+
+    ws_match = [r for r in usable
+                if r.get("workspace")
+                and os.path.basename(r["workspace"].rstrip("/")) == tok]
+    if ws_match:
+        return ("workspace", f"workspace {ws_match[0]['workspace']}", ws_match)
+
+    return ("none", f"no session or workspace named {tok!r}", [])
+
+
 def intervene_targets(rows, scope: str, selected_sid: str,
                       own_sid: str) -> list:
     """Which sessions an intervention reaches, for one scope.
@@ -931,17 +989,23 @@ def intervene_targets(rows, scope: str, selected_sid: str,
     surfaces it by showing the count, so widening to ALL visibly changes the
     number.
     """
+    if scope == "selected":
+        return resolve_scope("", rows, selected_sid, own_sid)[2]
+    if scope == "all":
+        return resolve_scope("all", rows, selected_sid, own_sid)[2]
+    # PROJECT is the OVERLAY's own scope and stays registry-derived. It is
+    # deliberately not the typed grammar's `here`: an unregistered tab has no
+    # project at all (the overlay surfaces that by showing the count), where
+    # `here` keys on the workspace the roster actually draws. Two words, two
+    # meanings, both correct in their own place - collapsing them would
+    # silently change what the `!` overlay reaches.
     usable = [r for r in rows
               if r["sid"] != own_sid and not r["is_shell"]]
-    if scope == "selected":
-        return [r for r in usable if r["sid"] == selected_sid]
-    if scope == "project":
-        sel = next((r for r in rows if r["sid"] == selected_sid), None)
-        project = (sel or {}).get("project") or ""
-        if not project:
-            return []
-        return [r for r in usable if r["project"] == project]
-    return usable
+    sel = next((r for r in rows if r["sid"] == selected_sid), None)
+    project = (sel or {}).get("project") or ""
+    if not project:
+        return []
+    return [r for r in usable if r["project"] == project]
 
 
 def intervene_counts(targets) -> tuple:
