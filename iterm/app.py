@@ -2188,8 +2188,14 @@ class RelayApp(App):
             # second later - so the fallback is WHERE THEY WERE, and only the
             # exact row is negotiable.
             target = self._row_index_near(prev_sid, prev_row)
-            target = self._nearest_selectable(
-                target if target is not None else prev_row)
+            if target is not None:
+                # A remembered session, relay's own row included: respect it.
+                target = self._nearest_selectable(target)
+            else:
+                # No remembered session - a first paint, or the row they were
+                # on is gone. Prefer a real session over relay's own row,
+                # which every session-acting verb refuses anyway.
+                target = self._nearest_selectable(prev_row, avoid_own=True)
             if target is not None:
                 table.move_cursor(row=target)
         # Status line: live armed-count + total approvals.
@@ -2599,14 +2605,19 @@ class RelayApp(App):
             return
         n = len(self._row_sids)
         last = getattr(self, "_last_cursor_row", 0)
-        if 0 <= row < n and self._row_sids[row] is None:
+        # This, not _move_cursor, is what actually skips a row: the DataTable
+        # has focus and its OWN up/down bindings win, so the cursor lands
+        # first and gets bounced off here. Relay's own row bounces like a
+        # divider - it is display-only, every session-acting verb refuses it,
+        # and resting there means every key answers with a refusal.
+        if 0 <= row < n and self._nav_skips(row):
             step = 1 if row >= last else -1
             r = row + step
-            while 0 <= r < n and self._row_sids[r] is None:
+            while 0 <= r < n and self._nav_skips(r):
                 r += step
             if not 0 <= r < n:                    # ran off the end: turn back
                 r = row - step
-                while 0 <= r < n and self._row_sids[r] is None:
+                while 0 <= r < n and self._nav_skips(r):
                     r -= step
             if 0 <= r < n:
                 table.move_cursor(row=r)
@@ -4282,14 +4293,39 @@ class RelayApp(App):
             return
         self._move_cursor(+1)
 
+    def _nav_skips(self, row: int) -> bool:
+        """Rows the ARROW KEYS fly past: the dividers, and relay's own tab.
+
+        Relay's own row is display-only by design - every session-acting verb
+        refuses it - so stopping there means every key answers with a
+        refusal, and it sits inside its own workspace group among the
+        sessions you actually drive. Skipping is only for NAVIGATION: a click
+        still selects it, because the panel it shows (this run's tallies, the
+        db path, the orphan warning, and the "open a tab and start a job"
+        text a first run has nothing else to say) has to stay reachable.
+        """
+        if not 0 <= row < len(self._row_sids):
+            return False
+        sid = self._row_sids[row]
+        if sid is None:
+            return True
+        if self._own_sid is None or sid != self._own_sid:
+            return False
+        # The exception that keeps a first run usable: when relay's own row
+        # is the ONLY session, it is where the cursor has to be - its panel
+        # is the only thing on screen with anything to say, and bouncing off
+        # it would leave an empty selection and no instructions.
+        return any(s is not None and s != self._own_sid
+                   for s in self._row_sids)
+
     def _move_cursor(self, step: int) -> None:
-        # Move one row, skipping the non-selectable divider (sid is None).
+        # Move one row, skipping what navigation flies past - see _nav_skips.
         table = self.query_one(DataTable)
         n = len(self._row_sids)
         if n == 0:
             return
         r = table.cursor_row + step
-        while 0 <= r < n and self._row_sids[r] is None:
+        while 0 <= r < n and self._nav_skips(r):
             r += step
         if 0 <= r < n:
             table.move_cursor(row=r)
@@ -4305,16 +4341,31 @@ class RelayApp(App):
             return None
         return min(occ, key=lambda i: abs(i - near_row))
 
-    def _nearest_selectable(self, row: int):
-        """Return the nearest row index whose sid is not the divider (None),
-        searching outward from `row`. None if there are no selectable rows."""
+    def _nearest_selectable(self, row: int, avoid_own: bool = False):
+        """Nearest row index that is not a divider, searching outward.
+
+        `avoid_own` additionally prefers a real session over relay's own row,
+        falling back to it only when there is nothing else - which is exactly
+        a first run, where that row's panel is the only thing on screen with
+        anything to say.
+
+        It is off by default on purpose. A refresh runs every second, and an
+        operator who CLICKED relay's own row to read its tallies must not be
+        yanked off it a second later. Only a placement with no remembered
+        session asks to avoid it.
+        """
         n = len(self._row_sids)
         if n == 0:
             return None
         row = max(0, min(row, n - 1))
-        for d in range(n):
-            for r in (row - d, row + d):
-                if 0 <= r < n and self._row_sids[r] is not None:
+        for skip_own in ((True, False) if avoid_own else (False,)):
+            for d in range(n):
+                for r in (row - d, row + d):
+                    if not 0 <= r < n or self._row_sids[r] is None:
+                        continue
+                    if skip_own and self._own_sid is not None \
+                            and self._row_sids[r] == self._own_sid:
+                        continue
                     return r
         return None
 

@@ -2516,8 +2516,18 @@ async def go():
         await pilot.press("escape")
         await pilot.pause()
 
-        t2.move_cursor(row=ao2._row_sids.index("panel"))
+        # The cursor now BOUNCES off relay's own row whenever a real session
+        # exists, so this scenario has to be built the only way it can still
+        # happen: relay's tab alone, which is a first run - and which is
+        # exactly when the guard has to hold, because that IS where the
+        # cursor legitimately rests.
+        ao2.watcher.sessions.pop("unreg", None)
+        ao2.watcher.sessions.pop("reg", None)
+        ao2._refresh()
         await pilot.pause()
+        chk("with relay's tab alone the cursor does rest on it, so the "
+            "SELECTED guard below is still reachable",
+            ao2._selected_sid() == "panel")
         await pilot.press("exclamation_mark")
         await pilot.press("left")         # project -> selected: lands on own row
         await pilot.pause()
@@ -2774,6 +2784,88 @@ async def go():
             "of guessing",
             "the selected session" in
             "\n".join(ne.query_one(appmod.Log).lines))
+
+    # --- relay's own row is not a place the cursor stops ---------------------
+    # It is display-only by design: every session-acting verb already refuses
+    # it, so landing there means every key you press answers with a refusal.
+    # The arrow keys fly past it the way they already fly past the NEEDS
+    # ACTION divider. A CLICK still selects it, because the panel it shows
+    # (this run's tallies, the db path, the orphan warning, and the "open a
+    # tab and start a job" text a first run needs) has to stay reachable.
+    ow = _TestApp({
+        "s0": SessionInfo("s0", title="one", window_idx=0, tab_idx=0,
+                          last_screen=["x"]),
+        "own": SessionInfo("own", title="RELAY CONSOLE", window_idx=0,
+                           tab_idx=1, last_screen=["x"]),
+        "s2": SessionInfo("s2", title="two", window_idx=0, tab_idx=2,
+                          last_screen=["x"]),
+    }, dry_run=True)
+    async with ow.run_test() as pilot:
+        await pilot.pause()
+        ow._own_sid = "own"
+        ow._refresh()
+        await pilot.pause()
+        grid = ow.query_one(appmod.DataTable)
+        own_row = ow._row_sids.index("own") if "own" in ow._row_sids else -1
+        chk("relay's own row is in the list (it is not being hidden)",
+            own_row >= 0)
+
+        # Walk the whole list in both directions and never land on it.
+        grid.move_cursor(row=0)
+        await pilot.pause()
+        seen = []          # only what NAVIGATION lands on, not the start
+        for _ in range(len(ow._row_sids) + 2):
+            await pilot.press("down")
+            await pilot.pause()
+            seen.append(ow._selected_sid())
+        for _ in range(len(ow._row_sids) + 2):
+            await pilot.press("up")
+            await pilot.pause()
+            seen.append(ow._selected_sid())
+        chk(f"arrow keys never land on relay's own row (visited {set(seen)})",
+            "own" not in seen)
+        chk("...and the real sessions are all still reachable",
+            {"s0", "s2"} <= set(seen))
+
+        # First paint prefers a real session over relay's own row.
+        fresh = _TestApp({
+            "own": SessionInfo("own", title="RELAY CONSOLE", window_idx=0,
+                               tab_idx=0, last_screen=["x"]),
+            "s9": SessionInfo("s9", title="real", window_idx=0, tab_idx=1,
+                              last_screen=["x"]),
+        }, dry_run=True)
+        async with fresh.run_test() as p2:
+            await p2.pause()
+            fresh._own_sid = "own"
+            fresh._refresh()
+            await p2.pause()
+            chk("a first paint lands on a real session, not relay's own row",
+                fresh._selected_sid() == "s9")
+
+        # ...but with nothing else, it lands there, because that row's panel
+        # is the only thing on a first run with anything to say.
+        alone = _TestApp({
+            "own": SessionInfo("own", title="RELAY CONSOLE", window_idx=0,
+                               tab_idx=0, last_screen=["x"]),
+        }, dry_run=True)
+        async with alone.run_test() as p3:
+            await p3.pause()
+            alone._own_sid = "own"
+            alone._refresh()
+            await p3.pause()
+            chk("with no other session it lands on relay's own row, so a "
+                "first run is not an empty list with no instructions",
+                alone._selected_sid() == "own")
+
+        # The cursor cannot REST there by any means. The DataTable owns the
+        # arrow keys, so the skip is a bounce after the fact, and a bounce
+        # cannot tell a keypress from a click - landing there at all is what
+        # is prevented, not one route to it.
+        if own_row >= 0:
+            grid.move_cursor(row=own_row)
+            await pilot.pause()
+            chk("the cursor bounces off relay's own row rather than resting "
+                "on it", ow._selected_sid() != "own")
 
     # --- scope verbs: arm / disarm / stop / tell -----------------------------
     # The whole point of the verb table: one capability with an argument,

@@ -76,7 +76,15 @@ def run():
     chk("nothing armed = off-duty idle",
         MS("STABLE", alarmed=False, working=False) == "idle")
 
-    F = app.mascot_face_big
+    # PIN THE SKIN. mascot_face_big defaults to ACTIVE_MASCOT, which
+    # app.py reads from the operator's own config at import time - so these
+    # assertions, which name glyphs belonging to the `crt` body (⊙, x  x, ░,
+    # and the ╭ indent that marks the shake), passed or failed depending on
+    # whose machine ran them. Changing the mascot in the settings editor was
+    # enough to turn the suite red with nothing wrong in the code.
+    def F(*a, **k):
+        k.setdefault("skin", "crt")
+        return app.mascot_face_big(*a, **k)
     f_alarm = F(0, "☢ CRITICAL", awaiting=2, working=True)
     chk("alarmed face: wide eyes, beacon, and the COUNT in its bubble",
         any("⊙" in l for l in f_alarm) and any("‼" in l for l in f_alarm)
