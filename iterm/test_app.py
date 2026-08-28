@@ -2907,6 +2907,42 @@ async def go():
             wild_prefix == "wild"
             and sc.watcher.sessions["s2"].mode == "wild")
 
+        # `timer <minutes> <message>` - the spec's own rule (section 6) puts
+        # this on the verb side of the line: it names its target (the
+        # selected session) and its arguments completely, so it needs no
+        # picker. The OVERLAY stays for reading and cancelling.
+        if sc._modal_open:
+            await pilot.press("escape")
+            await pilot.pause()
+        import db as _tdb
+        conn = sc._swarm_db_conn()
+        await typed("timers 30 check the build")
+        rows = list(_tdb.list_timers(conn, "s1"))
+        chk(f"`timers 30 <msg>` binds a timer to the selected session "
+            f"(got {len(rows)})", len(rows) == 1)
+        if rows:
+            chk("...at the minutes given", rows[0]["interval_min"] == 30)
+            chk("...carrying the whole rest of the line as the payload",
+                rows[0]["payload"] == "check the build")
+
+        before = len(list(_tdb.list_timers(conn, "s1")))
+        await typed("timers soon check the build")
+        chk("a non-numeric interval is refused, not clamped to 1 silently",
+            len(list(_tdb.list_timers(conn, "s1"))) == before)
+        await typed("timers 30")
+        chk("a timer with no payload is refused",
+            len(list(_tdb.list_timers(conn, "s1"))) == before)
+        # Bare `timers` must still be the OVERLAY, not a refusal - the same
+        # shape `arm` has, where bare cycles and an argument sets.
+        chk("the timers overlay is closed before the bare call",
+            not sc._timers_visible)
+        await typed("timers")
+        chk("bare `timers` opens the overlay rather than binding anything",
+            sc._timers_visible
+            and len(list(_tdb.list_timers(conn, "s1"))) == before)
+        await pilot.press("escape")
+        await pilot.pause()
+
         # The KEY path is exempt from the bang: a keystroke against the
         # legend on the bar is already the deliberate act.
         if sc._modal_open:

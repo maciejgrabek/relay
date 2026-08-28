@@ -3029,7 +3029,54 @@ class RelayApp(App):
             self._swarm_db = swarmdb.connect()
         return self._swarm_db
 
-    def action_timers(self) -> None:
+    def _timer_bind(self, rest: str) -> None:
+        """`timers <minutes> <message>` on the selected session.
+
+        A non-numeric interval is REFUSED rather than clamped.
+        clamp_interval turns junk into 1, which is right for a form where the
+        operator can see the field and wrong here: `timers soon check the
+        build` would silently become a one-minute timer whose payload lost
+        its first word.
+        """
+        import timers as _timers
+        log = self.query_one(Log)
+        parts = (rest or "").strip().split(" ", 1)
+        if len(parts) < 2 or not parts[0].lstrip("-").isdigit():
+            log.write_line("timer: usage :timer <minutes> <message>")
+            return
+        payload = _timers.sanitize_payload(parts[1])
+        if not payload:
+            log.write_line("timer: needs something to send")
+            return
+        sid = self._selected_sid()
+        if sid is None:
+            log.write_line("timer: no session selected")
+            return
+        if sid == self._own_sid:
+            log.write_line(
+                "timer: relay never fires into its own panel tab")
+            return
+        interval = _timers.clamp_interval(parts[0])
+        info = self.watcher.sessions.get(sid) if self.watcher else None
+        swarmdb.add_timer(self._swarm_db_conn(), iterm_session_id=sid,
+                          label=info.title if info else sid,
+                          interval_min=interval, payload=payload,
+                          mode="idle")
+        log.write_line(
+            f"timer -> {info.title if info else sid}: every {interval}m, "
+            f"{payload!r}")
+
+    def action_timers(self, rest: str = "") -> None:
+        """Bare: the overlay, to read and cancel. With arguments: bind one.
+
+        Same shape as `arm`, which cycles bare and sets when given a level.
+        The key (`t`) passes nothing, so it always means the overlay.
+        """
+        if (rest or "").strip():
+            if self._any_overlay_open():
+                return
+            self._timer_bind(rest)
+            return
         if self._swarm_visible:
             self.action_swarm_view()
         if self._settings_visible:
@@ -3297,10 +3344,11 @@ class RelayApp(App):
                 # what the entry advertises (cmd.args, a literal "a|b|c"
                 # enum) - ":digit foo" typed the string "foo" into the
                 # session as keystrokes instead of refusing it.
-                if cmd.scope:
-                    # A scope verb takes the raw remainder, not one token
-                    # out of an enum: `tell all hands off the db` is a scope
-                    # and five words of message.
+                if cmd.scope or cmd.raw_args:
+                    # Takes the raw remainder, not one token out of an enum:
+                    # `tell all hands off the db` is a scope and five words
+                    # of message, and `timer 30 check the build` is an
+                    # interval and three more.
                     call_args = (" ".join(args),)
                 else:
                     choices = cmd.args.split("|") if cmd.args else []
@@ -3316,7 +3364,7 @@ class RelayApp(App):
                 # insane - action_toggle only cycles), so name what was
                 # ignored instead of pretending it was consumed.
                 call_args = ()
-                if cmd.scope:
+                if cmd.scope or cmd.raw_args:
                     call_args = (" ".join(args),)
                 elif args:
                     log.write_line(f"{cmd.name}: ignored extra argument(s) "

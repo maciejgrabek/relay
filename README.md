@@ -588,6 +588,13 @@ tell -> session w1: 1 session(s)
 `arm` with no level **cycles** the selected row, exactly as `SPACE` does. A
 level **sets** it.
 
+`timers` has the same shape: bare it opens the overlay to read and cancel,
+and with arguments it binds one without opening anything -
+`timers 30 check the build` fires that text into the selected session every
+30 minutes. A non-numeric interval is refused rather than quietly clamped,
+so `timers soon check the build` tells you the usage instead of becoming a
+one-minute timer that ate its own first word.
+
 A command that acts on one session (`:shadow`, `:hide`, `:park`,
 `:extreme`) defaults to the selected row, same as its key would. Name a
 session explicitly to target a different one: `:hide w1` moves the cursor to

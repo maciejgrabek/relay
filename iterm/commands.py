@@ -57,6 +57,12 @@ class Cmd:
                                # `subject`: a subject names ONE session and
                                # moves the cursor to it, where a scope names
                                # a SET and moves nothing.
+    raw_args: bool = False    # the action takes the WHOLE remainder as one
+                               # string rather than one token from an enum.
+                               # `scope` implies this; a verb with a free-text
+                               # tail (`timer 30 check the build`) needs it
+                               # without being scope-aware, because a timer
+                               # binds to one session and has no set to name.
     key_args: str = ""        # the fixed arguments this entry's KEY fires
                                # with. `a` is not a capability of its own, it
                                # is `arm safe all` on one press. Keeping the
@@ -452,8 +458,20 @@ CMD = (
         action="action_audit_view", key="v"),
     Cmd(name="feed", help="show or hide the live terminal feed",
         action="action_toggle_preview", key="f"),
-    Cmd(name="timers", help="timers bound to the selected session",
-        action="action_timers", key="t"),
+    # One name, the same shape `arm` has: bare `timers` opens the overlay to
+    # read and cancel, and `timers 30 check the build` BINDS one without
+    # opening anything. A separate `timer` entry would have been the better
+    # read, but `timer` is a worker-protocol verb (NEVER_EXPOSE) and
+    # validate() refuses a name that means two things across surfaces.
+    #
+    # Binding earns arguments because it names its target (the selected
+    # session) and its arguments completely - no picker in the way. The
+    # parked pile's retitle/drop/hand-off stay overlay-only for the opposite
+    # reason: they act on a row you have to see first, and `drop 3` would
+    # invent an index that does not survive a refresh.
+    Cmd(name="timers", help="timers here; with args, bind one",
+        action="action_timers", key="t", pass_args=True, raw_args=True,
+        args="[<minutes> <message>]"),
     Cmd(name="park", help="park an idea against the selected session",
         action="action_park", key="i", subject=True),
     Cmd(name="parked", help="the parked pile", action="action_parked",
