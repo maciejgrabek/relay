@@ -52,6 +52,18 @@ def run_cli(*argv, iterm_id=None, stdin_closed=False):
     return code, out.getvalue(), err.getvalue()
 
 
+def run_hook(*argv, payload):
+    """A hook verb fed its JSON payload on stdin, as Claude Code does."""
+    import json as _json
+    orig = sys.stdin
+    sys.stdin = io.StringIO(payload if isinstance(payload, str)
+                            else _json.dumps(payload))
+    try:
+        return run_cli(*argv)
+    finally:
+        sys.stdin = orig
+
+
 def _rebind(name, sid):
     """Simulate the name being reclaimed by a different tab."""
     c = db.connect()
@@ -662,6 +674,104 @@ def _wsbuild_internals_checks(ok):
         else:
             os.environ["ITERM_SESSION_ID"] = orig_iterm_id
 
+    return ok
+
+
+def test_hook_verbs():
+    print("\n== relay hook post-tool / prompt ==")
+    import json as _json
+    import pathlib
+    ok = True
+    fix = pathlib.Path(__file__).parent / "fixtures" / "hooks"
+    os.environ["RELAY_CLAUDE_SESSIONS"] = str(fix / "registry")
+    conn = db.connect()
+    conn.execute("DELETE FROM messages WHERE via='peer'")
+    conn.commit()
+
+    def load(name):
+        return _json.loads((fix / name).read_text())
+
+    # sender side
+    code, out, err = run_hook("hook", "post-tool", payload=load("post_tool_send.json"))
+    ok &= check("post-tool exits 0 and prints nothing", code == 0 and out == "")
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("a peer send is one row from sender to recipient by name",
+                len(rows) == 1 and rows[0]["from_name"] == "peera-d0"
+                and rows[0]["to_name"] == "peerb-fa"
+                and rows[0]["body"] == "hello from A, please confirm")
+    ok &= check("...delivered, with cwd and the native msg id",
+                rows[0]["delivered_at"] is not None
+                and rows[0]["from_cwd"].endswith("/peerA")
+                and rows[0]["peer_msg_id"] == "eff4f367-bbcb-48c8-bebd-fbed13ec1237")
+    ok &= check("...and not in relay's delivery queue",
+                db.undelivered(conn, "peerb-fa") == [])
+
+    # recipient side confirms the same row, no second row
+    code, out, err = run_hook("hook", "prompt", payload=load("prompt_envelope.json"))
+    ok &= check("prompt exits 0 and prints nothing", code == 0 and out == "")
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("the recipient's hook confirms rather than duplicates",
+                len(rows) == 1 and rows[0]["received_at"] is not None)
+
+    # reply addressed by socket path resolves to a name
+    run_hook("hook", "post-tool", payload=load("post_tool_send_uds.json"))
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("a uds: target is recorded under the peer's name",
+                len(rows) == 2 and rows[1]["from_name"] == "peerb-fa"
+                and rows[1]["to_name"] == "peera-d0")
+
+    # a send to a subagent is not a conversation
+    run_hook("hook", "post-tool", payload=load("post_tool_subagent.json"))
+    ok &= check("a SendMessage to a subagent writes nothing",
+                len([r for r in db.message_history(conn) if r["via"] == "peer"]) == 2)
+
+    # an ordinary prompt writes nothing
+    run_hook("hook", "prompt", payload=load("prompt_plain.json"))
+    ok &= check("a plain prompt writes nothing",
+                len([r for r in db.message_history(conn) if r["via"] == "peer"]) == 2)
+
+    # recipient hook with NO sender row (sender had no hook): inserts, confirmed
+    conn.execute("DELETE FROM messages WHERE via='peer'")
+    conn.commit()
+    run_hook("hook", "prompt", payload=load("prompt_envelope.json"))
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("an unmatched receipt is inserted already delivered and received",
+                len(rows) == 1 and rows[0]["from_name"] == "peera-d0"
+                and rows[0]["to_name"] == "peerb-fa"
+                and rows[0]["delivered_at"] is not None
+                and rows[0]["received_at"] is not None)
+
+    # a failed send is kept, undelivered-looking
+    bad = load("post_tool_send.json")
+    bad["tool_response"] = {"success": False, "message": "peer went away"}
+    bad["tool_input"]["message"] = "are you there"
+    run_hook("hook", "post-tool", payload=bad)
+    row = [dict(r) for r in db.message_history(conn)
+           if r["via"] == "peer" and r["body"] == "are you there"][0]
+    ok &= check("a failed peer send has no delivered_at",
+                row["delivered_at"] is None)
+    ok &= check("...and is still not relay's to deliver",
+                db.undelivered(conn, "peerb-fa") == [])
+
+    # garbage in: exit 0, silent, nothing written
+    before = len(list(db.message_history(conn)))
+    for junk in ("", "not json", "[]", '{"hook_event_name":"PostToolUse"}'):
+        code, out, err = run_hook("hook", "post-tool", payload=junk)
+        ok &= check(f"junk payload {junk!r} exits 0 silently",
+                    code == 0 and out == "")
+    ok &= check("...and wrote nothing",
+                len(list(db.message_history(conn))) == before)
+
+    # an unknown sender session id (registry has no row) still records by cwd
+    unknown = load("post_tool_send.json")
+    unknown["session_id"] = "no-such-session"
+    unknown["tool_input"]["message"] = "from a ghost"
+    run_hook("hook", "post-tool", payload=unknown)
+    row = [dict(r) for r in db.message_history(conn)
+           if r["body"] == "from a ghost"][0]
+    ok &= check("an unregistered sender is named by its directory",
+                row["from_name"] == "peerA" and row["from_cwd"].endswith("/peerA"))
+    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
     return ok
 
 
@@ -2580,6 +2690,7 @@ def run():
     ok &= _ws_checks(ok)
     ok &= _fix_wave_ws_checks(ok)
     ok &= _wsbuild_internals_checks(ok)
+    ok &= test_hook_verbs()
 
     conn.close()
     print()

@@ -1,0 +1,4 @@
+{"session_id": "5c2cd350-7d7f-4a39-b47c-79c56e49c92b",
+ "cwd": "/private/tmp/relayreviewproj/peers/peerB",
+ "hook_event_name": "UserPromptSubmit",
+ "prompt": "<cross-session-message from=\"uds:/tmp/cc-socks/38047.sock\" from-name=\"peera-d0\" from-mode=\"prompting\">\nhello from A, please confirm\n</cross-session-message>"}

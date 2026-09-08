@@ -1,0 +1,6 @@
+{"session_id": "2d000082-2a02-47a4-b2be-fb04103d0774",
+ "cwd": "/private/tmp/relayreviewproj/peers/peerA",
+ "hook_event_name": "PostToolUse", "tool_name": "SendMessage",
+ "tool_use_id": "toolu_03", "duration_ms": 12,
+ "tool_input": {"to": "explorer-1", "message": "look at the auth module"},
+ "tool_response": {"success": true, "message": "sent to subagent"}}

@@ -1,0 +1,11 @@
+{"session_id": "5c2cd350-7d7f-4a39-b47c-79c56e49c92b",
+ "cwd": "/private/tmp/relayreviewproj/peers/peerB",
+ "hook_event_name": "PostToolUse", "tool_name": "SendMessage",
+ "tool_use_id": "toolu_02", "duration_ms": 37,
+ "tool_input": {"to": "uds:/tmp/cc-socks/38047.sock",
+                "summary": "confirm receipt to peer A",
+                "message": "Confirmed: peerB received your hello and is reachable.",
+                "type": "message", "recipient": "uds:/tmp/cc-socks/38047.sock"},
+ "tool_response": {"success": true,
+                   "message": "“confirm receipt to peer A” → uds:/tmp/cc-socks/38047.sock",
+                   "msg_id": "ba7228e6-7320-44a0-b04c-28cd84ab8be4"}}

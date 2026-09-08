@@ -1657,6 +1657,89 @@ def _doctor_update() -> None:
         print(f"  update: {no} {_no_upstream_msg(state, detail)}")
 
 
+def _hook_payload():
+    """The one JSON object Claude Code writes to a hook's stdin, or None for
+    anything else. A hook must never fail loudly: bad input is a silent 0."""
+    try:
+        raw = sys.stdin.read()
+        d = json.loads(raw) if raw.strip() else None
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def _hook_sender(payload, registry):
+    """(name, cwd) for the session a hook payload came from. The registry
+    row is the truth; a session relay cannot find there (a stale registry,
+    a race at start-up) is named by its directory so the row still lands."""
+    import peers
+    cwd = str(payload.get("cwd") or "")
+    me = peers.by_session_id(str(payload.get("session_id") or ""), registry)
+    if me:
+        return me["name"], me["cwd"] or cwd
+    return (os.path.basename(cwd.rstrip("/")) or "unknown"), cwd
+
+
+def _hook_post_tool(payload) -> None:
+    import peers
+    registry = peers.read_registry()
+    target = peers.peer_send_target(str(payload.get("tool_name") or ""),
+                                    payload.get("tool_input"), registry)
+    if target is None:
+        return
+    body = str((payload.get("tool_input") or {}).get("message") or "")
+    if not body:
+        return
+    resp = payload.get("tool_response")
+    resp = resp if isinstance(resp, dict) else {}
+    from_name, from_cwd = _hook_sender(payload, registry)
+    db.record_peer_message(
+        db.connect(), from_name, target["name"], body, from_cwd=from_cwd,
+        delivered=bool(resp.get("success", True)),
+        peer_msg_id=(str(resp["msg_id"]) if resp.get("msg_id") else None))
+
+
+def _hook_prompt(payload) -> None:
+    import peers
+    env = peers.parse_envelope(payload.get("prompt"))
+    if env is None or not env["body"]:
+        return
+    registry = peers.read_registry()
+    to_name, _to_cwd = _hook_sender(payload, registry)
+    sender = (peers.resolve_target(env["from_name"], registry)
+              or peers.resolve_target(env["from"], registry))
+    from_name = sender["name"] if sender else (env["from_name"] or "peer")
+    from_cwd = sender["cwd"] if sender else ""
+    conn = db.connect()
+    row = db.find_peer_message(conn, from_name, to_name, env["body"],
+                               since=time.time() - 120)
+    if row is not None:
+        db.mark_received(conn, row["id"])
+        return
+    mid = db.record_peer_message(conn, from_name, to_name, env["body"],
+                                 from_cwd=from_cwd, delivered=True)
+    db.mark_received(conn, mid)
+
+
+def cmd_hook(args) -> int:
+    """`relay hook <event>`: the command Claude Code runs from its hooks.
+    Reads one JSON payload from stdin, writes at most one row, and is
+    silent and exit-0 no matter what: a hook's stdout is parsed by Claude
+    Code and its failure is shown to the operator mid-turn, and neither is
+    a place for relay to have an opinion."""
+    payload = _hook_payload()
+    if payload is None:
+        return 0
+    try:
+        if args.hook_event == "post-tool":
+            _hook_post_tool(payload)
+        elif args.hook_event == "prompt":
+            _hook_prompt(payload)
+    except Exception:
+        pass
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Print swarm health from OUTSIDE the TUI - a lifeline for 'I launched it
     and I'm stuck'. Reads the DB only; never mutates. Flags the two things that
@@ -2807,6 +2890,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("doctor", help="print swarm health from outside the TUI")
     dr.set_defaults(fn=cmd_doctor)
+
+    hk = sub.add_parser("hook", help="run by Claude Code hooks; reads JSON on "
+                                     "stdin, never prints, always exits 0")
+    hk.add_argument("hook_event", choices=["post-tool", "prompt"])
+    hk.set_defaults(fn=cmd_hook)
 
     rv = sub.add_parser("review",
                         help="verdict on relay's own decisions (audit log): "
