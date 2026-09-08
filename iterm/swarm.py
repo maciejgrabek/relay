@@ -1710,6 +1710,15 @@ _CHAT_COLOR = dict(_KIND_COLOR, agree="green")
 # Kinds that read as plain speech: no [tag] in front of the body.
 _CHAT_UNTAGGED = ("info", "say")
 
+# Native (socket) traffic Claude Code carried itself, logged by the hooks.
+# A single-cell glyph on purpose: ⚡ is double width in most terminal fonts
+# and would push every column after it.
+_NATIVE_GLYPH = "»"
+
+
+def _via(m) -> str:
+    return str(_get(m, "via", "relay") or "relay")
+
 
 def _pair_key(a: str, b: str) -> str:
     x, y = sorted((a, b))
@@ -1754,6 +1763,13 @@ def conversations(messages, threads=(), now: float = 0.0) -> list:
         conv["flag"] = bool(last) and (
             kind_of(last) in ("blocked", "escalation")
             or _get(last, "delivered_at") is None)
+        vias = {_via(x) for x in msgs}
+        conv["native_last"] = bool(last) and _via(last) == "peer"
+        if conv.get("kind") == "pair":
+            if vias == {"peer"}:
+                conv["meta"] = "direct messages · native"
+            elif "peer" in vias:
+                conv["meta"] = "direct messages · mixed"
         return conv
 
     out = []
@@ -1823,12 +1839,15 @@ def _transcript_rows(conv, width: int) -> List[Tuple[str, str]]:
         k = kind_of(m)
         tag = "" if k in _CHAT_UNTAGGED else f"[{k}] "
         queued = "" if _get(m, "delivered_at") else "  [queued]"
-        head = f"{_chat_time(float(_get(m, 'created_at', 0) or 0))} {m['from_name']}"
+        native = _via(m) == "peer"
+        head = ((_NATIVE_GLYPH + " ") if native else "")
+        head += f"{_chat_time(float(_get(m, 'created_at', 0) or 0))} {m['from_name']}"
         if conv["kind"] == "pair":
             head += f" ▸ {m['to_name']}"
         head += "  "
+        tick = " ✓" if (native and _get(m, "received_at")) else ""
         indent = " " * min(len(head), max(4, width // 3))
-        body_lines = _wrap(f"{tag}{m['body']}{queued}", width - len(head))
+        body_lines = _wrap(f"{tag}{m['body']}{queued}{tick}", width - len(head))
         color = _CHAT_COLOR.get(k)
         for i, seg in enumerate(body_lines):
             plain = (head if i == 0 else indent) + seg
@@ -1904,9 +1923,10 @@ def render_chat(convs, cursor: int, width: int, height: int,
     left = []
     for i, c in enumerate(convs[top:top + visible], start=top):
         mark = "‼" if c["flag"] else " "
+        mark += _NATIVE_GLYPH if c.get("native_last") else " "
         count = str(c["count"])
-        title = _clip(c["title"], lw - len(count) - 4)
-        plain = f"{mark} {title}"
+        title = _clip(c["title"], lw - len(count) - 5)
+        plain = f"{mark}{title}"
         plain = plain + " " * max(1, lw - len(plain) - len(count)) + count
         plain = _clip(plain, lw)
         if i == cursor:

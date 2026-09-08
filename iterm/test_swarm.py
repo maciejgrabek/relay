@@ -1838,6 +1838,40 @@ def test_conversations_and_chat():
     ok &= check("no conversations at all teaches how one starts",
                 len(empty) == 6 and any("relay send" in _plain(x)
                                          for x in empty))
+
+    # native (socket) traffic: glyph, tick, meta
+    def pm(id, f, t, body, ago, received=True):
+        r = m(id, f, t, body, ago=ago)
+        r["via"] = "peer"
+        r["received_at"] = (now - ago + 2) if received else None
+        return r
+    native = [pm(1, "peera-d0", "peerb-fa", "hello from A", 60),
+              pm(2, "peerb-fa", "peera-d0", "got it", 30, received=False)]
+    cn = swarm.conversations(native, [], now)
+    ok &= check("a pair of only native messages says so in its meta",
+                cn[0]["meta"] == "direct messages · native")
+    lines = swarm.render_chat(cn, 0, 100, 8, now=now)
+    plain = [_plain(x) for x in lines]
+    ok &= check("native rows carry the » glyph",
+                sum(1 for x in plain if "» " in x.split("│", 1)[-1]) == 2)
+    ok &= check("a confirmed row ends with a tick, an unconfirmed one does not",
+                any("hello from A" in x and x.rstrip().endswith("✓") for x in plain)
+                and any("got it" in x and not x.rstrip().endswith("✓") for x in plain))
+    ok &= check("the left list marks a conversation whose last word was native",
+                any("»" in x.split("│")[0] and "peera-d0" in x for x in plain))
+    mixed = native + [m(3, "peera-d0", "peerb-fa", "via relay now", ago=10)]
+    cm = swarm.conversations(mixed, [], now)
+    ok &= check("a pair with both transports says mixed",
+                cm[0]["meta"] == "direct messages · mixed")
+    lines = swarm.render_chat(cm, 0, 100, 8, now=now)
+    plain = [_plain(x) for x in lines]
+    ok &= check("a relay row has no glyph",
+                any("via relay now" in x and "» " not in x for x in plain))
+    ok &= check("...and the left list has no » when the last word was relay's",
+                not any("»" in x.split("│")[0] for x in plain))
+    ok &= check("old rows without a via field still render as relay's",
+                swarm.conversations([m(9, "a", "b", "x", ago=1)], [], now)[0]["meta"]
+                == "direct messages")
     return ok
 
 
