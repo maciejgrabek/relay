@@ -1840,6 +1840,26 @@ def cmd_doctor(args) -> int:
             print("    -> needs Rust first: "
                   "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
 
+    # Native session-to-session messages only reach relay's log through
+    # two hooks in Claude Code's user settings. Missing hooks are the
+    # silent kind of broken: sessions talk, the chat pane stays empty.
+    import hooks as _hooks
+    import usage as _usage
+    _settings, _serr = _read_settings(_usage.settings_path())
+    if _serr:
+        print(f"  hooks: cannot read settings ({_serr})")
+    else:
+        _st = _hooks.status(_settings)
+        if all(v == "ok" for v in _st.values()):
+            print("  hooks: installed (native session messages are logged)")
+        else:
+            bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
+            print(f"  hooks: NOT INSTALLED ({bad}) - native session-to-session "
+                  f"messages are not logged")
+            print("    -> relay hooks install")
+    if not shutil.which("relay"):
+        print("  relay on PATH: NO - hooks would fail silently")
+
     sessions = db.list_sessions(conn)
     if not sessions:
         print("  sessions: none registered")

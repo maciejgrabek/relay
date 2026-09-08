@@ -824,6 +824,14 @@ def test_hooks_verb():
                 and saved["hooks"]["Stop"][0]["hooks"][0]["command"] == "ding.sh"
                 and saved["model"] == "opus")
 
+    code, out, err = run_cli("doctor")
+    ok &= check("doctor says native comms are not logged when hooks are missing",
+                "hooks: NOT INSTALLED" in out and "relay hooks install" in out)
+    run_cli("hooks", "install", "--yes")
+    code, out, err = run_cli("doctor")
+    ok &= check("doctor says hooks are installed once they are",
+                "hooks: installed" in out)
+
     # unreadable JSON: refuse, never overwrite
     with open(path, "w") as fh:
         fh.write("{not json")
