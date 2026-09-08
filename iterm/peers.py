@@ -52,8 +52,12 @@ def read_registry(root: Optional[str] = None) -> List[dict]:
         name, sid = str(d.get("name") or ""), str(d.get("sessionId") or "")
         if not name or not sid:
             continue
+        try:
+            pid = int(d.get("pid") or 0)
+        except (ValueError, TypeError):
+            continue
         out.append({
-            "pid": int(d.get("pid") or 0),
+            "pid": pid,
             "session_id": sid,
             "name": name,
             "cwd": str(d.get("cwd") or ""),
