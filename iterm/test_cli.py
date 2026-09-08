@@ -775,6 +775,65 @@ def test_hook_verbs():
     return ok
 
 
+def test_hooks_verb():
+    print("\n== relay hooks install/status/uninstall ==")
+    import json as _json
+    ok = True
+    path = os.path.join(_TMP, "claude-settings.json")
+    os.environ["RELAY_CLAUDE_SETTINGS"] = path
+    if os.path.exists(path):
+        os.unlink(path)
+
+    code, out, err = run_cli("hooks", "status")
+    ok &= check("status on no file reports missing, exit 1",
+                code == 1 and "missing" in out and "relay hooks install" in out)
+
+    code, out, err = run_cli("hooks", "install", stdin_closed=True)
+    ok &= check("install without --yes and no tty shows the diff and refuses",
+                code != 0 and "+++" in out and not os.path.exists(path))
+
+    code, out, err = run_cli("hooks", "install", "--yes")
+    ok &= check("install --yes writes the file and says restart",
+                code == 0 and os.path.exists(path)
+                and "restart" in out.lower())
+    saved = _json.load(open(path))
+    ok &= check("...with both events present",
+                {"PostToolUse", "UserPromptSubmit"} <= set(saved["hooks"]))
+    code, out, err = run_cli("hooks", "status")
+    ok &= check("status now reports ok, exit 0", code == 0 and "ok" in out)
+    code, out, err = run_cli("hooks", "install", "--yes")
+    ok &= check("a second install is a no-op that says so",
+                code == 0 and "already" in out.lower())
+
+    # foreign content survives a round trip
+    with open(path, "w") as fh:
+        _json.dump({"model": "opus", "hooks": {"Stop": [
+            {"hooks": [{"type": "command", "command": "ding.sh"}]}]}}, fh)
+    run_cli("hooks", "install", "--yes")
+    saved = _json.load(open(path))
+    ok &= check("install keeps foreign keys and hooks",
+                saved["model"] == "opus"
+                and saved["hooks"]["Stop"][0]["hooks"][0]["command"] == "ding.sh")
+    ok &= check("install left a backup beside the file",
+                os.path.exists(path + ".bak"))
+
+    code, out, err = run_cli("hooks", "uninstall", "--yes")
+    saved = _json.load(open(path))
+    ok &= check("uninstall removes only relay's entries",
+                code == 0 and "PostToolUse" not in saved.get("hooks", {})
+                and saved["hooks"]["Stop"][0]["hooks"][0]["command"] == "ding.sh"
+                and saved["model"] == "opus")
+
+    # unreadable JSON: refuse, never overwrite
+    with open(path, "w") as fh:
+        fh.write("{not json")
+    code, out, err = run_cli("hooks", "install", "--yes")
+    ok &= check("install refuses to touch a settings file it cannot parse",
+                code != 0 and open(path).read() == "{not json")
+    os.environ.pop("RELAY_CLAUDE_SETTINGS", None)
+    return ok
+
+
 def run():
     ok = True
 
@@ -2691,6 +2750,7 @@ def run():
     ok &= _fix_wave_ws_checks(ok)
     ok &= _wsbuild_internals_checks(ok)
     ok &= test_hook_verbs()
+    ok &= test_hooks_verb()
 
     conn.close()
     print()

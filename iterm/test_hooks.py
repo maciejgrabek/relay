@@ -1,0 +1,101 @@
+"""Tests for merging relay's hook entries into Claude Code's settings.
+Pure dicts, no files.
+
+Run: python3 iterm/test_hooks.py    or    ./test/run.sh
+"""
+import copy
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+import hooks  # noqa: E402
+
+
+def check(msg, cond):
+    print(("  OK   " if cond else " FAIL  ") + msg)
+    return bool(cond)
+
+
+def run():
+    ok = True
+    ok &= check("relay ships PostToolUse and UserPromptSubmit entries",
+                set(hooks.ENTRIES) == {"PostToolUse", "UserPromptSubmit"})
+    ok &= check("the PostToolUse group matches SendMessage only",
+                hooks.ENTRIES["PostToolUse"][0]["matcher"] == "SendMessage")
+    ok &= check("every relay hook is async and runs relay hook <event>",
+                all(h["async"] is True and h["command"].startswith("relay hook ")
+                    for g in hooks.ENTRIES.values() for grp in g
+                    for h in grp["hooks"]))
+
+    empty = {}
+    merged = hooks.merge(empty)
+    ok &= check("merge into empty settings adds exactly relay's entries",
+                merged == {"hooks": hooks.ENTRIES})
+    ok &= check("merge does not mutate its input", empty == {})
+    ok &= check("status of merged is ok everywhere",
+                hooks.status(merged) == {"PostToolUse": "ok",
+                                         "UserPromptSubmit": "ok"})
+    ok &= check("status of empty is missing everywhere",
+                hooks.status({}) == {"PostToolUse": "missing",
+                                     "UserPromptSubmit": "missing"})
+
+    # foreign hooks survive, relay's are appended after them
+    foreign = {"permissions": {"allow": ["Bash(ls:*)"]},
+               "hooks": {"PostToolUse": [{"matcher": "Bash",
+                                          "hooks": [{"type": "command",
+                                                     "command": "notify.sh"}]}],
+                         "Stop": [{"hooks": [{"type": "command",
+                                              "command": "ding.sh"}]}]}}
+    snapshot = copy.deepcopy(foreign)
+    m2 = hooks.merge(foreign)
+    ok &= check("foreign settings keys are untouched",
+                m2["permissions"] == snapshot["permissions"]
+                and m2["hooks"]["Stop"] == snapshot["hooks"]["Stop"])
+    ok &= check("foreign PostToolUse group kept, relay's appended after it",
+                m2["hooks"]["PostToolUse"][0] == snapshot["hooks"]["PostToolUse"][0]
+                and m2["hooks"]["PostToolUse"][1] == hooks.ENTRIES["PostToolUse"][0])
+    ok &= check("merge is idempotent", hooks.merge(m2) == m2)
+
+    # a stale relay entry (older command string) is replaced, not doubled
+    stale = copy.deepcopy(m2)
+    stale["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] = "relay hook prompt --v0"
+    ok &= check("status reports a stale entry",
+                hooks.status(stale)["UserPromptSubmit"] == "stale")
+    m3 = hooks.merge(stale)
+    ok &= check("merge replaces the stale group in place",
+                m3["hooks"]["UserPromptSubmit"] == hooks.ENTRIES["UserPromptSubmit"]
+                and len(m3["hooks"]["PostToolUse"]) == 2)
+
+    # strip removes only ours
+    s = hooks.strip(m3)
+    ok &= check("strip leaves the foreign groups",
+                s["hooks"]["PostToolUse"] == [snapshot["hooks"]["PostToolUse"][0]]
+                and s["hooks"]["Stop"] == snapshot["hooks"]["Stop"])
+    ok &= check("strip drops an event that held only relay's group",
+                "UserPromptSubmit" not in s["hooks"])
+    ok &= check("strip of empty is empty", hooks.strip({}) == {})
+    ok &= check("strip drops an empty hooks dict entirely",
+                "hooks" not in hooks.strip({"hooks": hooks.ENTRIES}))
+
+    # a group mixing relay's hook with a foreign one is never dropped whole
+    mixed = {"hooks": {"UserPromptSubmit": [{"hooks": [
+        {"type": "command", "command": "relay hook prompt", "async": True},
+        {"type": "command", "command": "other.sh"}]}]}}
+    s2 = hooks.strip(mixed)
+    ok &= check("strip removes only relay's hook from a mixed group",
+                s2["hooks"]["UserPromptSubmit"][0]["hooks"]
+                == [{"type": "command", "command": "other.sh"}])
+
+    d = hooks.diff_text({}, hooks.merge({}), "/x/settings.json")
+    ok &= check("diff_text is a unified diff naming the file",
+                d.startswith("--- /x/settings.json") and "+++ " in d
+                and '"relay hook post-tool"' in d)
+    ok &= check("diff_text of no change is empty",
+                hooks.diff_text(m2, hooks.merge(m2), "/x") == "")
+    print()
+    print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
+if __name__ == "__main__":
+    sys.exit(0 if run() else 1)

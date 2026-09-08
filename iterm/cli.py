@@ -1740,6 +1740,72 @@ def cmd_hook(args) -> int:
     return 0
 
 
+def _read_settings(path: str):
+    """(settings dict, error). A missing file is an empty dict; a file that
+    exists but is not a JSON object is an error - relay never overwrites
+    something it could not read back."""
+    if not os.path.exists(path):
+        return {}, None
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError) as e:
+        return None, f"cannot read {path}: {e}"
+    if not isinstance(d, dict):
+        return None, f"{path} is not a JSON object"
+    return d, None
+
+
+def _write_settings(path: str, data: dict) -> None:
+    """Backup, then atomic replace - the file every Claude session reads."""
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".bak")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".relay-tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+def cmd_hooks(args) -> int:
+    """Install, inspect or remove relay's two entries in Claude Code's user
+    settings. The diff is always shown before a write, and a write needs
+    --yes or a typed yes: this file is read by every session on the box."""
+    import hooks
+    import usage
+    path = usage.settings_path()
+    cur, err = _read_settings(path)
+    if err:
+        return _err(err)
+    if args.hooks_verb == "status":
+        st = hooks.status(cur)
+        on_path = shutil.which("relay") is not None
+        for event, state in st.items():
+            print(f"  {event:<18} {state}")
+        print(f"  relay on PATH      {'yes' if on_path else 'NO - hooks would fail silently'}")
+        if all(v == "ok" for v in st.values()) and on_path:
+            return 0
+        print("  -> relay hooks install")
+        return 1
+    new = hooks.merge(cur) if args.hooks_verb == "install" else hooks.strip(cur)
+    if new == cur:
+        print(f"{path}: already {'installed' if args.hooks_verb == 'install' else 'clean'}")
+        return 0
+    print(hooks.diff_text(cur, new, path), end="")
+    try:
+        confirmed = args.yes or _confirm(f"write {path}?")
+    except EOFError:
+        confirmed = False
+    if not confirmed:
+        return _err("not written (add --yes to skip the question)")
+    _write_settings(path, new)
+    print(f"{path}: {'installed' if args.hooks_verb == 'install' else 'removed'} "
+          f"relay's hooks. Sessions already running may need a restart to pick "
+          f"this up.")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Print swarm health from OUTSIDE the TUI - a lifeline for 'I launched it
     and I'm stuck'. Reads the DB only; never mutates. Flags the two things that
@@ -2895,6 +2961,13 @@ def build_parser() -> argparse.ArgumentParser:
                                      "stdin, never prints, always exits 0")
     hk.add_argument("hook_event", choices=["post-tool", "prompt"])
     hk.set_defaults(fn=cmd_hook)
+
+    hs = sub.add_parser("hooks", help="relay's entries in Claude Code's user "
+                                      "settings: install, status, uninstall")
+    hs.add_argument("hooks_verb", choices=["install", "status", "uninstall"])
+    hs.add_argument("--yes", action="store_true",
+                    help="write without asking (the diff is still printed)")
+    hs.set_defaults(fn=cmd_hooks)
 
     rv = sub.add_parser("review",
                         help="verdict on relay's own decisions (audit log): "
