@@ -1,0 +1,7 @@
+{"pid": 38047, "sessionId": "2d000082-2a02-47a4-b2be-fb04103d0774",
+ "cwd": "/private/tmp/relayreviewproj/peers/peerA", "startedAt": 1788909770000,
+ "version": "2.1.265", "peerProtocol": 1,
+ "peerFeatures": ["notify_idle", "reply_across_default_dirs", "artifact_yield"],
+ "kind": "interactive", "entrypoint": "cli", "pidDomain": "darwin",
+ "messagingSocketPath": "/tmp/cc-socks/38047.sock",
+ "name": "peera-d0", "nameSource": "derived", "status": "idle"}

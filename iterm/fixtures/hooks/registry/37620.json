@@ -1,0 +1,7 @@
+{"pid": 37620, "sessionId": "5c2cd350-7d7f-4a39-b47c-79c56e49c92b",
+ "cwd": "/private/tmp/relayreviewproj/peers/peerB", "startedAt": 1788909720000,
+ "version": "2.1.265", "peerProtocol": 1,
+ "peerFeatures": ["notify_idle", "reply_across_default_dirs", "artifact_yield"],
+ "kind": "interactive", "entrypoint": "cli", "pidDomain": "darwin",
+ "messagingSocketPath": "/tmp/cc-socks/37620.sock",
+ "name": "peerb-fa", "nameSource": "derived", "status": "working"}
