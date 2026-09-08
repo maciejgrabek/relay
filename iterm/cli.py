@@ -1753,6 +1753,8 @@ def _read_settings(path: str):
         return None, f"cannot read {path}: {e}"
     if not isinstance(d, dict):
         return None, f"{path} is not a JSON object"
+    if "hooks" in d and not isinstance(d["hooks"], dict):
+        return None, f"{path}: 'hooks' is not a JSON object"
     return d, None
 
 
@@ -1793,11 +1795,7 @@ def cmd_hooks(args) -> int:
         print(f"{path}: already {'installed' if args.hooks_verb == 'install' else 'clean'}")
         return 0
     print(hooks.diff_text(cur, new, path), end="")
-    try:
-        confirmed = args.yes or _confirm(f"write {path}?")
-    except EOFError:
-        confirmed = False
-    if not confirmed:
+    if not args.yes and not _confirm(f"write {path}?"):
         return _err("not written (add --yes to skip the question)")
     _write_settings(path, new)
     print(f"{path}: {'installed' if args.hooks_verb == 'install' else 'removed'} "

@@ -830,6 +830,16 @@ def test_hooks_verb():
     code, out, err = run_cli("hooks", "install", "--yes")
     ok &= check("install refuses to touch a settings file it cannot parse",
                 code != 0 and open(path).read() == "{not json")
+
+    # a "hooks" value that is not a JSON object: refuse, never overwrite
+    with open(path, "w") as fh:
+        _json.dump({"hooks": "not-a-dict"}, fh)
+    code, out, err = run_cli("hooks", "install", "--yes")
+    ok &= check("install refuses a settings file whose hooks value is not "
+                "an object",
+                code != 0
+                and _json.load(open(path)) == {"hooks": "not-a-dict"}
+                and "hooks" in (err or out))
     os.environ.pop("RELAY_CLAUDE_SETTINGS", None)
     return ok
 

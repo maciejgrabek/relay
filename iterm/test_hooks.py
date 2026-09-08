@@ -86,6 +86,28 @@ def run():
                 s2["hooks"]["UserPromptSubmit"][0]["hooks"]
                 == [{"type": "command", "command": "other.sh"}])
 
+    # a group in the middle of the list gets replaced in place, not moved
+    foo = {"matcher": "Read", "hooks": [{"type": "command", "command": "foo.sh"}]}
+    bar = {"hooks": [{"type": "command", "command": "bar.sh"}]}
+    stale_mid = {"matcher": "SendMessage",
+                 "hooks": [{"type": "command",
+                           "command": "relay hook post-tool --old",
+                           "async": True}]}
+    mid = {"hooks": {"PostToolUse": [foo, stale_mid, bar]}}
+    m4 = hooks.merge(mid)
+    ok &= check("a stale group in the middle is replaced in place, not moved",
+                m4["hooks"]["PostToolUse"]
+                == [foo, hooks.ENTRIES["PostToolUse"][0], bar])
+
+    # a "hooks" value that is not a dict is treated as empty, never raises
+    ok &= check("merge treats a non-dict hooks value as empty",
+                hooks.merge({"hooks": "x"}) == {"hooks": hooks.ENTRIES})
+    ok &= check("status treats a non-dict hooks value as missing everywhere",
+                hooks.status({"hooks": ["nope"]}) == {"PostToolUse": "missing",
+                                                       "UserPromptSubmit": "missing"})
+    ok &= check("strip leaves a hooks value it does not understand alone",
+                hooks.strip({"hooks": 7}) == {"hooks": 7})
+
     d = hooks.diff_text({}, hooks.merge({}), "/x/settings.json")
     ok &= check("diff_text is a unified diff naming the file",
                 d.startswith("--- /x/settings.json") and "+++ " in d

@@ -35,7 +35,12 @@ def is_ours(hook: dict) -> bool:
 
 
 def _groups(settings: dict, event: str) -> List[dict]:
-    g = (settings.get("hooks") or {}).get(event) or []
+    h = settings.get("hooks")
+    if not isinstance(h, dict):
+        return []
+    g = h.get(event)
+    if not isinstance(g, list):
+        return []
     return [x for x in g if isinstance(x, dict)]
 
 
@@ -82,13 +87,45 @@ def strip(settings: dict) -> dict:
 
 
 def merge(settings: dict) -> dict:
-    """The settings with relay's current entries: any older relay hook is
-    removed first, then ours are appended after whatever foreign groups the
-    event already has. Idempotent."""
-    s = strip(settings)
-    hooks = s.setdefault("hooks", {})
+    """The settings with relay's current entries: the first group (per
+    event) that holds any relay hook is replaced in place by our current
+    group; a later relay-only group is dropped, and a later group that mixes
+    a relay hook with a foreign one keeps the foreign hook as its own group,
+    same as strip() would. An event with no relay group gets ours appended.
+    Never mutates the input. Idempotent."""
+    s = copy.deepcopy(settings)
+    hooks = s.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    s["hooks"] = hooks
     for event, ours in ENTRIES.items():
-        hooks[event] = list(hooks.get(event) or []) + copy.deepcopy(ours)
+        groups = hooks.get(event)
+        if not isinstance(groups, list):
+            groups = []
+        new_groups = []
+        placed = False
+        for grp in groups:
+            if not isinstance(grp, dict):
+                new_groups.append(grp)
+                continue
+            inner = grp.get("hooks", [])
+            if not isinstance(inner, list):
+                inner = []
+            if not any(is_ours(h) for h in inner):
+                new_groups.append(grp)
+                continue
+            foreign = [h for h in inner if not is_ours(h)]
+            if not placed:
+                new_groups.append(copy.deepcopy(ours[0]))
+                placed = True
+                if foreign:
+                    new_groups.append(dict(grp, hooks=foreign))
+            elif foreign:
+                new_groups.append(dict(grp, hooks=foreign))
+            # else: a later relay-only group - dropped
+        if not placed:
+            new_groups.append(copy.deepcopy(ours[0]))
+        hooks[event] = new_groups
     return s
 
 
