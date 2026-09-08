@@ -1712,6 +1712,135 @@ def test_resolve_scope():
     return ok
 
 
+def _plain(line: str) -> str:
+    """Rich markup stripped, for width checks on rendered rows."""
+    import re
+    keep = line.replace("\\[", "\x00")
+    return re.sub(r"\[/?[a-z ]+\]", "", keep).replace("\x00", "[")
+
+
+def test_conversations_and_chat():
+    print("\n== conversations() / render_chat() ==")
+    ok = True
+    now = 1_000_000.0
+
+    def m(id, f, t, body, kind="info", ago=0, thread=None, delivered=True):
+        return {"id": id, "from_name": f, "to_name": t, "body": body,
+                "kind": kind, "created_at": now - ago, "thread_id": thread,
+                "project": "p",
+                "delivered_at": (now - ago + 1) if delivered else None}
+
+    msgs = [
+        m(1, "coord", "w1", "take #13", ago=600),
+        m(2, "w1", "coord", "ack", ago=500),
+        m(3, "coord", "w2", "review it", ago=400),
+        m(4, "w2", "coord", "no db", kind="blocked", ago=300),
+        # one discussion post fans out to two rows - the chat shows it once
+        m(5, "coord", "w1", "one db?", kind="say", ago=200, thread=7),
+        m(6, "coord", "w2", "one db?", kind="say", ago=200, thread=7),
+        m(7, "w1", "coord", "yes", kind="agree", ago=100, thread=7),
+        m(8, "w1", "w2", "yes", kind="agree", ago=100, thread=7),
+        # relay's own wake-up is system noise, not a conversation
+        m(9, "relay", "w1", "[relay] wake", kind="wake", ago=50),
+        m(10, "coord", "w9", "alive?", ago=10, delivered=False),
+    ]
+    threads = [{"id": 7, "topic": "one db?", "state": "open", "outcome": "",
+                "participants": "coord,w1,w2", "created_at": now - 200}]
+
+    convs = swarm.conversations(msgs, threads, now)
+    keys = [c["key"] for c in convs]
+    ok &= check("discussions come first, then pairs in stable name order",
+                keys == ["thread:7", "pair:coord|w1", "pair:coord|w2",
+                         "pair:coord|w9"])
+    th = convs[0]
+    ok &= check("a discussion post fanned out to N recipients is ONE line",
+                [x["body"] for x in th["msgs"]] == ["one db?", "yes"])
+    ok &= check("the discussion carries its topic and state",
+                "one db?" in th["title"] and "open" in th["meta"])
+    pw1 = convs[1]
+    ok &= check("a pair chat holds only the direct traffic, no thread posts, "
+                "no relay wake-ups",
+                [x["body"] for x in pw1["msgs"]] == ["take #13", "ack"])
+    ok &= check("no pair is formed with relay itself",
+                not any("relay" in k for k in keys))
+    ok &= check("a pair whose last word was blocked is flagged",
+                convs[2]["flag"] and not pw1["flag"])
+    ok &= check("a pair whose last message is still queued is flagged",
+                convs[3]["flag"])
+    ok &= check("a conversation's age is that of its last message",
+                int(pw1["age_s"]) == 500 and int(convs[3]["age_s"]) == 10)
+
+    # --- rendering -------------------------------------------------------
+    lines = swarm.render_chat(convs, cursor=2, width=100, height=10, now=now)
+    ok &= check("render_chat fills exactly the height it is given",
+                len(lines) == 10)
+    plain = [_plain(x) for x in lines]
+    ok &= check("no rendered row exceeds the width",
+                all(len(x) <= 100 for x in plain))
+    ok &= check("the cursor row is highlighted",
+                any("[reverse]" in x and "coord" in x and "w2" in x
+                    for x in lines))
+    ok &= check("the transcript shows the selected pair's bodies",
+                any("review it" in x for x in plain)
+                and any("no db" in x for x in plain))
+    ok &= check("...and not another pair's",
+                not any("take #13" in x for x in plain))
+    ok &= check("a non-info kind is tagged and coloured",
+                any("[blocked]" in x and "[yellow]" in x for x in lines))
+    ok &= check("every conversation is listed on the left",
+                sum(1 for x in plain if "coord" in x.split("│")[0]) == 3)
+
+    lines = swarm.render_chat(convs, cursor=3, width=100, height=6, now=now)
+    plain = [_plain(x) for x in lines]
+    ok &= check("an undelivered message says so",
+                any("alive?" in x and "queued" in x for x in plain))
+
+    lines = swarm.render_chat(convs, cursor=0, width=100, height=8, now=now)
+    plain = [_plain(x) for x in lines]
+    ok &= check("a discussion transcript shows each post once",
+                sum(1 for x in plain[1:]
+                    if "one db?" in x.split("│", 1)[-1]) == 1)
+    ok &= check("agree posts are tagged",
+                any("[agree]" in x and "yes" in x for x in plain))
+
+    # a long body wraps instead of being clipped
+    long = [m(1, "a", "b", "word " * 40, ago=5)]
+    convs2 = swarm.conversations(long, [], now)
+    lines = swarm.render_chat(convs2, cursor=0, width=80, height=12, now=now)
+    plain = [_plain(x) for x in lines]
+    body_rows = [x for x in plain if "word" in x]
+    ok &= check("a long body wraps onto several rows",
+                len(body_rows) >= 3)
+    ok &= check("...none wider than the pane",
+                all(len(x) <= 80 for x in plain))
+
+    # scrolling: a transcript taller than the pane shows its tail, and
+    # scroll=N walks back up by N rows
+    many = [m(i, "a", "b", f"msg{i:02d}", ago=1000 - i) for i in range(1, 41)]
+    convs3 = swarm.conversations(many, [], now)
+    tail = [_plain(x) for x in swarm.render_chat(convs3, 0, 100, 8, now=now)]
+    ok &= check("a long transcript shows its newest rows",
+                any("msg40" in x for x in tail)
+                and not any("msg01" in x for x in tail))
+    back = [_plain(x) for x in swarm.render_chat(convs3, 0, 100, 8, now=now,
+                                                  scroll=30)]
+    ok &= check("scroll walks back into history",
+                any("msg10" in x for x in back)
+                and not any("msg40" in x for x in back))
+    far = [_plain(x) for x in swarm.render_chat(convs3, 0, 100, 8, now=now,
+                                                 scroll=10_000)]
+    ok &= check("scroll clamps at the oldest row",
+                any("msg01" in x for x in far))
+    ok &= check("scroll_max says how far back a transcript goes",
+                swarm.chat_scroll_max(convs3, 0, 100, 8) == 40 - 7)
+
+    empty = swarm.render_chat([], 0, 100, 6, now=now)
+    ok &= check("no conversations at all teaches how one starts",
+                len(empty) == 6 and any("relay send" in _plain(x)
+                                         for x in empty))
+    return ok
+
+
 if __name__ == "__main__":
     ok = run()
     ok = test_resolve_scope() and ok
@@ -1720,4 +1849,5 @@ if __name__ == "__main__":
     ok = test_input_row_and_drafts() and ok
     ok = test_bracket_line() and ok
     ok = test_selection_dialog_and_readiness() and ok
+    ok = test_conversations_and_chat() and ok
     sys.exit(0 if ok else 1)

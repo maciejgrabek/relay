@@ -555,6 +555,103 @@ async def go():
         await pilot.pause()
         chk("ESC also leaves the swarm view", not aa._swarm_visible)
 
+    # --- chat pane inside the swarm view, and /messages from anywhere -----
+    import db as _dbc
+    cc = _TestApp(_one(), dry_run=True)
+    conn = _dbc.connect()
+    conn.execute("DELETE FROM messages WHERE project='chattest'")
+    conn.commit()
+    # Recent stamps, not epoch-zero ones: the app prunes delivered
+    # messages older than the retention window at launch, and 1970 is.
+    import time as _tm
+    _t0 = _tm.time() - 300
+    m1 = _dbc.queue_message(conn, "coord", "w1", "take task nine",
+                            "chattest", now=_t0 + 1)
+    _dbc.mark_delivered(conn, m1, now=_t0 + 2)
+    m2 = _dbc.queue_message(conn, "w1", "coord", "cannot, no creds",
+                            "chattest", now=_t0 + 3, kind="blocked")
+    _dbc.mark_delivered(conn, m2, now=_t0 + 4)
+    _dbc.queue_message(conn, "coord", "w2", "still there?", "chattest",
+                       now=_t0 + 5)
+    async with cc.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        cc._refresh()
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB opens the swarm view on the board, not the chat",
+            cc._swarm_visible and not cc._chat_visible)
+        await pilot.press("m")
+        await pilot.pause()
+        text = str(cc.query_one("#swarmview", appmod.Static).render())
+        chk("m on the board opens the chat pane", cc._chat_visible)
+        chk("...listing the seeded pair and its transcript",
+            "coord ⇄ w1" in text and "take task nine" in text)
+        chk("...with the blocked reply tagged",
+            "[blocked]" in text.replace("\\[", "["))
+        chk("the mascot binding did NOT fire behind the overlay",
+            not getattr(cc, "_mascot_on", False))
+        await pilot.press("down")
+        await pilot.pause()
+        text = str(cc.query_one("#swarmview", appmod.Static).render())
+        chk("down moves to the next conversation",
+            cc._chat_key == "pair:coord|w2" and "still there?" in text)
+        chk("...whose undelivered message says queued",
+            "queued" in text)
+        await pilot.press("escape")
+        await pilot.pause()
+        chk("ESC from the chat returns to the board, not the roster",
+            cc._swarm_visible and not cc._chat_visible)
+        # `/` over the board: the palette opens where it is visible
+        await pilot.press("slash")
+        await pilot.pause()
+        chk("/ opens the palette over the swarm board",
+            cc._cmdline is not None and bool(cc.query("#cmdline")))
+        for ch in "messages":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("/messages from the board lands in the chat pane",
+            cc._swarm_visible and cc._chat_visible and cc._cmdline is None)
+        await pilot.press("tab")
+        await pilot.pause()
+        chk("TAB from the chat leaves the swarm view entirely",
+            not cc._swarm_visible and not cc._chat_visible)
+        # /messages from the roster
+        await pilot.press("slash")
+        for ch in "messages":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("/messages from the roster opens the swarm view on the chat",
+            cc._swarm_visible and cc._chat_visible)
+        # a non-navigation verb typed over the board closes it first
+        await pilot.press("slash")
+        for ch in "pause":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        chk("a session verb typed over the board closes the board to run",
+            not cc._swarm_visible)
+        # M: the global toggle, TAB's twin for the chat
+        await pilot.press("M")
+        await pilot.pause()
+        chk("M from the roster opens the swarm view on the chat",
+            cc._swarm_visible and cc._chat_visible)
+        await pilot.press("M")
+        await pilot.pause()
+        chk("M again leaves the swarm view", not cc._swarm_visible)
+        await pilot.press("tab")
+        await pilot.pause()
+        await pilot.press("M")
+        await pilot.pause()
+        chk("M on the board flips to the chat",
+            cc._swarm_visible and cc._chat_visible)
+        await pilot.press("escape")
+        await pilot.pause()
+    conn.execute("DELETE FROM messages WHERE project='chattest'")
+    conn.commit()
+
     # --- config editor overlay -------------------------------------------
     ce = _TestApp(_one(), dry_run=True)
     async with ce.run_test() as pilot:

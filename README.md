@@ -484,7 +484,8 @@ can't silently auto-approve.)
 | `c` | **Caffeinate**: release the assertion so the Mac may sleep, or take it back. A release you make by hand is **sticky** - a session waking at 3am won't undo it - where an automatic one (`[power] release_after`) re-acquires the moment anything starts working. The header shows the countdown while it runs, and says so once released. Inert behind an open overlay, like `m` |
 | `?` | Help overlay: every command, by key and by name, + the arm-level cheat sheet. Two columns on a terminal 150 cells or wider, one below that |
 | `/` `:` | Open the **command palette**: typing filters every capability by name, `↑↓` picks, `ENTER` runs (see [Commands](#commands-)) |
-| `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages) |
+| `M` | Toggle the **chat pane** (every conversation between sessions, see below) from anywhere - TAB's twin for messages |
+| `TAB` | Toggle the **swarm view** (kanban + discussions + PRs + messages). Inside it, `m` flips to the **chat pane** (every conversation between sessions as a transcript; `↑↓` picks one, `PgUp`/`PgDn` scrolls it, `esc` returns to the board), and `/` opens the palette over the board |
 | `R` `R` | **Press twice:** restore dead workers (respawn in their workdir) |
 | `W` `W` | **Press twice:** wipe dead sessions' work (delete). Guarded by the double-press |
 | `Z` `Z` | **Press twice:** ZAP the whole project - all tasks, sessions and messages (`relay wipe --project <p> --all`). Refuses to guess when several projects exist |
@@ -1199,6 +1200,23 @@ Set `[burn] window = 0` to switch it off.
   main list never reorders);
 - the recent-messages feed, **colored by kind** (done green, blocked
   yellow, escalation red, wake dim).
+
+The feed is the last 8 rows. For the whole history press `M` from anywhere
+(`m` on the board, or `/messages`): the **chat pane** lists every
+conversation relay has carried - each discussion first, then every pair of
+sessions that exchanged direct messages - and shows the selected one as a
+transcript, newest at the bottom. A discussion post that fanned out to
+three participants is one line, not three; relay's own wake-ups are left
+out; `‼` marks a conversation whose last word was `blocked`, an escalation,
+or is still `[queued]` (undelivered - the recipient may be gone). `↑↓`
+picks a conversation, `PgUp`/`PgDn` walks back through a long one (the
+header says how many rows are above and below), `esc` or `m` returns to
+the board, `TAB` leaves the swarm view. The pane reads the same DB the
+feed does, so a conversation happening now scrolls in as it happens.
+
+`/` works over the board too. `messages`, `swarm`, `back` and `quit` run in
+place; any other verb closes the board first, so its log lines land where
+you can read them and a cursor-relative verb acts on a row you can see.
 
 The control view keeps **ROLE** and **TASK NOW** columns and shows sessions
 that need a human (prompting, blocked, or stale) as **duplicate rows in a

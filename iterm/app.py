@@ -1511,6 +1511,7 @@ class RelayApp(App):
         Binding("w", "workspaces", "Workspaces", show=True),
         Binding("S", "ws_save", "Save layout", show=True),
         Binding("tab", "swarm_view", "Swarm", priority=True),
+        Binding("M", "messages", "Messages", show=False),
         Binding("R", "restore", "Restore", show=True),
         Binding("W", "wipe", "Wipe", show=True),
         Binding("Z", "zap", "Zap project", show=True),
@@ -1549,6 +1550,14 @@ class RelayApp(App):
         self._timers_fleet_n = 0          # active timers across the fleet
         self._timers_fleet_next = None    # soonest next-fire, seconds
         self._swarm_visible = False
+        # The chat pane INSIDE the swarm overlay (`m` there, or /messages
+        # from anywhere). The cursor is remembered by conversation KEY, not
+        # index: the list is stable-ordered, but a new pair can still
+        # insert above the one being read, and the cursor must stay on it.
+        self._chat_visible = False
+        self._chat_key = None
+        self._chat_scroll = 0
+        self._chat_keys = []
         self._help_visible = False
         self._audit_visible = False
         self._settings_visible = False
@@ -1620,6 +1629,17 @@ class RelayApp(App):
                 or self._modal_open or self._park is not None
                 or self._intervene is not None or self._wssave is not None
                 or self._cmdline is not None)
+
+    def _swarm_only_open(self) -> bool:
+        """The swarm overlay is up and nothing else is: the one overlay the
+        palette may open over, because it is read-only - no capture, no
+        prompt, no cursor of its own that a typed verb could act on."""
+        return (self._swarm_visible and not (
+            self._settings_visible or self._help_visible
+            or self._timers_visible or self._parked_visible
+            or self._modal_open or self._park is not None
+            or self._intervene is not None or self._wssave is not None
+            or self._cmdline is not None))
 
     def _controllable(self):
         """Sessions relay could actually act on: everything except its own tab."""
@@ -2993,6 +3013,10 @@ class RelayApp(App):
             self.action_parked()          # ...and parked, same reason
         self._swarm_visible = not self._swarm_visible
         on = self._swarm_visible
+        # The overlay always reopens on the board; /messages sets the chat
+        # pane itself after this returns.
+        self._chat_visible = False
+        self._chat_scroll = 0
         self.query_one("#middle").styles.display = "none" if on else "block"
         self.query_one("#log").styles.display = "none" if on else "block"
         self.query_one("#swarmview").styles.display = "block" if on else "none"
@@ -3187,8 +3211,14 @@ class RelayApp(App):
         self._timer_form_close()
 
     # --- command line (`:` opens it, mirrors _timer_form) ----------------------
+    # Typed from the swarm board, these run WITHOUT closing it first: they
+    # are the overlay's own navigation. Anything else closes the board on
+    # its way to running, so its log lines land where the operator can see
+    # them and a cursor-relative verb acts on a row they are looking at.
+    _SWARM_INPLACE = frozenset({"messages", "swarm", "back", "quit"})
+
     def action_command_mode(self) -> None:
-        if self._any_overlay_open():
+        if self._any_overlay_open() and not self._swarm_only_open():
             return
         # `_any_overlay_open()` checks `self._cmdline`, and that is NOT
         # enough: `_cmdline_close()` nulls the state and then calls Textual's
@@ -3205,8 +3235,19 @@ class RelayApp(App):
         self._cmdline = {"open": True, "cursor": 0}
         inp = Input(placeholder="command (up/down picks, ENTER runs, ESC cancels)",
                     id="cmdline")
-        self.query_one("#middle").mount(inp)
-        self.query_one("#middle").mount(Static("", id="cmdlist"))
+        # #middle is display:none under the swarm overlay, and a widget
+        # mounted into a hidden container is exactly the silent `/` this
+        # fixes. The overlay's own pane hosts it then - it is a Static, so
+        # the line goes beside it, under the box.
+        host = (self.query_one("#swarmview").parent if self._swarm_visible
+                else self.query_one("#middle"))
+        if self._swarm_visible:
+            after = self.query_one("#swarmview")
+            host.mount(inp, after=after)
+            host.mount(Static("", id="cmdlist"), after=inp)
+        else:
+            host.mount(inp)
+            host.mount(Static("", id="cmdlist"))
         inp.focus()
         self._cmdlist_render()
 
@@ -3269,6 +3310,8 @@ class RelayApp(App):
             hint = f" - did you mean {', '.join(near)}?" if near else ""
             log.write_line(f"unknown command {name!r}{hint}")
             return
+        if self._swarm_visible and cmd.name not in self._SWARM_INPLACE:
+            self.action_swarm_view()
         # The bang gate, by BLAST RADIUS rather than by verb. A per-verb
         # `confirm` flag cannot see how far a command actually reached,
         # which is the only thing that matters: `tell w1 <msg>` is one
@@ -3965,6 +4008,34 @@ class RelayApp(App):
             event.stop()
             event.prevent_default()
             return
+        if (self._swarm_visible and self._cmdline is None
+                and not self._help_visible):
+            # The swarm overlay's own keys. Only matched cases stop the
+            # event (same rule as parked below): an unmatched key, notably
+            # TAB and `?`, must fall through to its binding. `m` here is the
+            # overlay's, not the mascot's - the README already promises `m`
+            # belongs to an open overlay.
+            k = event.key
+            if k == "m":
+                self._chat_toggle()
+            elif self._chat_visible and k == "escape":
+                self._chat_toggle()          # back to the board, not out
+            elif self._chat_visible and k in ("up", "k"):
+                self._chat_move(-1)
+            elif self._chat_visible and k in ("down", "j"):
+                self._chat_move(+1)
+            elif self._chat_visible and k == "pageup":
+                self._chat_scroll += 5
+                self._render_swarm_view()
+            elif self._chat_visible and k == "pagedown":
+                self._chat_scroll = max(0, self._chat_scroll - 5)
+                self._render_swarm_view()
+            else:
+                k = None
+            if k is not None:
+                event.stop()
+                event.prevent_default()
+                return
         if self._parked_visible and self._parked_edit is not None:
             # Every key belongs to the focused title Input (same rule as the
             # timers payload form below). ENTER arrives via
@@ -4232,25 +4303,98 @@ class RelayApp(App):
                 or _now - (th["closed_at"] or 0) < 86400]
             w = max(60, self.query_one("#swarmview").size.width
                     - 4 - OVERLAY_FRAME)
-            text = swarmlogic.render_swarm(sessions, tasks, msgs,
-                                           _time.time(), width=w,
-                                           stale=stale, activity=activity,
-                                           prs=prs, threads=threads)
-            # Chrome only - render_swarm owns the body and its own colors.
-            # Framed here rather than inside swarm.py because the panel
-            # belongs to the OVERLAY (which app.py owns for timers and parked
-            # too), not to the swarm rendering, which the CLI also prints
-            # without any overlay around it.
-            head = overlay_head(
-                "◈", "SWARM", f"{len(sessions)} sessions",
-                f"{len(tasks)} tasks",
-                [("TAB", "back"), ("f", "feed"), ("esc", "close")],
-                w, OVERLAY_ACCENT["swarm"]) + [""]
+            if self._chat_visible:
+                text, head = self._chat_text(w)
+            else:
+                text = swarmlogic.render_swarm(sessions, tasks, msgs,
+                                               _time.time(), width=w,
+                                               stale=stale, activity=activity,
+                                               prs=prs, threads=threads)
+                # Chrome only - render_swarm owns the body and its own
+                # colors. Framed here rather than inside swarm.py because
+                # the panel belongs to the OVERLAY (which app.py owns for
+                # timers and parked too), not to the swarm rendering, which
+                # the CLI also prints without any overlay around it.
+                head = overlay_head(
+                    "◈", "SWARM", f"{len(sessions)} sessions",
+                    f"{len(tasks)} tasks",
+                    [("TAB", "back"), ("m", "messages"), ("/", "command"),
+                     ("esc", "close")],
+                    w, OVERLAY_ACCENT["swarm"]) + [""]
             text = overlay_panel(head + text.splitlines(), w,
                                  OVERLAY_ACCENT["swarm"])
         except Exception as e:
             text = f"swarm db unavailable: {e}"
         self.query_one("#swarmview", Static).update(text)
+
+    # --- chat: every conversation relay carried, as a transcript ------------
+    def _chat_convs(self):
+        """The conversations as the chat lists them. 2000 rows, not the
+        feed's 200: this view is the history, and pruning already bounds it
+        at the retention window."""
+        import time as _time
+        msgs = [dict(r) for r in swarmdb.message_history(self._swarm_db,
+                                                         limit=2000)]
+        threads = [dict(r) for r in swarmdb.list_threads(self._swarm_db)]
+        return swarmlogic.conversations(msgs, threads, _time.time())
+
+    def _chat_text(self, w: int):
+        """(body, head) for the chat pane. The cursor follows its KEY
+        across re-renders; a key that vanished (pruned) falls back to the
+        first row, and an empty list to nothing."""
+        import time as _time
+        convs = self._chat_convs()
+        self._chat_keys = [c["key"] for c in convs]
+        cursor = (self._chat_keys.index(self._chat_key)
+                  if self._chat_key in self._chat_keys else 0)
+        if convs:
+            self._chat_key = convs[cursor]["key"]
+        # The overlay frame takes the top edge, the key bar, a blank and the
+        # bottom edge; the rest is the pane's.
+        h = max(6, self.query_one("#swarmview").size.height - 5)
+        self._chat_scroll = max(0, min(self._chat_scroll,
+                                       swarmlogic.chat_scroll_max(
+                                           convs, cursor, w, h)))
+        lines = swarmlogic.render_chat(convs, cursor, w, h,
+                                       scroll=self._chat_scroll,
+                                       now=_time.time())
+        head = overlay_head(
+            "◈", "SWARM", "messages", f"{len(convs)} chats",
+            [("↑↓", "chat"), ("PgUp/PgDn", "scroll"), ("m", "board"),
+             ("esc", "board"), ("TAB", "back")],
+            w, OVERLAY_ACCENT["swarm"]) + [""]
+        return "\n".join(lines), head
+
+    def _chat_move(self, step: int) -> None:
+        if not self._chat_keys:
+            return
+        i = (self._chat_keys.index(self._chat_key)
+             if self._chat_key in self._chat_keys else 0)
+        i = max(0, min(len(self._chat_keys) - 1, i + step))
+        self._chat_key = self._chat_keys[i]
+        self._chat_scroll = 0       # a new conversation opens at its newest
+        self._render_swarm_view()
+
+    def _chat_toggle(self) -> None:
+        self._chat_visible = not self._chat_visible
+        self._chat_scroll = 0
+        self._render_swarm_view()
+
+    def action_messages(self) -> None:
+        """`M` or /messages from anywhere: the swarm overlay, opened
+        straight on the chat pane. A toggle, the way TAB is for the board:
+        from the chat it leaves the swarm view; from the board it flips to
+        the chat (as `m` there does)."""
+        if self._swarm_visible and self._chat_visible:
+            self.action_swarm_view()
+            return
+        if not self._swarm_visible:
+            self.action_swarm_view()
+        if not self._swarm_visible:
+            return          # refused (a capture or prompt is open) - stay put
+        self._chat_visible = True
+        self._chat_scroll = 0
+        self._render_swarm_view()
 
     # --- hide / show ----------------------------------------------------------
     def action_hide(self) -> None:

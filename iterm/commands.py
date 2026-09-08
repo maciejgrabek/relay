@@ -436,6 +436,8 @@ CMD = (
         action="action_focus", key="n", hot=True, bar="jump"),
     Cmd(name="swarm", help="swarm view: kanban, interactions and feed",
         action="action_swarm_view", key="tab", hot=True, bar="swarm"),
+    Cmd(name="messages", help="chat pane: every conversation between sessions",
+        action="action_messages", key="M"),
     Cmd(name="pause", help="pause or resume relay's acting",
         action="action_pause", key="p", hot=True, bar="pause"),
     Cmd(name="quit", help="quit relay", action="action_quit", key="q",

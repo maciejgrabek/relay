@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional
+from typing import Tuple, List, Optional
 
 import chrome
 
@@ -1696,6 +1696,259 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
     if not messages:
         out.append("  (none)")
     return "\n".join(out)
+
+
+
+# --- chat view: conversations and their transcripts ----------------------------
+
+# The feed's colours, plus the two kinds only a discussion produces. A local
+# map rather than an edit to _KIND_COLOR: the 8-line feed has its own
+# contract with the README ("done green, blocked yellow, escalation red,
+# wake dim") and this view is allowed to say more than it does.
+_CHAT_COLOR = dict(_KIND_COLOR, agree="green")
+
+# Kinds that read as plain speech: no [tag] in front of the body.
+_CHAT_UNTAGGED = ("info", "say")
+
+
+def _pair_key(a: str, b: str) -> str:
+    x, y = sorted((a, b))
+    return f"pair:{x}|{y}"
+
+
+def conversations(messages, threads=(), now: float = 0.0) -> list:
+    """Every conversation relay has carried, as the chat view lists them:
+    each discussion (thread) first, in id order, then every session pair
+    that exchanged direct messages, in name order. The order is STABLE - a
+    new message never moves a conversation, it only updates its meta - so
+    the cursor stays on what the operator was reading.
+
+    A discussion's posts are the de-duplicated transcript (a post to N
+    participants is N rows in the DB; the transcript shows it once), and a
+    pair's messages are only the direct ones - thread posts belong to the
+    thread. relay's own wake-ups are system noise, not a conversation, and
+    are left out entirely, same rule as interaction_rows.
+
+    `flag` is the attention mark: the last word in the conversation is
+    blocked or an escalation, or is still queued (relay has not delivered
+    it yet - the recipient may be gone)."""
+    by_thread, pairs = {}, {}
+    for m in messages:
+        a, b = m["from_name"], m["to_name"]
+        if a == "relay" or b == "relay":
+            continue
+        tid = _get(m, "thread_id", None)
+        if tid is not None:
+            by_thread.setdefault(tid, []).append(m)
+        else:
+            pairs.setdefault(_pair_key(a, b), []).append(m)
+
+    def _finish(conv, msgs):
+        msgs = sorted(msgs, key=lambda x: (float(_get(x, "created_at", 0) or 0),
+                                          _get(x, "id", 0) or 0))
+        last = msgs[-1] if msgs else None
+        conv["msgs"] = msgs
+        conv["count"] = len(msgs)
+        conv["age_s"] = (max(0.0, now - float(_get(last, "created_at", 0) or 0))
+                         if last else 0.0)
+        conv["flag"] = bool(last) and (
+            kind_of(last) in ("blocked", "escalation")
+            or _get(last, "delivered_at") is None)
+        return conv
+
+    out = []
+    known = {}
+    for th in threads:
+        known[th["id"]] = th
+    for tid in sorted(set(known) | set(by_thread)):
+        th = known.get(tid)
+        rows = by_thread.get(tid, [])
+        # De-dupe exactly as db.thread_messages does, so the transcript here
+        # and `relay thread <id>` never disagree about how many posts exist.
+        seen, posts = set(), []
+        for r in rows:
+            k = (r["from_name"], r["body"], kind_of(r),
+                 round(float(_get(r, "created_at", 0) or 0), 3))
+            if k in seen:
+                continue
+            seen.add(k)
+            posts.append(r)
+        state = _get(th, "state", "open") if th else "open"
+        topic = _get(th, "topic", "") if th else f"discussion #{tid}"
+        parts = [x for x in str(_get(th, "participants", "") if th else "")
+                 .split(",") if x]
+        meta = state
+        if state != "open" and th and _get(th, "outcome", ""):
+            meta = f"{state}: {th['outcome']}"
+        if parts:
+            meta = f"{', '.join(parts)} · {meta}"
+        out.append(_finish({"key": f"thread:{tid}", "kind": "thread",
+                            "id": tid, "title": f"#{tid} {topic}",
+                            "meta": meta}, posts))
+    for key in sorted(pairs):
+        a, b = key[len("pair:"):].split("|", 1)
+        out.append(_finish({"key": key, "kind": "pair", "a": a, "b": b,
+                            "title": f"{a} ⇄ {b}", "meta": "direct messages"},
+                           pairs[key]))
+    return out
+
+
+def _chat_time(ts: float) -> str:
+    import time as _t
+    return _t.strftime("%H:%M", _t.localtime(ts))
+
+
+def _wrap(text: str, width: int) -> List[str]:
+    import textwrap
+    width = max(8, width)
+    out: List[str] = []
+    for para in str(text).splitlines() or [""]:
+        out.extend(textwrap.wrap(para, width, break_long_words=True,
+                                 break_on_hyphens=False) or [""])
+    return out
+
+
+def _transcript_rows(conv, width: int) -> List[Tuple[str, str]]:
+    """The selected conversation as (plain, markup) rows, oldest first. A
+    body wraps under its own head rather than being clipped: a chat you
+    cannot read the end of is not a chat. Plain rows exist for the layout
+    (padding must count cells, and markup has none); markup rows are what
+    the screen shows."""
+    if conv is None:
+        return []
+    if not conv["msgs"]:
+        return [("  (no messages yet)", "[dim]  (no messages yet)[/dim]")]
+    rows: List[Tuple[str, str]] = []
+    for m in conv["msgs"]:
+        k = kind_of(m)
+        tag = "" if k in _CHAT_UNTAGGED else f"[{k}] "
+        queued = "" if _get(m, "delivered_at") else "  [queued]"
+        head = f"{_chat_time(float(_get(m, 'created_at', 0) or 0))} {m['from_name']}"
+        if conv["kind"] == "pair":
+            head += f" ▸ {m['to_name']}"
+        head += "  "
+        indent = " " * min(len(head), max(4, width // 3))
+        body_lines = _wrap(f"{tag}{m['body']}{queued}", width - len(head))
+        color = _CHAT_COLOR.get(k)
+        for i, seg in enumerate(body_lines):
+            plain = (head if i == 0 else indent) + seg
+            if color:
+                mk = f"[{color}]{_esc(plain)}[/{color}]"
+            elif queued and i == len(body_lines) - 1:
+                mk = _esc(plain[:-len(queued)]) + f"[dim]{_esc(queued)}[/dim]"
+            else:
+                mk = _esc(plain)
+            rows.append((plain, mk))
+    return rows
+
+
+def _chat_widths(width: int) -> Tuple[int, int]:
+    lw = max(22, min(36, width // 3))
+    return lw, max(20, width - lw - 3)
+
+
+def chat_scroll_max(convs, cursor: int, width: int, height: int) -> int:
+    """How far back `scroll` can go for the conversation at `cursor`: the
+    rows of transcript that do not fit in the pane. The app clamps its
+    scroll state with this so PgUp past the top is a no-op, not a blank."""
+    conv = convs[cursor] if 0 <= cursor < len(convs) else None
+    _, rw = _chat_widths(width)
+    return max(0, len(_transcript_rows(conv, rw)) - max(1, height - 1))
+
+
+def render_chat(convs, cursor: int, width: int, height: int,
+                scroll: int = 0, now: float = 0.0) -> List[str]:
+    """Two panes, exactly `height` rows: conversations on the left (cursor
+    row reversed, `‼` on anything needing attention), the selected one's
+    transcript on the right, newest at the bottom. `scroll` is rows walked
+    back from the bottom, clamped. Every dynamic string goes through _esc();
+    the caller renders with markup=True.
+
+    Empty teaches: with no conversations at all the pane says how one comes
+    to exist, because "(none)" reads as "relay has no such feature"."""
+    height = max(3, height)
+    lw, rw = _chat_widths(width)
+    sep = " │ "
+
+    def _row(left_plain, left_mk, right_plain, right_mk):
+        lpad = " " * max(0, lw - len(left_plain))
+        return f"{left_mk}{lpad}{sep}{right_mk}"
+
+    if not convs:
+        head = _row("conversations", "[bold]conversations[/bold]",
+                    "", "")
+        body = [
+            "  (none yet)",
+            "",
+            "  A session talks to another with:",
+            "    relay send <name> \"<message>\"",
+            "  or opens a discussion with:",
+            "    relay discuss <name> <name> \"<question>\"",
+        ]
+        out = [head]
+        for b in body[:height - 1]:
+            out.append(_row("", "", _clip(b, rw), f"[dim]{_esc(_clip(b, rw))}[/dim]"))
+        while len(out) < height:
+            out.append(_row("", "", "", ""))
+        return out
+
+    cursor = max(0, min(cursor, len(convs) - 1))
+    sel = convs[cursor]
+
+    # left column: keep the cursor in view when the list is taller than
+    # the pane
+    visible = height - 1
+    top = 0
+    if len(convs) > visible:
+        top = min(max(0, cursor - visible // 2), len(convs) - visible)
+    left = []
+    for i, c in enumerate(convs[top:top + visible], start=top):
+        mark = "‼" if c["flag"] else " "
+        count = str(c["count"])
+        title = _clip(c["title"], lw - len(count) - 4)
+        plain = f"{mark} {title}"
+        plain = plain + " " * max(1, lw - len(plain) - len(count)) + count
+        plain = _clip(plain, lw)
+        if i == cursor:
+            mk = f"[reverse]{_esc(plain)}[/reverse]"
+        elif c["flag"]:
+            mk = f"[yellow]{_esc(plain)}[/yellow]"
+        else:
+            mk = _esc(plain)
+        left.append((plain, mk))
+
+    # right column: header, then the tail of the transcript
+    rows = _transcript_rows(sel, rw)
+    smax = max(0, len(rows) - visible)
+    scroll = max(0, min(int(scroll), smax))
+    end = len(rows) - scroll
+    shown = rows[max(0, end - visible):end]
+    # Where in the history the pane is, on the header rather than in the
+    # transcript: an indicator row would cost a line of chat each, and
+    # the reader of a scrolled view wants the chat, not the scrollbar.
+    hidden_above = max(0, end - visible)
+    pos = ""
+    if hidden_above or scroll:
+        parts = []
+        if hidden_above:
+            parts.append(f"↑ {hidden_above} earlier")
+        if scroll:
+            parts.append(f"↓ {scroll} newer")
+        pos = "  (" + " · ".join(parts) + ")"
+    title = _clip(sel["title"], max(8, rw - len(pos) - 2))
+    meta = _clip(f"  {sel['meta']}", max(0, rw - len(title) - len(pos)))
+    right_head_plain = f"{title}{meta}{pos}"
+    right_head = (f"[bold]{_esc(title)}[/bold]"
+                  f"[dim]{_esc(meta)}{_esc(pos)}[/dim]")
+
+    head_left = f"conversations {len(convs)}"
+    out = [_row(head_left, f"[bold]{_esc(head_left)}[/bold]",
+                right_head_plain, right_head)]
+    for i in range(visible):
+        lp, lm = left[i] if i < len(left) else ("", "")
+        rp, rm = shown[i] if i < len(shown) else ("", "")
+        out.append(_row(lp, lm, rp, rm))
+    return out
 
 
 def _park_context_dict(row) -> dict:
