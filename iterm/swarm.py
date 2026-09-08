@@ -1845,7 +1845,7 @@ def _transcript_rows(conv, width: int) -> List[Tuple[str, str]]:
         if conv["kind"] == "pair":
             head += f" ▸ {m['to_name']}"
         head += "  "
-        tick = " ✓" if (native and _get(m, "received_at")) else ""
+        tick = " ✓" if (native and _get(m, "received_at") and not queued) else ""
         indent = " " * min(len(head), max(4, width // 3))
         body_lines = _wrap(f"{tag}{m['body']}{queued}{tick}", width - len(head))
         color = _CHAT_COLOR.get(k)

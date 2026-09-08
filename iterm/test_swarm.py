@@ -1859,6 +1859,23 @@ def test_conversations_and_chat():
                 and any("got it" in x and not x.rstrip().endswith("✓") for x in plain))
     ok &= check("the left list marks a conversation whose last word was native",
                 any("»" in x.split("│")[0] and "peera-d0" in x for x in plain))
+
+    # a row that is still queued can never have been received: no tick, and
+    # the dimmed [queued] tail stays the literal end of the row so plain and
+    # markup agree
+    odd = [pm(5, "peera-d0", "peerb-fa", "ghost", 5, received=True)]
+    odd[0]["delivered_at"] = None
+    co = swarm.conversations(odd, [], now)
+    lines = swarm.render_chat(co, 0, 100, 6, now=now)
+    plain = [_plain(x) for x in lines]
+    row = next(x for x in plain if "ghost" in x)
+    ok &= check("a queued native row shows [queued] and no tick",
+                row.rstrip().endswith("[queued]") and "✓" not in row)
+    prow, mrow = next(p for p in swarm._transcript_rows(co[0], 70)
+                      if "ghost" in p[0])
+    ok &= check("...and the row's markup, stripped, equals its plain twin",
+                _plain(mrow) == prow and prow.rstrip().endswith("[queued]"))
+
     mixed = native + [m(3, "peera-d0", "peerb-fa", "via relay now", ago=10)]
     cm = swarm.conversations(mixed, [], now)
     ok &= check("a pair with both transports says mixed",
