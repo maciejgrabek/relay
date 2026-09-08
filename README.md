@@ -1229,6 +1229,24 @@ The view also shows a per-tab heartbeat in the `↻` column, and the
 live-feed pane names WHY the selected session is being held
 (`‼ AWAITING: <command>`); the held command renders red in LAST DIRECTIVE.
 
+#### Native session-to-session messages
+
+Claude Code sessions on one machine can message each other directly (list
+them with the ListAgents tool, message with SendMessage). Relay logs that
+traffic too, from both ends, through two hooks in your user settings:
+
+    relay hooks install      # shows the diff to ~/.claude/settings.json, asks
+    relay hooks status
+    relay hooks uninstall
+
+Nothing changes for the sessions. Each native message shows in the chat
+pane with a `»` in front and a `✓` once the recipient's side confirmed it;
+a pair's header says `native` or `mixed`. Relay never re-delivers these
+rows - Claude Code carried them - so a failed native send stays flagged in
+the pane and is never typed anywhere. Names are the ones Claude Code
+derives per process (`dragen-30`), so two runs in one directory are two
+names. `relay doctor` says whether the hooks are in place.
+
 ### relay spawn
 
 `relay spawn --name be-worker --project webshop "..."` opens a new iTerm2
