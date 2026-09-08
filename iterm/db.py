@@ -71,7 +71,11 @@ CREATE TABLE IF NOT EXISTS messages(
   delivered_at REAL,
   kind TEXT NOT NULL DEFAULT 'info',
   reply_to INTEGER,
-  thread_id INTEGER
+  thread_id INTEGER,
+  via TEXT NOT NULL DEFAULT 'relay',
+  peer_msg_id TEXT,
+  from_cwd TEXT NOT NULL DEFAULT '',
+  received_at REAL
 );
 CREATE TABLE IF NOT EXISTS tasks(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +182,7 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-_CURRENT_VERSION = 12
+_CURRENT_VERSION = 13
 _MIGRATIONS = {
     # from_version: (SQL to run, ...)
     1: ("ALTER TABLE sessions ADD COLUMN arm_request TEXT NOT NULL DEFAULT ''",),
@@ -257,6 +261,16 @@ _MIGRATIONS = {
     # which reads as "no number available", never as "zero tokens".
     11: ("ALTER TABLE sessions ADD COLUMN claude_session_id TEXT NOT NULL "
          "DEFAULT ''",),
+    # v13: native peer traffic. Claude Code sessions message each other over
+    # a local socket that relay never sees; the `relay hook` verbs record
+    # that traffic here from both ends. `via` tells the delivery loop to
+    # leave a row alone ('peer' rows were delivered by Claude Code itself),
+    # `from_cwd` is what a restarted session is looked up by (native names
+    # are per process), `received_at` is the recipient-side confirmation.
+    12: ("ALTER TABLE messages ADD COLUMN via TEXT NOT NULL DEFAULT 'relay'",
+         "ALTER TABLE messages ADD COLUMN peer_msg_id TEXT",
+         "ALTER TABLE messages ADD COLUMN from_cwd TEXT NOT NULL DEFAULT ''",
+         "ALTER TABLE messages ADD COLUMN received_at REAL"),
 }
 
 
@@ -519,14 +533,54 @@ def queue_message(conn, from_name: str, to_name: str, body: str,
     return cur.lastrowid
 
 
+def record_peer_message(conn, from_name: str, to_name: str, body: str,
+                        from_cwd: str = "", delivered: bool = True,
+                        peer_msg_id: Optional[str] = None,
+                        now: Optional[float] = None) -> int:
+    """A message Claude Code already carried over its own socket. Recorded
+    delivered (relay must never type it anywhere); a failed send is kept
+    with delivered_at NULL so the pane flags it, and undelivered() still
+    skips it because via != 'relay'."""
+    ts = _now(now)
+    cur = conn.execute(
+        """INSERT INTO messages(project, from_name, to_name, body, created_at,
+                                delivered_at, kind, via, peer_msg_id, from_cwd)
+           VALUES('', ?, ?, ?, ?, ?, 'info', 'peer', ?, ?)""",
+        (from_name, to_name, body, ts, ts if delivered else None,
+         peer_msg_id, from_cwd))
+    conn.commit()
+    return cur.lastrowid
+
+
+def find_peer_message(conn, from_name: str, to_name: str, body: str,
+                      since: float) -> Optional[sqlite3.Row]:
+    """The sender-side row the recipient's hook should confirm: same
+    parties and body, unconfirmed, created since `since`. Newest first, so
+    two identical messages in the window confirm in order."""
+    return conn.execute(
+        """SELECT * FROM messages
+           WHERE via='peer' AND received_at IS NULL
+             AND from_name=? AND to_name=? AND body=? AND created_at>=?
+           ORDER BY created_at DESC, id DESC LIMIT 1""",
+        (from_name, to_name, body, since)).fetchone()
+
+
+def mark_received(conn, msg_id: int, now: Optional[float] = None) -> None:
+    conn.execute("UPDATE messages SET received_at=? WHERE id=?",
+                 (_now(now), msg_id))
+    conn.commit()
+
+
 def undelivered(conn, to_name: Optional[str] = None) -> List[sqlite3.Row]:
+    """Queued rows relay itself must deliver. Peer rows (via='peer') were
+    carried by Claude Code's own socket and are never relay's to type."""
     if to_name is None:
         return conn.execute(
-            "SELECT * FROM messages WHERE delivered_at IS NULL "
+            "SELECT * FROM messages WHERE delivered_at IS NULL AND via='relay' "
             "ORDER BY created_at, id").fetchall()
     return conn.execute(
-        "SELECT * FROM messages WHERE delivered_at IS NULL AND to_name=? "
-        "ORDER BY created_at, id", (to_name,)).fetchall()
+        "SELECT * FROM messages WHERE delivered_at IS NULL AND via='relay' "
+        "AND to_name=? ORDER BY created_at, id", (to_name,)).fetchall()
 
 
 def mark_delivered(conn, msg_id: int, now: Optional[float] = None) -> None:

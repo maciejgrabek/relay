@@ -37,8 +37,8 @@ def run():
     conn = db.connect(path)
 
     # --- schema versioning --------------------------------------------------
-    ok &= check("fresh connect stamps user_version = 12",
-                conn.execute("PRAGMA user_version").fetchone()[0] == 12)
+    ok &= check("fresh connect stamps user_version = 13",
+                conn.execute("PRAGMA user_version").fetchone()[0] == 13)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     ok &= check("tasks has parked/workdir/context",
                 {"parked", "workdir", "context"} <= cols)
@@ -323,12 +323,12 @@ def run():
     row = mig.execute("SELECT arm_request, mode FROM sessions "
                       "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with arm_request + mode columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 12
+                mig.execute("PRAGMA user_version").fetchone()[0] == 13
                 and row["arm_request"] == "" and row["mode"] == "")
     mrow = mig.execute("SELECT workdir, spawn_prompt, closed_at FROM sessions "
                        "WHERE name='migrated'").fetchone()
     ok &= check("v1 db migrates to current with context + closed_at columns",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 12
+                mig.execute("PRAGMA user_version").fetchone()[0] == 13
                 and mrow["workdir"] == "" and mrow["spawn_prompt"] == ""
                 and mrow["closed_at"] == 0)
 
@@ -362,7 +362,7 @@ def run():
     omig = db.connect(opath)
     _oid = db.queue_message(omig, "a", "b", "post-migration", reply_to=1)
     ok &= check("v9 db migrates and takes reply_to",
-                omig.execute("PRAGMA user_version").fetchone()[0] == 12
+                omig.execute("PRAGMA user_version").fetchone()[0] == 13
                 and omig.execute("SELECT reply_to FROM messages WHERE id=?",
                                  (_oid,)).fetchone()[0] == 1)
     omig.close()
@@ -379,7 +379,7 @@ def run():
     old.close()
     mig = db.connect(p2)
     ok &= check("v10 DB migrates to 12",
-                mig.execute("PRAGMA user_version").fetchone()[0] == 12)
+                mig.execute("PRAGMA user_version").fetchone()[0] == 13)
     mcols = {r[1] for r in mig.execute("PRAGMA table_info(tasks)")}
     ok &= check("migrated DB has the three columns",
                 {"parked", "workdir", "context"} <= mcols)
@@ -646,7 +646,7 @@ def run():
     hold.close()
     hmig = db.connect(hpath)
     ok &= check("v8 -> v9 migration runs",
-                hmig.execute("PRAGMA user_version").fetchone()[0] == 12)
+                hmig.execute("PRAGMA user_version").fetchone()[0] == 13)
     ok &= check("legacy 'human' session row is cleared",
                 db.get_session(hmig, "human") is None)
     legacy_task = hmig.execute(
@@ -862,7 +862,7 @@ def run():
     p5 = os.path.join(tempfile.mkdtemp(), "v5.db")
     conn5 = db.connect(p5)
     ok &= check("fresh DB is schema v9",
-                conn5.execute("PRAGMA user_version").fetchone()[0] == 12)
+                conn5.execute("PRAGMA user_version").fetchone()[0] == 13)
     mid = db.queue_message(conn5, "a", "b", "hello")
     row = conn5.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
     ok &= check("queue_message defaults kind=info", row["kind"] == "info")
@@ -904,7 +904,7 @@ def run():
     old.commit(); old.close()
     up = db.connect(p4)
     ok &= check("v4 -> current migration runs",
-                up.execute("PRAGMA user_version").fetchone()[0] == 12)
+                up.execute("PRAGMA user_version").fetchone()[0] == 13)
     cols_m = {r[1] for r in up.execute("PRAGMA table_info(messages)")}
     cols_s = {r[1] for r in up.execute("PRAGMA table_info(sessions)")}
     ok &= check("migration adds kind + worktree_repo",
@@ -1062,7 +1062,7 @@ def run():
     old6.close()
     up6 = db.connect(p6)
     ok &= check("v6 timers table migrates to the current version",
-                up6.execute("PRAGMA user_version").fetchone()[0] == 12)
+                up6.execute("PRAGMA user_version").fetchone()[0] == 13)
     cols_t = {r[1] for r in up6.execute("PRAGMA table_info(timers)")}
     ok &= check("v6 -> current adds the key column", "key" in cols_t)
     legacy = up6.execute(
@@ -1135,7 +1135,7 @@ def run():
     old7.close()
     up7 = db.connect(p7)                  # must NOT raise
     ok &= check("connect() survives a v7 DB holding duplicate (sid, key) rows",
-                up7.execute("PRAGMA user_version").fetchone()[0] == 12)
+                up7.execute("PRAGMA user_version").fetchone()[0] == 13)
     dup_rows = [r for r in db.list_timers(up7, "DUP-SID") if r["key"] == "prs"]
     ok &= check("dedupe keeps exactly one row per (session, key) group",
                 len(dup_rows) == 1 and dup_rows[0]["label"] == "first")
@@ -1341,8 +1341,68 @@ def run():
                 not db.set_watcher_workdir(conn, "wd1", ""))
 
     conn.close()
+    ok = test_peer_messages() and ok
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
+    return ok
+
+
+def test_peer_messages():
+    print("\n== peer messages (v13) ==")
+    ok = True
+    conn = db.connect(_tmpdb())
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    ok &= check("schema is at v13", v == 13)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
+    ok &= check("messages has via/peer_msg_id/from_cwd/received_at",
+                {"via", "peer_msg_id", "from_cwd", "received_at"} <= cols)
+
+    # a plain relay send is via=relay and undelivered
+    rid = db.queue_message(conn, "coord", "w1", "hello", now=100.0)
+    row = db.get_message(conn, rid)
+    ok &= check("queue_message defaults via=relay", row["via"] == "relay")
+    ok &= check("...and stays in undelivered()",
+                [m["id"] for m in db.undelivered(conn)] == [rid])
+
+    # a native peer send is recorded delivered and never queued
+    pid = db.record_peer_message(conn, "peera-d0", "peerb-fa", "hi there",
+                                 from_cwd="/tmp/peerA", peer_msg_id="m-1",
+                                 now=200.0)
+    row = db.get_message(conn, pid)
+    ok &= check("peer row is via=peer with cwd and msg id",
+                row["via"] == "peer" and row["from_cwd"] == "/tmp/peerA"
+                and row["peer_msg_id"] == "m-1")
+    ok &= check("peer row is delivered at insert",
+                row["delivered_at"] == 200.0 and row["received_at"] is None)
+    ok &= check("undelivered() never returns peer rows",
+                [m["id"] for m in db.undelivered(conn)] == [rid])
+
+    # a FAILED peer send is kept undelivered-looking but still never queued
+    fid = db.record_peer_message(conn, "peera-d0", "nobody", "lost",
+                                 delivered=False, now=201.0)
+    ok &= check("failed peer send has no delivered_at",
+                db.get_message(conn, fid)["delivered_at"] is None)
+    ok &= check("...and undelivered() still skips it",
+                fid not in [m["id"] for m in db.undelivered(conn)])
+    ok &= check("...and undelivered(to_name) skips it too",
+                db.undelivered(conn, "nobody") == [])
+
+    # the recipient's hook finds the sender's row and confirms it
+    found = db.find_peer_message(conn, "peera-d0", "peerb-fa", "hi there",
+                                 since=150.0)
+    ok &= check("find_peer_message finds the unconfirmed row",
+                found is not None and found["id"] == pid)
+    ok &= check("...but not outside the window",
+                db.find_peer_message(conn, "peera-d0", "peerb-fa", "hi there",
+                                     since=250.0) is None)
+    db.mark_received(conn, pid, now=203.0)
+    ok &= check("mark_received stamps received_at",
+                db.get_message(conn, pid)["received_at"] == 203.0)
+    ok &= check("a confirmed row is not found again",
+                db.find_peer_message(conn, "peera-d0", "peerb-fa", "hi there",
+                                     since=150.0) is None)
+    ok &= check("message_history still includes peer rows",
+                {m["id"] for m in db.message_history(conn)} == {rid, pid, fid})
     return ok
 
 
