@@ -771,6 +771,20 @@ def test_hook_verbs():
            if r["body"] == "from a ghost"][0]
     ok &= check("an unregistered sender is named by its directory",
                 row["from_name"] == "peerA" and row["from_cwd"].endswith("/peerA"))
+
+    # native delivery beats the sender's async PostToolUse hook: the
+    # recipient's prompt hook runs FIRST and inserts the row; the sender's
+    # post-tool hook must then claim it, not insert a twin.
+    conn.execute("DELETE FROM messages WHERE via='peer'")
+    conn.commit()
+    run_hook("hook", "prompt", payload=load("prompt_envelope.json"))
+    run_hook("hook", "post-tool", payload=load("post_tool_send.json"))
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("recipient-first still yields exactly one row, now claimed",
+                len(rows) == 1 and rows[0]["received_at"] is not None
+                and rows[0]["peer_msg_id"] == "eff4f367-bbcb-48c8-bebd-fbed13ec1237"
+                and rows[0]["delivered_at"] is not None
+                and rows[0]["from_cwd"].endswith("/peerA"))
     os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
     return ok
 

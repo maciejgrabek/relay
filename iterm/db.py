@@ -565,6 +565,32 @@ def find_peer_message(conn, from_name: str, to_name: str, body: str,
         (from_name, to_name, body, since)).fetchone()
 
 
+def find_peer_receipt(conn, from_name: str, to_name: str, body: str,
+                      since: float) -> Optional[sqlite3.Row]:
+    """The row the RECIPIENT's hook inserted when it ran before the sender's
+    (native delivery beats an async PostToolUse hook by ~100ms): same
+    parties and body, received, but never claimed by a sender (no msg id).
+    Newest first."""
+    return conn.execute(
+        """SELECT * FROM messages
+           WHERE via='peer' AND received_at IS NOT NULL AND peer_msg_id IS NULL
+             AND from_name=? AND to_name=? AND body=? AND created_at>=?
+           ORDER BY created_at DESC, id DESC LIMIT 1""",
+        (from_name, to_name, body, since)).fetchone()
+
+
+def claim_peer_message(conn, msg_id: int, from_cwd: str = "",
+                       delivered: bool = True,
+                       peer_msg_id: Optional[str] = None,
+                       now: Optional[float] = None) -> None:
+    """The sender's side of a row the recipient inserted first: stamp what
+    only the sender knows. A failed send clears delivered_at."""
+    conn.execute(
+        "UPDATE messages SET from_cwd=?, delivered_at=?, peer_msg_id=? WHERE id=?",
+        (from_cwd, _now(now) if delivered else None, peer_msg_id, msg_id))
+    conn.commit()
+
+
 def mark_received(conn, msg_id: int, now: Optional[float] = None) -> None:
     conn.execute("UPDATE messages SET received_at=? WHERE id=?",
                  (_now(now), msg_id))

@@ -1403,6 +1403,32 @@ def test_peer_messages():
                                      since=150.0) is None)
     ok &= check("message_history still includes peer rows",
                 {m["id"] for m in db.message_history(conn)} == {rid, pid, fid})
+
+    # the recipient's hook can run first: it inserts a row with no msg id,
+    # already received, that the sender's hook must complete rather than
+    # duplicate.
+    rcid = db.record_peer_message(conn, "peera-d0", "peerb-fa",
+                                  "recipient ran first", now=300.0)
+    db.mark_received(conn, rcid, now=300.5)
+    ok &= check("find_peer_receipt finds a received row with no msg id",
+                db.find_peer_receipt(conn, "peera-d0", "peerb-fa",
+                                     "recipient ran first",
+                                     since=250.0)["id"] == rcid)
+    ok &= check("...but not a row that already has a msg id",
+                db.find_peer_receipt(conn, "peera-d0", "peerb-fa", "hi there",
+                                     since=150.0) is None)
+    db.claim_peer_message(conn, rcid, from_cwd="/tmp/peerA",
+                          delivered=True, peer_msg_id="m-2", now=301.0)
+    row = db.get_message(conn, rcid)
+    ok &= check("claim_peer_message stamps cwd, delivered_at and msg id",
+                row["from_cwd"] == "/tmp/peerA" and row["delivered_at"] == 301.0
+                and row["peer_msg_id"] == "m-2")
+    ok &= check("...and received_at is untouched",
+                row["received_at"] == 300.5)
+    ok &= check("a claimed row is no longer found as an open receipt",
+                db.find_peer_receipt(conn, "peera-d0", "peerb-fa",
+                                     "recipient ran first",
+                                     since=250.0) is None)
     return ok
 
 

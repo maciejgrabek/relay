@@ -1693,10 +1693,18 @@ def _hook_post_tool(payload) -> None:
     resp = payload.get("tool_response")
     resp = resp if isinstance(resp, dict) else {}
     from_name, from_cwd = _hook_sender(payload, registry)
+    delivered = bool(resp.get("success", True))
+    peer_msg_id = str(resp["msg_id"]) if resp.get("msg_id") else None
+    conn = db.connect()
+    receipt = db.find_peer_receipt(conn, from_name, target["name"], body,
+                                   since=time.time() - 120)
+    if receipt is not None:
+        db.claim_peer_message(conn, receipt["id"], from_cwd=from_cwd,
+                              delivered=delivered, peer_msg_id=peer_msg_id)
+        return
     db.record_peer_message(
-        db.connect(), from_name, target["name"], body, from_cwd=from_cwd,
-        delivered=bool(resp.get("success", True)),
-        peer_msg_id=(str(resp["msg_id"]) if resp.get("msg_id") else None))
+        conn, from_name, target["name"], body, from_cwd=from_cwd,
+        delivered=delivered, peer_msg_id=peer_msg_id)
 
 
 def _hook_prompt(payload) -> None:
