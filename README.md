@@ -37,11 +37,14 @@ below it, both full-width. `TAB` flips to the **swarm view** (a kanban board of
 tasks, open discussions, pull requests and a message feed) when you're running
 a coordinated fleet.
 
-> **`relay`** is iTerm2-native: one Python process, no Claude Code hooks,
-> no session restart. It watches iTerm2 screens and auto-clears safe permission
-> prompts - including Claude Code's obfuscation-detector prompts that hooks
-> *cannot* suppress - by sending `Enter`; it pings you on dangerous ones. The
-> safety classifier lives in [`lib/danger.sh`](lib/danger.sh).
+> **`relay`** is iTerm2-native: one Python process, and its own supervision
+> needs no Claude Code hooks or session restart. It watches iTerm2 screens and
+> auto-clears safe permission prompts - including Claude Code's
+> obfuscation-detector prompts that hooks *cannot* suppress - by sending
+> `Enter`; it pings you on dangerous ones. The safety classifier lives in
+> [`lib/danger.sh`](lib/danger.sh). The one optional feature that does use
+> hooks is logging native session-to-session messages: `relay hooks install`
+> adds two, and sessions already running may need a restart to pick them up.
 
 ## Why
 
@@ -762,6 +765,7 @@ shell:
 ```bash
 relay doctor
 # relay <sha> <date>
+#   hooks: installed (native session messages are logged)
 #   sessions: 2 registered   (bff mode=wild doing #1, api mode=wild ...)
 #   messages: 0 queued
 #   tasks: 1 doing, 1 blocked

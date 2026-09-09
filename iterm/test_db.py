@@ -780,10 +780,17 @@ def run():
     new = db.queue_message(k, "x", "coord", "new", "p", now=1_000_000.0)
     db.mark_delivered(k, new, now=1_000_001.0)
     qd = db.queue_message(k, "x", "coord", "still queued", "p", now=100.0)
+    # an old undelivered peer row (a failed native send relay will never
+    # retry) is pruned on age alone; an old undelivered relay row (relay
+    # may still deliver it) is kept
+    old_peer = db.record_peer_message(k, "x", "nobody", "lost",
+                                      delivered=False, now=100.0)
     pn = db.prune_messages(k, older_than_days=7, now=1_000_100.0)
-    ok &= check("prune_messages drops old delivered only", pn == 1)
+    ok &= check("prune_messages drops old delivered only", pn == 2)
     ok &= check("prune keeps queued + recent",
                 any(m["id"] == qd for m in db.undelivered(k)))
+    ok &= check("prune_messages drops old undelivered peer row",
+                db.get_message(k, old_peer) is None)
 
     # delete_session must NOT wipe message history (only the sessions row)
     db.register(k, "hist", "SID-H", "worker", "p", now=1_000_200.0)
@@ -1429,6 +1436,23 @@ def test_peer_messages():
                 db.find_peer_receipt(conn, "peera-d0", "peerb-fa",
                                      "recipient ran first",
                                      since=250.0) is None)
+
+    # a FAILED ack must never un-deliver a row the recipient already
+    # confirmed receipt of
+    rc2 = db.record_peer_message(conn, "peera-d0", "peerb-fa",
+                                 "receipt then failed ack", now=400.0)
+    db.mark_received(conn, rc2, now=400.5)
+    db.claim_peer_message(conn, rc2, from_cwd="/tmp/peerA",
+                          delivered=False, peer_msg_id="m-9", now=401.0)
+    row = db.get_message(conn, rc2)
+    ok &= check("a failed ack on a received row still stamps delivered_at",
+                row["delivered_at"] is not None)
+    ok &= check("...and stamps peer_msg_id",
+                row["peer_msg_id"] == "m-9")
+    ok &= check("...and find_peer_receipt no longer returns it",
+                db.find_peer_receipt(conn, "peera-d0", "peerb-fa",
+                                     "receipt then failed ack",
+                                     since=350.0) is None)
     return ok
 
 

@@ -584,11 +584,48 @@ def claim_peer_message(conn, msg_id: int, from_cwd: str = "",
                        peer_msg_id: Optional[str] = None,
                        now: Optional[float] = None) -> None:
     """The sender's side of a row the recipient inserted first: stamp what
-    only the sender knows. A failed send clears delivered_at."""
+    only the sender knows. A failed send clears delivered_at, unless the
+    recipient already confirmed receipt - a receipt the recipient's hook
+    already recorded must never be un-delivered by a late or failed ack."""
+    if delivered:
+        delivered_at = _now(now)
+    else:
+        row = get_message(conn, msg_id)
+        if row is not None and row["received_at"] is not None:
+            delivered_at = row["delivered_at"] or _now(now)
+        else:
+            delivered_at = None
     conn.execute(
         "UPDATE messages SET from_cwd=?, delivered_at=?, peer_msg_id=? WHERE id=?",
-        (from_cwd, _now(now) if delivered else None, peer_msg_id, msg_id))
+        (from_cwd, delivered_at, peer_msg_id, msg_id))
     conn.commit()
+
+
+def peer_message_exists(conn, peer_msg_id: str) -> bool:
+    """True if a row already carries this peer_msg_id. Claude Code can run
+    the same hook more than once for one event (user + project + local
+    settings all define it), so the sender's hook checks this before
+    writing anything - a second invocation of the same SendMessage must
+    not produce a second row."""
+    if not peer_msg_id:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM messages WHERE peer_msg_id=? LIMIT 1",
+        (peer_msg_id,)).fetchone() is not None
+
+
+def recent_peer_receipt_exists(conn, from_name: str, to_name: str, body: str,
+                               since: float) -> bool:
+    """True if a received, unclaimed-or-claimed peer row with these exact
+    parties and body already landed within the window - the recipient's
+    hook uses this to skip a duplicate invocation of the same
+    UserPromptSubmit event."""
+    return conn.execute(
+        """SELECT 1 FROM messages
+           WHERE via='peer' AND received_at IS NOT NULL
+             AND from_name=? AND to_name=? AND body=? AND created_at>=?
+           LIMIT 1""",
+        (from_name, to_name, body, since)).fetchone() is not None
 
 
 def mark_received(conn, msg_id: int, now: Optional[float] = None) -> None:
@@ -1218,10 +1255,14 @@ def prune_threads(conn, older_than_days: float, now=None) -> int:
 
 def prune_messages(conn, older_than_days: float, now=None) -> int:
     """Drop delivered messages older than the retention window. Queued
-    (undelivered) messages are always kept."""
+    (undelivered) relay messages are always kept, since relay is still on
+    the hook to deliver them. A peer row that never got delivered_at is a
+    failed native send relay will never retry, so it is pruned on age
+    alone rather than kept forever."""
     cutoff = _now(now) - older_than_days * 86400
     cur = conn.execute(
-        "DELETE FROM messages WHERE delivered_at IS NOT NULL AND created_at < ?",
+        "DELETE FROM messages WHERE created_at < ? "
+        "AND (delivered_at IS NOT NULL OR via='peer')",
         (cutoff,))
     conn.commit()
     return cur.rowcount

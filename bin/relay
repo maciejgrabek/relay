@@ -21,6 +21,9 @@
 #   relay timer ...  register/list/remove a timer on your own tab
 #   relay demo       guided 60s tour: spawns a demo worker, you watch the loop
 #   relay doctor     print swarm health from outside the TUI (debugging)
+#   relay hooks      install|status|uninstall the two Claude Code hooks that
+#                    log native session-to-session messages (opt-in)
+#   relay hook       run by Claude Code, not by you - do not call directly
 #   relay review     verdict on relay's own decisions: what the safety gate
 #                    cleared vs what the arm level waved through
 #   relay selftest   check relay can still READ your live Claude tabs
@@ -30,8 +33,10 @@
 #                    disable with RELAY_NO_AUTOUPDATE=1)
 #   relay -h         this help
 #
-# One process: tool on === TUI open; quit (q) === everything stops. No daemon,
-# no auto-launch, no Claude Code hooks. Safety classifier is lib/danger.sh.
+# One process: tool on === TUI open; quit (q) === everything stops. No
+# daemon, no auto-launch; relay's own supervision needs no Claude Code hooks
+# (`relay hooks install` is the one opt-in feature that adds two, to log
+# native session messages). Safety classifier is lib/danger.sh.
 #
 # Requires: macOS, iTerm2 with Python API enabled, python3 with `iterm2` and
 # `textual` installed (pip install iterm2 textual).
@@ -40,7 +45,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
   # Range must cover the whole header comment block above (through the line
   # before `set -e`) - a stale upper bound silently truncates the help.
-  -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   # Keep this list in sync with cli.py's subparsers - a verb missing here does
   # NOT error, it silently falls through and launches a second TUI. Guarded by
   # test_cli.py's "every cli.py verb is routed by bin/relay" check.

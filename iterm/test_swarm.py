@@ -203,6 +203,22 @@ def run():
     ok &= check("message feed present", "coord -> bff-worker: go" in out)
     ok &= check("empty inputs render", render_swarm([], [], [], 0.0) != "")
 
+    # a failed peer row (delivered_at None, via=peer) is not relay's to
+    # deliver - it must not inflate the fleet line's queued count
+    peer_msgs = msgs + [{"from_name": "coord", "to_name": "bff-worker",
+                         "body": "lost", "created_at": 902.0,
+                         "delivered_at": None, "via": "peer"}]
+    peer_out = render_swarm(sessions, tasks, peer_msgs, now=1000.0, width=100)
+    ok &= check("a failed peer row does not inflate the fleet line's queued count",
+                "msgs" not in peer_out.splitlines()[0])
+    relay_msgs = msgs + [{"from_name": "coord", "to_name": "bff-worker",
+                          "body": "pending", "created_at": 902.0,
+                          "delivered_at": None, "via": "relay"}]
+    relay_out = render_swarm(sessions, tasks, relay_msgs, now=1000.0,
+                             width=100)
+    ok &= check("an undelivered relay row still shows up as queued",
+                "msgs 1 queued" in relay_out)
+
     ok &= check("delivery_text info unchanged",
                 swarm.delivery_text("coord", "hi") == "[relay msg from coord] hi")
     ok &= check("delivery_text carries kind",

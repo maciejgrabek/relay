@@ -1668,10 +1668,11 @@ def _hook_payload():
     return d if isinstance(d, dict) else None
 
 
-def _hook_sender(payload, registry):
-    """(name, cwd) for the session a hook payload came from. The registry
-    row is the truth; a session relay cannot find there (a stale registry,
-    a race at start-up) is named by its directory so the row still lands."""
+def _hook_self(payload, registry):
+    """(name, cwd) for the session a hook payload came from - the one
+    running the hook, not the other end of the message. The registry row
+    is the truth; a session relay cannot find there (a stale registry, a
+    race at start-up) is named by its directory so the row still lands."""
     import peers
     cwd = str(payload.get("cwd") or "")
     me = peers.by_session_id(str(payload.get("session_id") or ""), registry)
@@ -1687,15 +1688,21 @@ def _hook_post_tool(payload) -> None:
                                     payload.get("tool_input"), registry)
     if target is None:
         return
-    body = str((payload.get("tool_input") or {}).get("message") or "")
+    tool_input = payload.get("tool_input") or {}
+    body = str(tool_input.get("message") or tool_input.get("content") or "")
     if not body:
         return
     resp = payload.get("tool_response")
     resp = resp if isinstance(resp, dict) else {}
-    from_name, from_cwd = _hook_sender(payload, registry)
+    from_name, from_cwd = _hook_self(payload, registry)
     delivered = bool(resp.get("success", True))
     peer_msg_id = str(resp["msg_id"]) if resp.get("msg_id") else None
     conn = db.connect()
+    # Claude Code runs hooks from user, project and local settings - one
+    # SendMessage can invoke this hook more than once. A second invocation
+    # carries the same msg_id, so it is a no-op rather than a second row.
+    if peer_msg_id and db.peer_message_exists(conn, peer_msg_id):
+        return
     receipt = db.find_peer_receipt(conn, from_name, target["name"], body,
                                    since=time.time() - 120)
     if receipt is not None:
@@ -1713,7 +1720,7 @@ def _hook_prompt(payload) -> None:
     if env is None or not env["body"]:
         return
     registry = peers.read_registry()
-    to_name, _to_cwd = _hook_sender(payload, registry)
+    to_name, _to_cwd = _hook_self(payload, registry)
     sender = (peers.resolve_target(env["from_name"], registry)
               or peers.resolve_target(env["from"], registry))
     from_name = sender["name"] if sender else (env["from_name"] or "peer")
@@ -1723,6 +1730,13 @@ def _hook_prompt(payload) -> None:
                                since=time.time() - 120)
     if row is not None:
         db.mark_received(conn, row["id"])
+        return
+    # Same duplicate-invocation problem as the sender's hook, but the
+    # recipient-first row carries no msg id to key on: a genuine repeat of
+    # the identical message five seconds apart is implausible, while a
+    # duplicate hook invocation lands within about a second.
+    if db.recent_peer_receipt_exists(conn, from_name, to_name, env["body"],
+                                     since=time.time() - 5):
         return
     mid = db.record_peer_message(conn, from_name, to_name, env["body"],
                                  from_cwd=from_cwd, delivered=True)
@@ -1744,7 +1758,12 @@ def cmd_hook(args) -> int:
         elif args.hook_event == "prompt":
             _hook_prompt(payload)
     except Exception:
-        pass
+        # Stdout stays untouched either way - Claude Code parses it. The
+        # traceback is only worth the operator's eyes when they asked for
+        # it: RELAY_HOOK_DEBUG routes it to stderr instead of the void.
+        if os.environ.get("RELAY_HOOK_DEBUG"):
+            import traceback
+            traceback.print_exc()
     return 0
 
 
@@ -1778,6 +1797,33 @@ def _write_settings(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _project_scope_hook_hits() -> list:
+    """Paths, under the current directory, of a Claude Code settings file
+    that also holds a relay hook. Claude Code merges user (~/.claude),
+    project (./.claude/settings.json) and local (./.claude/settings.local.json)
+    scopes - a relay hook surviving in any of the latter two runs alongside
+    the user-scope one relay installs, so every native message is logged
+    twice. A missing or unparsable file is silently not a hit."""
+    import hooks
+    hits = []
+    for rel in (".claude/settings.json", ".claude/settings.local.json"):
+        path = os.path.join(os.getcwd(), rel)
+        settings, err = _read_settings(path)
+        if err or not settings:
+            continue
+        groups = settings.get("hooks")
+        if not isinstance(groups, dict):
+            continue
+        found = any(
+            hooks.is_ours(h)
+            for grp_list in groups.values() if isinstance(grp_list, list)
+            for grp in grp_list if isinstance(grp, dict)
+            for h in grp.get("hooks", []) if isinstance(h, dict))
+        if found:
+            hits.append(path)
+    return hits
+
+
 def cmd_hooks(args) -> int:
     """Install, inspect or remove relay's two entries in Claude Code's user
     settings. The diff is always shown before a write, and a write needs
@@ -1794,9 +1840,15 @@ def cmd_hooks(args) -> int:
         for event, state in st.items():
             print(f"  {event:<18} {state}")
         print(f"  relay on PATH      {'yes' if on_path else 'NO - hooks would fail silently'}")
-        if all(v == "ok" for v in st.values()) and on_path:
+        proj_hits = _project_scope_hook_hits()
+        for p in proj_hits:
+            print(f"  project-scope hooks: also in {p} - every message would "
+                  f"be logged twice; remove them")
+        healthy = all(v == "ok" for v in st.values()) and on_path
+        if not healthy:
+            print("  -> relay hooks install")
+        if healthy and not proj_hits:
             return 0
-        print("  -> relay hooks install")
         return 1
     new = hooks.merge(cur) if args.hooks_verb == "install" else hooks.strip(cur)
     if new == cur:
@@ -1860,11 +1912,17 @@ def cmd_doctor(args) -> int:
         _st = _hooks.status(_settings)
         if all(v == "ok" for v in _st.values()):
             print("  hooks: installed (native session messages are logged)")
+        elif all(v in ("ok", "stale") for v in _st.values()):
+            bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
+            print(f"  hooks: STALE ({bad}) - run relay hooks install to refresh")
         else:
             bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
             print(f"  hooks: NOT INSTALLED ({bad}) - native session-to-session "
                   f"messages are not logged")
             print("    -> relay hooks install")
+    for _p in _project_scope_hook_hits():
+        print(f"  project-scope hooks: also in {_p} - every message would "
+              f"be logged twice; remove them")
     if not shutil.which("relay"):
         print("  relay on PATH: NO - hooks would fail silently")
 

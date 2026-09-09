@@ -1572,7 +1572,8 @@ def render_swarm(sessions, tasks, messages, now: float, width: int = 100,
             "\n"
             "TAB returns to the session control view.")
     out: List[str] = []
-    queued = sum(1 for m in messages if _get(m, "delivered_at") is None)
+    queued = sum(1 for m in messages
+                if _get(m, "delivered_at") is None and _via(m) == "relay")
     prows = pr_rows(prs, sessions, now) if prs else []
     out.append(_esc(fleet_line(sessions, tasks, stale=stale, queued=queued,
                                prs=prows)))

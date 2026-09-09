@@ -15,6 +15,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 # Point the CLI at a scratch DB and fake an iTerm identity BEFORE importing.
 _TMP = tempfile.mkdtemp()
 os.environ["RELAY_DB"] = os.path.join(_TMP, "relay.db")
+# So no test - and no accidental `doctor` call in here - ever reads the
+# developer's real ~/.claude/settings.json. Individual tests that need a
+# specific settings file still set this themselves.
+os.environ["RELAY_CLAUDE_SETTINGS"] = os.path.join(_TMP, "claude-settings.json")
 os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
 import cli     # noqa: E402
@@ -785,6 +789,49 @@ def test_hook_verbs():
                 and rows[0]["peer_msg_id"] == "eff4f367-bbcb-48c8-bebd-fbed13ec1237"
                 and rows[0]["delivered_at"] is not None
                 and rows[0]["from_cwd"].endswith("/peerA"))
+    # Claude Code runs hooks from user, project and local settings - one
+    # real-world event can invoke the same hook more than once. Duplicate
+    # invocations must log the message exactly once.
+    conn.execute("DELETE FROM messages WHERE via='peer'")
+    conn.commit()
+    run_hook("hook", "post-tool", payload=load("post_tool_send.json"))
+    run_hook("hook", "post-tool", payload=load("post_tool_send.json"))
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("piping post_tool_send.json twice yields one row",
+                len(rows) == 1
+                and rows[0]["peer_msg_id"] == "eff4f367-bbcb-48c8-bebd-fbed13ec1237")
+
+    conn.execute("DELETE FROM messages WHERE via='peer'")
+    conn.commit()
+    run_hook("hook", "prompt", payload=load("prompt_envelope.json"))
+    run_hook("hook", "prompt", payload=load("prompt_envelope.json"))
+    rows = [dict(r) for r in db.message_history(conn) if r["via"] == "peer"]
+    ok &= check("piping prompt_envelope.json twice (recipient-first) "
+                "yields one row",
+                len(rows) == 1 and rows[0]["received_at"] is not None)
+
+    # RELAY_HOOK_DEBUG: on an exception, the traceback goes to stderr and
+    # stdout stays untouched; still exit 0. Unset, stderr stays silent -
+    # a hook's stdout/stderr is watched by Claude Code and must never
+    # carry noise unless the operator asked for it.
+    orig_connect = db.connect
+    db.connect = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        os.environ["RELAY_HOOK_DEBUG"] = "1"
+        code, out, err = run_hook("hook", "post-tool",
+                                  payload=load("post_tool_send.json"))
+        ok &= check("RELAY_HOOK_DEBUG=1: exits 0", code == 0)
+        ok &= check("...stdout stays empty", out == "")
+        ok &= check("...stderr carries the traceback", "boom" in err)
+        os.environ.pop("RELAY_HOOK_DEBUG", None)
+        code, out, err = run_hook("hook", "post-tool",
+                                  payload=load("post_tool_send.json"))
+        ok &= check("without the flag: exits 0", code == 0)
+        ok &= check("...and stderr stays silent", err == "")
+    finally:
+        db.connect = orig_connect
+        os.environ.pop("RELAY_HOOK_DEBUG", None)
+
     os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
     return ok
 
@@ -845,6 +892,48 @@ def test_hooks_verb():
     code, out, err = run_cli("doctor")
     ok &= check("doctor says hooks are installed once they are",
                 "hooks: installed" in out)
+
+    # Claude Code also reads ./.claude/settings.json and
+    # ./.claude/settings.local.json relative to the current directory. A
+    # relay hook surviving there would log every message twice - status and
+    # doctor must both warn, and status must exit 1.
+    import hooks as _hooks_mod
+    orig_cwd = os.getcwd()
+    proj_dir = tempfile.mkdtemp()
+    try:
+        os.makedirs(os.path.join(proj_dir, ".claude"), exist_ok=True)
+        with open(os.path.join(proj_dir, ".claude", "settings.json"), "w") as fh:
+            _json.dump({"hooks": _hooks_mod.ENTRIES}, fh)
+        os.chdir(proj_dir)
+        code, out, err = run_cli("hooks", "status")
+        ok &= check("status mentions project-scope hooks and exits 1",
+                    code == 1 and "project-scope" in out)
+        code, out, err = run_cli("doctor")
+        ok &= check("doctor mentions project-scope hooks too",
+                    "project-scope" in out)
+    finally:
+        os.chdir(orig_cwd)
+
+    proj_dir2 = tempfile.mkdtemp()
+    try:
+        os.chdir(proj_dir2)
+        code, out, err = run_cli("hooks", "status")
+        ok &= check("status says nothing about project-scope with no such "
+                    "file", code == 0 and "project-scope" not in out)
+    finally:
+        os.chdir(orig_cwd)
+
+    # a stale relay hook (starts with "relay hook " but isn't the current
+    # entry) should read as STALE, not NOT INSTALLED - the fix is a
+    # refresh, not a from-scratch install.
+    run_cli("hooks", "install", "--yes")
+    saved = _json.load(open(path))
+    saved["hooks"]["PostToolUse"][0]["hooks"][0]["command"] = "relay hook post-tool-old"
+    with open(path, "w") as fh:
+        _json.dump(saved, fh)
+    code, out, err = run_cli("doctor")
+    ok &= check("doctor says STALE (not NOT INSTALLED) when only stale",
+                "hooks: STALE" in out and "NOT INSTALLED" not in out)
 
     # unreadable JSON: refuse, never overwrite
     with open(path, "w") as fh:

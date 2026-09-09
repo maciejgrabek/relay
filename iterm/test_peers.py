@@ -21,7 +21,9 @@ def check(msg, cond):
 def run():
     ok = True
     reg = peers.read_registry(FIX)
-    # Fixtures include bad-pid (777.json) to verify it is skipped.
+    # Fixtures include bad-pid (777.json), 999.json (no name/session id) and
+    # 5.json ("{not json" - a session file caught mid-write) to verify each
+    # is skipped without disturbing the two real sessions.
     ok &= check("registry reads the two real sessions and skips junk",
                 sorted(e["name"] for e in reg) == ["peera-d0", "peerb-fa"])
     a = next(e for e in reg if e["name"] == "peera-d0")
