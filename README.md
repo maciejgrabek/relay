@@ -43,8 +43,9 @@ a coordinated fleet.
 > obfuscation-detector prompts that hooks *cannot* suppress - by sending
 > `Enter`; it pings you on dangerous ones. The safety classifier lives in
 > [`lib/danger.sh`](lib/danger.sh). The one optional feature that does use
-> hooks is logging native session-to-session messages: `relay hooks install`
-> adds two, and sessions already running may need a restart to pick them up.
+> hooks is logging native session-to-session messages and telling a resumed
+> session what its directory last talked about: `relay hooks install`
+> adds three, and sessions already running may need a restart to pick them up.
 
 ## Why
 

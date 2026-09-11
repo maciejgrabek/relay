@@ -253,6 +253,7 @@ def run():
                 "not ready" in err2.getvalue())
 
     ok &= test_screen_lines_pipeline()
+    ok &= test_blank_padding_before_tail()
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
@@ -284,6 +285,27 @@ def test_screen_lines_pipeline():
     raw_nonblank = [l for l in junky if l.strip()]
     ok &= check("...but a raw, unsanitized read of the same screen would not",
                 not swarm.claude_prompt_ready(raw_nonblank))
+    return ok
+
+
+def test_blank_padding_before_tail():
+    """Blanks must be dropped BEFORE the 40-line tail is taken, not after.
+    A tall terminal window's last 40 raw rows can be mostly blank padding
+    below Claude's box - routine right after a fresh spawn, before the
+    window has filled with output - so slicing the tail first and dropping
+    blanks second can hand claude_prompt_ready an empty (or near-empty)
+    list and misread a screen the watcher itself reads as ready."""
+    ok = True
+    padded = _screen("idle_accept_edits") + [""] * 45
+    saved_poll = spawn.READY_POLL
+    spawn.READY_POLL = 0
+    try:
+        ready = asyncio.run(spawn._wait_ready(
+            FakeSession(screens=[padded]), timeout=1))
+    finally:
+        spawn.READY_POLL = saved_poll
+    ok &= check("45 trailing blank rows still read as ready "
+                "(blanks dropped before the tail, not after)", ready)
     return ok
 
 

@@ -53,16 +53,22 @@ def _extract_lines(contents):
 
 async def _screen_lines(session):
     """The same pipeline the watcher's own poll uses on a session's screen
-    (iterm/watcher.py's _snapshot, ~line 608): raw cells -> soft-wrap
-    reconstruction and cell-junk sanitizing (gates.reconstruct_lines) ->
-    the watcher's 40-line tail -> blank rows dropped. A raw contents.line(i)
-    read (the old version of this function) left NUL-padded junk rows in
-    place, which could make claude_prompt_ready misjudge a screen the
-    watcher itself reads as ready."""
+    (iterm/watcher.py's _snapshot, ~line 608, and app.py's ~line 1821): raw
+    cells -> soft-wrap reconstruction and cell-junk sanitizing
+    (gates.reconstruct_lines) -> blank rows dropped -> the watcher's
+    40-line tail, in that order. Blanks must be dropped BEFORE the tail is
+    taken, not after: a tall window's last 40 raw rows can be mostly blank
+    padding below Claude's box (routine right after a fresh spawn, before
+    the window fills with output), and slicing first would hand
+    claude_prompt_ready an empty or near-empty list, misreading a screen
+    the watcher itself reads as ready. A raw contents.line(i) read (the old
+    version of this function, before either ordering) left NUL-padded junk
+    rows in place, which had the same failure mode from the other
+    direction."""
     contents = await session.async_get_screen_contents()
     raw, hard = _extract_lines(contents)
-    lines = gates.reconstruct_lines(raw, hard)[-40:]
-    return [l for l in lines if l.strip()]
+    lines = gates.reconstruct_lines(raw, hard)
+    return [l for l in lines if l.strip()][-40:]
 
 
 async def _wait_ready(session, timeout=None) -> bool:
