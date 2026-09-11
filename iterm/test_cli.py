@@ -955,6 +955,56 @@ def test_hooks_verb():
     return ok
 
 
+def test_chat_verb():
+    print("\n== relay chat ==")
+    import pathlib
+    ok = True
+    fix = pathlib.Path(__file__).parent / "fixtures" / "hooks"
+    os.environ["RELAY_CLAUDE_SESSIONS"] = str(fix / "registry")
+    conn = db.connect()
+    conn.execute("DELETE FROM messages")
+    conn.commit()
+    peer_a = "/private/tmp/relayreviewproj/peers/peerA"
+    mid = db.record_peer_message(conn, "peera-d0", "peerb-fa",
+                                 "shall we split the db?", from_cwd=peer_a)
+    db.mark_received(conn, mid)
+    db.record_peer_message(conn, "peerb-fa", "peera-d0", "yes, per service",
+                           from_cwd="/private/tmp/relayreviewproj/peers/peerB")
+    run_cli("join", "chat-w", "--project", "chatp", iterm_id="w0t1p0:CHAT-W")
+    db.queue_message(conn, "coord", "chat-w", "relay hello")
+    conn.execute("UPDATE sessions SET workdir=? WHERE name='chat-w'",
+                 ("/elsewhere/proj",))
+    conn.commit()
+
+    code, out, err = run_cli("chat", "--dir", peer_a)
+    ok &= check("chat --dir prints the native pair the directory sent from",
+                code == 0 and "peera-d0" in out and "shall we split the db?" in out
+                and "yes, per service" in out)
+    ok &= check("...and not an unrelated relay conversation",
+                "relay hello" not in out)
+    code, out, err = run_cli("chat", "--dir", "/elsewhere/proj")
+    ok &= check("chat --dir finds relay traffic via the session registered there",
+                code == 0 and "relay hello" in out)
+    code, out, err = run_cli("chat", "--with", "peerb-fa")
+    ok &= check("chat --with prints every conversation that name is in",
+                code == 0 and "shall we split the db?" in out)
+    code, out, err = run_cli("chat", "--dir", "/nowhere")
+    ok &= check("chat with nothing to show says so and exits 0",
+                code == 0 and "no conversations" in out)
+    code, out, err = run_cli("chat", "--dir", peer_a, "--last", "1")
+    ok &= check("--last trims each transcript to its tail",
+                "shall we split" not in out and "yes, per service" in out)
+    cwd = os.getcwd()
+    try:
+        os.chdir(os.path.dirname(peer_a) if os.path.isdir(peer_a) else _TMP)
+        code, out, err = run_cli("chat", "--here")
+        ok &= check("--here is --dir $PWD (exit 0 either way)", code == 0)
+    finally:
+        os.chdir(cwd)
+    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
+    return ok
+
+
 def run():
     ok = True
 
@@ -2872,6 +2922,7 @@ def run():
     ok &= _wsbuild_internals_checks(ok)
     ok &= test_hook_verbs()
     ok &= test_hooks_verb()
+    ok &= test_chat_verb()
 
     conn.close()
     print()

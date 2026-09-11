@@ -1972,6 +1972,52 @@ def render_chat(convs, cursor: int, width: int, height: int,
     return out
 
 
+# --- what a directory has been talking about ---------------------------------
+
+def norm_dir(path: str) -> str:
+    """Trailing slashes only. Native cwd and relay workdir are both absolute
+    already; realpath would make /tmp and /private/tmp disagree by machine."""
+    p = str(path or "")
+    return p.rstrip("/") if len(p) > 1 else p
+
+
+def conversations_for_dir(convs, directory: str, names_in_dir) -> list:
+    """The conversations a directory took part in: every name that has ever
+    sent a message FROM it (native rows carry the sender's cwd), plus every
+    name a session registered in that directory (relay rows carry no cwd,
+    but the roster does, via `names_in_dir`) - then every conversation
+    either name is a party to, anywhere. A name's directory is who it is,
+    not which single conversation happened to carry the cwd, so a session
+    that spoke from `d` pulls in all of its conversations, not just the one
+    where the cwd row landed. Freshest first - this is what a resumed
+    session reads, and the last thing said is the first thing it needs."""
+    d = norm_dir(directory)
+    names = set(names_in_dir or ())
+    if d:
+        for c in convs:
+            for m in c["msgs"]:
+                if norm_dir(_get(m, "from_cwd", "")) == d:
+                    names.add(m["from_name"])
+    out = []
+    for c in convs:
+        parties = ({c.get("a"), c.get("b")} if c["kind"] == "pair"
+                   else {m["from_name"] for m in c["msgs"]})
+        if parties & names:
+            out.append(c)
+    out.sort(key=lambda c: c["age_s"])
+    return out
+
+
+def transcript_text(conv, width: int = 100, last: int = 0) -> str:
+    """The conversation as plain text for a terminal or a hook: the same rows
+    the chat pane draws, without markup, oldest first, `last` rows from the
+    end when asked (0 = all)."""
+    rows = [plain for plain, _mk in _transcript_rows(conv, max(20, width))]
+    if last > 0:
+        rows = rows[-last:]
+    return "\n".join(rows)
+
+
 def _park_context_dict(row) -> dict:
     """The parsed context stamp, or {} for absent/malformed JSON - shared by
     parked_item_text (what to print) and has_park_context (whether there is

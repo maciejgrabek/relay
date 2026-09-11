@@ -1908,6 +1908,56 @@ def test_conversations_and_chat():
     return ok
 
 
+def test_dir_conversations():
+    print("\n== conversations_for_dir / transcript_text ==")
+    ok = True
+    now = 2_000_000.0
+
+    def m(id, f, t, body, ago, cwd="", via="relay"):
+        return {"id": id, "from_name": f, "to_name": t, "body": body,
+                "kind": "info", "created_at": now - ago,
+                "delivered_at": now - ago + 1, "received_at": None,
+                "thread_id": None, "project": "p", "via": via,
+                "from_cwd": cwd}
+
+    msgs = [
+        m(1, "api-30", "web-1c", "split?", 600, cwd="/w/api", via="peer"),
+        m(2, "web-1c", "api-30", "sse", 500, cwd="/w/web", via="peer"),
+        m(3, "coord", "w1", "take 13", 400),          # relay traffic, no cwd
+        m(4, "w1", "coord", "ack", 300),
+        m(5, "ops-9", "api-30", "deploy?", 100, cwd="/w/ops", via="peer"),
+    ]
+    convs = swarm.conversations(msgs, [], now)
+    ok &= check("norm_dir strips trailing slashes only",
+                swarm.norm_dir("/w/api/") == "/w/api"
+                and swarm.norm_dir("/w/api") == "/w/api"
+                and swarm.norm_dir("") == "")
+
+    here = swarm.conversations_for_dir(convs, "/w/api/", set())
+    ok &= check("a directory finds every conversation a message was sent from",
+                [c["key"] for c in here] == ["pair:api-30|ops-9",
+                                             "pair:api-30|web-1c"])
+    ok &= check("...freshest first", here[0]["age_s"] < here[1]["age_s"])
+    ok &= check("a directory nobody sent from finds nothing",
+                swarm.conversations_for_dir(convs, "/w/none", set()) == [])
+    ok &= check("relay traffic is found through the names registered there",
+                [c["key"] for c in
+                 swarm.conversations_for_dir(convs, "/x", {"w1"})]
+                == ["pair:coord|w1"])
+    ok &= check("names and cwd combine without duplicates",
+                len(swarm.conversations_for_dir(convs, "/w/api", {"api-30"}))
+                == 2)
+
+    txt = swarm.transcript_text(here[1], width=80)
+    ok &= check("transcript_text is plain rows, oldest first",
+                "split?" in txt.splitlines()[0] and "sse" in txt.splitlines()[-1]
+                and "[" not in txt.replace("[queued]", ""))
+    ok &= check("transcript_text --last keeps the tail",
+                swarm.transcript_text(here[1], width=80, last=1).strip()
+                .endswith("sse"))
+    return ok
+
+
 if __name__ == "__main__":
     ok = run()
     ok = test_resolve_scope() and ok
@@ -1917,4 +1967,5 @@ if __name__ == "__main__":
     ok = test_bracket_line() and ok
     ok = test_selection_dialog_and_readiness() and ok
     ok = test_conversations_and_chat() and ok
+    ok = test_dir_conversations() and ok
     sys.exit(0 if ok else 1)

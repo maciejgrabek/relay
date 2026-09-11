@@ -836,6 +836,58 @@ def cmd_msgs(args) -> int:
     return 0
 
 
+def _names_in_dir(conn, directory: str) -> set:
+    """Every session name that lives in `directory`: relay's roster (workdir)
+    and the native registry (cwd). Names are per process, so a directory is
+    the one stable handle a resumed session has on its own past."""
+    import peers
+    d = swarm.norm_dir(directory)
+    if not d:
+        return set()
+    names = {s["name"] for s in db.list_sessions(conn)
+             if swarm.norm_dir(swarm._get(s, "workdir", "")) == d}
+    names |= {e["name"] for e in peers.read_registry()
+              if swarm.norm_dir(e["cwd"]) == d}
+    return names
+
+
+def _dir_conversations(conn, directory: str):
+    """(conversations for the directory, freshest first)."""
+    msgs = [dict(r) for r in db.message_history(conn, limit=2000)]
+    threads = [dict(r) for r in db.list_threads(conn)]
+    convs = swarm.conversations(msgs, threads, time.time())
+    return swarm.conversations_for_dir(convs, directory,
+                                       _names_in_dir(conn, directory))
+
+
+def cmd_chat(args) -> int:
+    """Transcripts, for a human or a session: what this directory (or a
+    named session) has been saying and hearing. Same rows the panel's chat
+    pane draws, as plain text."""
+    conn = db.connect()
+    if args.with_name:
+        msgs = [dict(r) for r in db.message_history(conn, limit=2000)]
+        threads = [dict(r) for r in db.list_threads(conn)]
+        convs = [c for c in swarm.conversations(msgs, threads, time.time())
+                 if args.with_name in (c.get("a"), c.get("b"))
+                 or any(m["from_name"] == args.with_name for m in c["msgs"])]
+        convs.sort(key=lambda c: c["age_s"])
+        label = f"with {args.with_name}"
+    else:
+        directory = os.getcwd() if args.here or not args.dir else args.dir
+        convs = _dir_conversations(conn, directory)
+        label = f"for {swarm.norm_dir(directory)}"
+    if not convs:
+        print(f"no conversations {label}")
+        return 0
+    for c in convs:
+        print(f"== {c['title']}  {c['meta']}  ({c['count']} messages, "
+              f"last {swarm.fmt_age(c['age_s'])} ago)")
+        print(swarm.transcript_text(c, width=100, last=args.last))
+        print()
+    return 0
+
+
 def cmd_help(args) -> int:
     """Teach without touching state. Registering is an explicit act, and a
     session reading the rules must be able to do so before committing to
@@ -2919,6 +2971,17 @@ def build_parser() -> argparse.ArgumentParser:
     ms.add_argument("--with", dest="with_name", default=None)
     ms.add_argument("--project", default=None)
     ms.set_defaults(fn=cmd_msgs)
+
+    ch = sub.add_parser("chat", help="transcripts: what this directory or a "
+                                     "named session has been saying")
+    ch.add_argument("--here", action="store_true",
+                    help="conversations of the current directory (default)")
+    ch.add_argument("--dir", default=None, help="another directory")
+    ch.add_argument("--with", dest="with_name", default=None,
+                    help="every conversation this session name is in")
+    ch.add_argument("--last", type=int, default=0,
+                    help="only the last N rows of each transcript")
+    ch.set_defaults(fn=cmd_chat)
 
     hp = sub.add_parser("help", help="print the swarm protocol (registers "
                                      "nothing)")
