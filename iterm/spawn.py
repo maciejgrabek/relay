@@ -27,6 +27,10 @@ import swarm   # noqa: E402
 # makes tests instant.
 BOOT_DELAY = float(os.environ.get("RELAY_SPAWN_BOOT_DELAY", "1.0"))
 READY_POLL = 0.5
+# A per-call bound on session.async_get_screen_contents(): a hung iTerm2
+# round-trip must count as "not ready yet" and retry, not stall the whole
+# wait past RELAY_SPAWN_READY_TIMEOUT.
+READ_TIMEOUT = 2.0
 
 
 def _ready_timeout() -> float:
@@ -49,7 +53,10 @@ async def _wait_ready(session, timeout=None) -> bool:
     and delivery agree on what "safe to type" means.
 
     False when the deadline passes or the session cannot report its screen;
-    the caller types anyway (old behaviour) and says so.
+    the caller types anyway (old behaviour) and says so. Each screen read is
+    itself bounded by READ_TIMEOUT: a hung iTerm2 round-trip must not stall
+    the whole wait past the deadline above - it counts as "not ready yet"
+    and the loop retries.
     """
     if not hasattr(session, "async_get_screen_contents"):
         return False
@@ -57,7 +64,9 @@ async def _wait_ready(session, timeout=None) -> bool:
     deadline = time.monotonic() + limit
     while True:
         try:
-            if swarm.claude_prompt_ready(await _screen_lines(session)):
+            lines = await asyncio.wait_for(
+                _screen_lines(session), timeout=READ_TIMEOUT)
+            if swarm.claude_prompt_ready(lines):
                 return True
         except Exception:
             pass

@@ -18,6 +18,9 @@ os.environ["RELAY_SPAWN_BOOT_DELAY"] = "0"
 # FakeSession() (screens=None, used by the pre-existing tests) has no way
 # to answer async_get_screen_contents, so _wait_ready would fall through
 # its except-and-retry loop for the full real default timeout.
+# Consequence: the w1/w2/w5 cases below print a harmless "not ready" line
+# on stderr too (nothing polls the box for them) - only the w4 case below
+# actually asserts on that stderr text.
 os.environ["RELAY_SPAWN_READY_TIMEOUT"] = "0"
 os.environ["RELAY_DB"] = os.path.join(tempfile.mkdtemp(), "relay.sqlite3")
 
@@ -170,6 +173,31 @@ def run():
                                    "off", session=blind))
     ok &= check("a screenless session still gets its prompt",
                 any("relay-worker" in t for t in blind.sent))
+
+    # a hung screen read must not stall the wait past RELAY_SPAWN_READY_TIMEOUT
+    class HungSession(FakeSession):
+        async def async_get_screen_contents(self):
+            await asyncio.sleep(0.2)
+            return await FakeSession.async_get_screen_contents(self)
+
+    import time
+    saved_read_timeout = spawn.READ_TIMEOUT
+    spawn.READ_TIMEOUT = 0.05
+    os.environ["RELAY_SPAWN_READY_TIMEOUT"] = "0.3"
+    hung = HungSession("HUNG", screens=[_screen("shell_zsh")])
+    err2 = io.StringIO()
+    start = time.monotonic()
+    with redirect_stderr(err2):
+        asyncio.run(spawn.spawn_worker("w6", "proj", "p", "/tmp", "worker",
+                                       "off", session=hung))
+    elapsed = time.monotonic() - start
+    spawn.READ_TIMEOUT = saved_read_timeout
+    ok &= check("a hung screen read does not stall spawn_worker (< 3s)",
+                elapsed < 3)
+    ok &= check("...the prompt is still typed",
+                any("relay-worker" in t for t in hung.sent))
+    ok &= check("...and stderr says Claude was not seen ready",
+                "not ready" in err2.getvalue())
 
     print()
     print("ALL PASS" if ok else "FAILURES ABOVE")
