@@ -19,6 +19,14 @@ os.environ["RELAY_DB"] = os.path.join(_TMP, "relay.db")
 # developer's real ~/.claude/settings.json. Individual tests that need a
 # specific settings file still set this themselves.
 os.environ["RELAY_CLAUDE_SETTINGS"] = os.path.join(_TMP, "claude-settings.json")
+# Same reasoning for the native session registry (~/.claude/sessions): a
+# fresh, empty directory, so no test that forgets to set this itself can
+# read the developer's real registered Claude Code sessions. Tests that need
+# fixture registry rows set this themselves and restore THIS default when
+# done, rather than popping the var back to unset.
+RELAY_CLAUDE_SESSIONS_DEFAULT = os.path.join(_TMP, "sessions-registry")
+os.makedirs(RELAY_CLAUDE_SESSIONS_DEFAULT, exist_ok=True)
+os.environ["RELAY_CLAUDE_SESSIONS"] = RELAY_CLAUDE_SESSIONS_DEFAULT
 os.environ["ITERM_SESSION_ID"] = "w0t1p0:AAAA-1111"
 
 import cli     # noqa: E402
@@ -832,7 +840,7 @@ def test_hook_verbs():
         db.connect = orig_connect
         os.environ.pop("RELAY_HOOK_DEBUG", None)
 
-    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
+    os.environ["RELAY_CLAUDE_SESSIONS"] = RELAY_CLAUDE_SESSIONS_DEFAULT
     return ok
 
 
@@ -926,15 +934,32 @@ def test_hooks_verb():
 
     # a stale relay hook (starts with "relay hook " but isn't the current
     # entry) should read as STALE, not NOT INSTALLED - the fix is a
-    # refresh, not a from-scratch install.
+    # refresh, not a from-scratch install. All three events stale (not just
+    # one) so this stays the all-stale case - one stale among otherwise-ok
+    # events is PARTIAL now, tested separately below.
     run_cli("hooks", "install", "--yes")
     saved = _json.load(open(path))
-    saved["hooks"]["PostToolUse"][0]["hooks"][0]["command"] = "relay hook post-tool-old"
+    for _event in saved["hooks"]:
+        saved["hooks"][_event][0]["hooks"][0]["command"] += "-old"
     with open(path, "w") as fh:
         _json.dump(saved, fh)
     code, out, err = run_cli("doctor")
-    ok &= check("doctor says STALE (not NOT INSTALLED) when only stale",
-                "hooks: STALE" in out and "NOT INSTALLED" not in out)
+    ok &= check("doctor says STALE (not NOT INSTALLED) when everything is "
+                "stale",
+                "hooks: STALE" in out and "NOT INSTALLED" not in out
+                and "PARTIAL" not in out)
+
+    # only the two loggers installed, SessionStart missing: messages ARE
+    # being logged (PostToolUse/UserPromptSubmit are ok), but the resume
+    # line has nothing to draw on - PARTIAL, not NOT INSTALLED.
+    import hooks as _hooks_mod
+    with open(path, "w") as fh:
+        _json.dump({"hooks": {k: v for k, v in _hooks_mod.ENTRIES.items()
+                              if k != "SessionStart"}}, fh)
+    code, out, err = run_cli("doctor")
+    ok &= check("doctor says PARTIAL when some hooks are ok and one is "
+                "missing",
+                "hooks: PARTIAL" in out and "NOT INSTALLED" not in out)
 
     # unreadable JSON: refuse, never overwrite
     with open(path, "w") as fh:
@@ -972,7 +997,10 @@ def test_chat_verb():
     db.record_peer_message(conn, "peerb-fa", "peera-d0", "yes, per service",
                            from_cwd="/private/tmp/relayreviewproj/peers/peerB")
     run_cli("join", "chat-w", "--project", "chatp", iterm_id="w0t1p0:CHAT-W")
-    db.queue_message(conn, "coord", "chat-w", "relay hello")
+    # Tagged with chat-w's own project, same as a real send would be (cli.py
+    # always queues with the sender's/recipient's project) - conversations_for_dir
+    # requires that agreement for a match reached only through a roster name.
+    db.queue_message(conn, "coord", "chat-w", "relay hello", project="chatp")
     conn.execute("UPDATE sessions SET workdir=? WHERE name='chat-w'",
                  ("/elsewhere/proj",))
     conn.commit()
@@ -989,6 +1017,9 @@ def test_chat_verb():
     code, out, err = run_cli("chat", "--with", "peerb-fa")
     ok &= check("chat --with prints every conversation that name is in",
                 code == 0 and "shall we split the db?" in out)
+    code, out, err = run_cli("chat", "--dir", peer_a, "--with", "peerb-fa")
+    ok &= check("--dir and --with together are refused, not silently merged",
+                code != 0)
     code, out, err = run_cli("chat", "--dir", "/nowhere")
     ok &= check("chat with nothing to show says so and exits 0",
                 code == 0 and "no conversations" in out)
@@ -1002,7 +1033,7 @@ def test_chat_verb():
         ok &= check("--here is --dir $PWD (exit 0 either way)", code == 0)
     finally:
         os.chdir(cwd)
-    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
+    os.environ["RELAY_CLAUDE_SESSIONS"] = RELAY_CLAUDE_SESSIONS_DEFAULT
     return ok
 
 
@@ -1060,7 +1091,7 @@ def test_session_start_hook():
                     and "peerb-fa" in out)
     finally:
         os.chdir(cwd)
-    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
+    os.environ["RELAY_CLAUDE_SESSIONS"] = RELAY_CLAUDE_SESSIONS_DEFAULT
     return ok
 
 

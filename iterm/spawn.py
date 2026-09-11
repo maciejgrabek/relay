@@ -20,6 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import db      # noqa: E402
+import gates   # noqa: E402
 import swarm   # noqa: E402
 
 # The old fixed "claude boot" sleep, now only the pause before the first
@@ -37,10 +38,31 @@ def _ready_timeout() -> float:
     return float(os.environ.get("RELAY_SPAWN_READY_TIMEOUT", "60"))
 
 
+def _extract_lines(contents):
+    """(raw line strings, hard_eol flags) from a ScreenContents. Copied from
+    watcher._extract_lines (iterm/watcher.py) rather than imported: watcher
+    imports iterm2 at module level, which this file's tests must not need."""
+    n = contents.number_of_lines
+    raw, hard = [], []
+    for i in range(n):
+        lc = contents.line(i)
+        raw.append(lc.string)
+        hard.append(lc.hard_eol)
+    return raw, hard
+
+
 async def _screen_lines(session):
+    """The same pipeline the watcher's own poll uses on a session's screen
+    (iterm/watcher.py's _snapshot, ~line 608): raw cells -> soft-wrap
+    reconstruction and cell-junk sanitizing (gates.reconstruct_lines) ->
+    the watcher's 40-line tail -> blank rows dropped. A raw contents.line(i)
+    read (the old version of this function) left NUL-padded junk rows in
+    place, which could make claude_prompt_ready misjudge a screen the
+    watcher itself reads as ready."""
     contents = await session.async_get_screen_contents()
-    return [contents.line(i).string for i in range(contents.number_of_lines)
-            if contents.line(i).string.strip()]
+    raw, hard = _extract_lines(contents)
+    lines = gates.reconstruct_lines(raw, hard)[-40:]
+    return [l for l in lines if l.strip()]
 
 
 async def _wait_ready(session, timeout=None) -> bool:
@@ -138,12 +160,25 @@ async def spawn_worker(name: str, project: str, prompt: str,
         f'cd {shlex.quote(workdir)} && {claude_cmd}\n')
     await asyncio.sleep(BOOT_DELAY)    # let the launch line hit the shell
     ready = await _wait_ready(session)
+    body = first_prompt(name, project, prompt, role)
     if not ready:
+        job = None
+        if hasattr(session, "async_get_variable"):
+            try:
+                job = await session.async_get_variable("jobName")
+            except Exception:
+                job = None
+        if swarm.is_shell_job(job):
+            print(f"relay spawn: claude in '{name}' never became ready and "
+                  f"a shell ({job}) is in front - NOT typing the first "
+                  f"prompt; launch claude in that tab and paste it "
+                  f"yourself:", file=sys.stderr)
+            print(body, file=sys.stderr)
+            return sid
         print(f"relay spawn: claude in '{name}' was not ready after "
               f"{_ready_timeout():g}s - typing the first prompt anyway; "
               f"if it sits unsubmitted, press Enter in that tab",
               file=sys.stderr)
-    body = first_prompt(name, project, prompt, role)
     await session.async_send_text(body)
     await asyncio.sleep(0.5)
     await session.async_send_text("\r")

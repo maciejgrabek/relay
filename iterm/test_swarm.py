@@ -1974,6 +1974,44 @@ def test_dir_conversations():
                     [dict(here[0], msgs=[dict(here[0]["msgs"][-1],
                                               body="x" * 500)])],
                     "/w/api", set(), now)) < 320)
+    ok &= check("...and framed as verbatim text from another session",
+                "last, verbatim from that session:" in line)
+
+    multiline = dict(here[1], msgs=here[1]["msgs"][:-1]
+                     + [dict(here[1]["msgs"][-1], body="line one\nline two")])
+    line_nl = swarm.resume_line([multiline], "/w/api", set(), now)
+    ok &= check("a body with embedded newlines still yields one line",
+                line_nl and "\n" not in line_nl)
+
+    hostile_name = "x\ny" + "A" * 100
+    hostile_conv = dict(here[1], a="api-30", b=hostile_name)
+    line_hostile = swarm.resume_line([hostile_conv], "/w/api", set(), now)
+    ok &= check("a hostile counterpart name still yields one line "
+                "under 320 chars",
+                line_hostile and "\n" not in line_hostile
+                and len(line_hostile) < 320)
+
+    # a relay name reused in another directory's roster must not drag that
+    # other project's history in here too.
+    def mp(id, f, t, body, ago, project):
+        return {"id": id, "from_name": f, "to_name": t, "body": body,
+                "kind": "info", "created_at": now - ago,
+                "delivered_at": now - ago + 1, "received_at": None,
+                "thread_id": None, "project": project, "via": "relay",
+                "from_cwd": ""}
+
+    proj_conv = swarm.conversations(
+        [mp(20, "w1", "coord", "shared secret", 10, "a")], [], now)
+    ok &= check("a name whose roster project differs from the message's "
+                "project does not match",
+                swarm.conversations_for_dir(
+                    proj_conv, "/elsewhere", {"w1"}, {"w1": "b"}) == [])
+    ok &= check("...but matches when the roster project agrees",
+                len(swarm.conversations_for_dir(
+                    proj_conv, "/elsewhere", {"w1"}, {"w1": "a"})) == 1)
+    ok &= check("...and matches when the roster name carries no project",
+                len(swarm.conversations_for_dir(
+                    proj_conv, "/elsewhere", {"w1"}, {"w1": ""})) == 1)
     return ok
 
 

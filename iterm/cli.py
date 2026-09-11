@@ -245,7 +245,7 @@ def cmd_join(args) -> int:
 
     line = swarm.resume_line(_dir_conversations(conn, os.getcwd()),
                              os.getcwd(), _names_in_dir(conn, os.getcwd()),
-                             time.time())
+                             time.time(), _name_projects(conn, os.getcwd()))
     if line:
         print("COMMS HISTORY HERE")
         print(f"  {line}")
@@ -859,13 +859,32 @@ def _names_in_dir(conn, directory: str) -> set:
     return names
 
 
-def _dir_conversations(conn, directory: str):
-    """(conversations for the directory, freshest first)."""
+def _name_projects(conn, directory: str) -> dict:
+    """Roster name -> its project ("" for none), for every session
+    registered in `directory` - the map conversations_for_dir needs to keep
+    a relay name reused in another project's directory from dragging that
+    project's whole history in here too (see its docstring)."""
+    d = swarm.norm_dir(directory)
+    if not d:
+        return {}
+    return {s["name"]: (s["project"] or "") for s in db.list_sessions(conn)
+           if swarm.norm_dir(swarm._get(s, "workdir", "")) == d}
+
+
+def _all_conversations(conn):
+    """Every conversation relay knows about - native and relay-sent alike -
+    freshest-message-first within each. Shared by _dir_conversations and
+    `chat --with` so "what counts as a conversation" is decided once."""
     msgs = [dict(r) for r in db.message_history(conn, limit=2000)]
     threads = [dict(r) for r in db.list_threads(conn)]
-    convs = swarm.conversations(msgs, threads, time.time())
-    return swarm.conversations_for_dir(convs, directory,
-                                       _names_in_dir(conn, directory))
+    return swarm.conversations(msgs, threads, time.time())
+
+
+def _dir_conversations(conn, directory: str):
+    """(conversations for the directory, freshest first)."""
+    return swarm.conversations_for_dir(_all_conversations(conn), directory,
+                                       _names_in_dir(conn, directory),
+                                       _name_projects(conn, directory))
 
 
 def cmd_chat(args) -> int:
@@ -874,9 +893,7 @@ def cmd_chat(args) -> int:
     pane draws, as plain text."""
     conn = db.connect()
     if args.with_name:
-        msgs = [dict(r) for r in db.message_history(conn, limit=2000)]
-        threads = [dict(r) for r in db.list_threads(conn)]
-        convs = [c for c in swarm.conversations(msgs, threads, time.time())
+        convs = [c for c in _all_conversations(conn)
                  if args.with_name in (c.get("a"), c.get("b"))
                  or any(m["from_name"] == args.with_name for m in c["msgs"])]
         convs.sort(key=lambda c: c["age_s"])
@@ -1816,7 +1833,8 @@ def _hook_session_start(payload) -> None:
         return
     conn = db.connect()
     convs = _dir_conversations(conn, cwd)
-    line = swarm.resume_line(convs, cwd, _names_in_dir(conn, cwd), time.time())
+    line = swarm.resume_line(convs, cwd, _names_in_dir(conn, cwd),
+                             time.time(), _name_projects(conn, cwd))
     if not line:
         return
     out = json.dumps({"hookSpecificOutput": {
@@ -1831,7 +1849,13 @@ def cmd_hook(args) -> int:
     stdout is parsed by Claude Code and its failure is shown to the
     operator mid-turn, and neither is a place for relay to have an
     opinion. session-start is the one exception - it prints a single JSON
-    object carrying the resume line when it has one."""
+    object carrying the resume line when it has one.
+
+    A hook that mutates rows must mutate AFTER its single print succeeds,
+    never before: a failed print (a broken pipe, Claude Code killing the
+    hook once it has read enough) must never be the reason a message is
+    silently marked delivered/received with nobody having actually seen
+    it."""
     payload = _hook_payload()
     if payload is None:
         return 0
@@ -1985,8 +2009,9 @@ def cmd_doctor(args) -> int:
             print("    -> needs Rust first: "
                   "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
 
-    # Native session-to-session messages only reach relay's log through
-    # two hooks in Claude Code's user settings. Missing hooks are the
+    # Native session-to-session messages only reach relay's log, and a
+    # resumed session only learns about its directory's history, through
+    # three hooks in Claude Code's user settings. Missing hooks are the
     # silent kind of broken: sessions talk, the chat pane stays empty.
     import hooks as _hooks
     import usage as _usage
@@ -1997,9 +2022,19 @@ def cmd_doctor(args) -> int:
         _st = _hooks.status(_settings)
         if all(v == "ok" for v in _st.values()):
             print("  hooks: installed (native session messages are logged)")
-        elif all(v in ("ok", "stale") for v in _st.values()):
+        elif all(v == "stale" for v in _st.values()):
             bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
             print(f"  hooks: STALE ({bad}) - run relay hooks install to refresh")
+        elif any(v == "ok" for v in _st.values()):
+            # Some events are ok and at least one is missing or stale - the
+            # silent-trap symptom differs from a from-scratch install: native
+            # messages ARE being logged (whichever loggers are ok), but the
+            # third hook (SessionStart) being missing or stale means a
+            # resumed session gets no [relay] line about them.
+            bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
+            print(f"  hooks: PARTIAL ({bad}) - messages are logged; the "
+                  f"resume line is not")
+            print("    -> relay hooks install")
         else:
             bad = ", ".join(f"{k} {v}" for k, v in _st.items() if v != "ok")
             print(f"  hooks: NOT INSTALLED ({bad}) - native session-to-session "
@@ -3007,11 +3042,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     ch = sub.add_parser("chat", help="transcripts: what this directory or a "
                                      "named session has been saying")
-    ch.add_argument("--here", action="store_true",
-                    help="conversations of the current directory (default)")
-    ch.add_argument("--dir", default=None, help="another directory")
-    ch.add_argument("--with", dest="with_name", default=None,
-                    help="every conversation this session name is in")
+    ch_scope = ch.add_mutually_exclusive_group()
+    ch_scope.add_argument("--here", action="store_true",
+                          help="conversations of the current directory "
+                               "(default)")
+    ch_scope.add_argument("--dir", default=None, help="another directory")
+    ch_scope.add_argument("--with", dest="with_name", default=None,
+                          help="every conversation this session name is in")
     ch.add_argument("--last", type=int, default=0,
                     help="only the last N rows of each transcript")
     ch.set_defaults(fn=cmd_chat)

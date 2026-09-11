@@ -1981,7 +1981,8 @@ def norm_dir(path: str) -> str:
     return p.rstrip("/") if len(p) > 1 else p
 
 
-def conversations_for_dir(convs, directory: str, names_in_dir) -> list:
+def conversations_for_dir(convs, directory: str, names_in_dir,
+                          name_projects: Optional[dict] = None) -> list:
     """The conversations a directory took part in: every name that has ever
     sent a message FROM it (native rows carry the sender's cwd), plus every
     name a session registered in that directory (relay rows carry no cwd,
@@ -1990,7 +1991,20 @@ def conversations_for_dir(convs, directory: str, names_in_dir) -> list:
     not which single conversation happened to carry the cwd, so a session
     that spoke from `d` pulls in all of its conversations, not just the one
     where the cwd row landed. Freshest first - this is what a resumed
-    session reads, and the last thing said is the first thing it needs."""
+    session reads, and the last thing said is the first thing it needs.
+
+    `name_projects` (roster name -> its project, "" for none) narrows the
+    ROSTER half of that widening: a relay session name is reused across
+    unrelated directories all the time (workers named `w1` in a dozen
+    checkouts), and without this a directory whose roster happens to carry
+    a name that ALSO shows up, unrelated, in some other project's history
+    would inherit that other project's conversations wholesale. A
+    conversation that matches only through such a project-constrained name
+    still needs a message actually tagged with that project to count. It
+    does not narrow matches through a from_cwd sender (this directory is
+    literally where that message came from - the strongest signal there
+    is) or through a name absent from `name_projects` (nothing to
+    constrain by)."""
     d = norm_dir(directory)
     names = set(names_in_dir or ())
     if d:
@@ -1998,11 +2012,21 @@ def conversations_for_dir(convs, directory: str, names_in_dir) -> list:
             for m in c["msgs"]:
                 if norm_dir(_get(m, "from_cwd", "")) == d:
                     names.add(m["from_name"])
+    name_projects = name_projects or {}
     out = []
     for c in convs:
         parties = ({c.get("a"), c.get("b")} if c["kind"] == "pair"
                    else {m["from_name"] for m in c["msgs"]})
-        if parties & names:
+        matched = parties & names
+        if not matched:
+            continue
+        direct = d and any(norm_dir(_get(m, "from_cwd", "")) == d
+                           for m in c["msgs"])
+        if direct or any(not name_projects.get(n) for n in matched):
+            out.append(c)
+            continue
+        wanted = {name_projects[n] for n in matched}
+        if any(_get(m, "project", "") in wanted for m in c["msgs"]):
             out.append(c)
     out.sort(key=lambda c: c["age_s"])
     return out
@@ -2018,13 +2042,18 @@ def transcript_text(conv, width: int = 100, last: int = 0) -> str:
     return "\n".join(rows)
 
 
-def resume_line(convs, directory: str, names_in_dir, now: float) -> str:
+def resume_line(convs, directory: str, names_in_dir, now: float,
+                name_projects: Optional[dict] = None) -> str:
     """The one line a session starting in `directory` gets about its past:
     who this directory last talked with, when, the last thing said, and
     the command for the rest. Names the log, never replays it - a first
     turn is expensive and the transcript is one command away. Empty when
-    there is nothing to say, so the hook prints nothing."""
-    here = conversations_for_dir(convs, directory, names_in_dir)
+    there is nothing to say, so the hook prints nothing.
+
+    `name_projects` is threaded straight to conversations_for_dir - see its
+    docstring."""
+    here = conversations_for_dir(convs, directory, names_in_dir,
+                                 name_projects)
     if not here:
         return ""
     d = norm_dir(directory)
@@ -2033,8 +2062,12 @@ def resume_line(convs, directory: str, names_in_dir, now: float) -> str:
     # in the one conversation that happens to carry the from_cwd row - the
     # freshest conversation here may be one where the local party never
     # spoke a from_cwd-tagged message (see conversations_for_dir's
-    # docstring). Without this widening, "mine" below would miss that name
-    # in every OTHER conversation and misname the counterpart.
+    # docstring). Without this widening, counterpart() below would miss
+    # that name in every OTHER conversation and misname the counterpart.
+    # This loop already scans every conversation in `here`, so `names` by
+    # this point is a superset of what any single conversation could add -
+    # a per-conversation re-scan inside counterpart() would only ever
+    # reproduce it, never narrow it.
     names = set(names_in_dir or ())
     for c in here:
         for m in c["msgs"]:
@@ -2044,22 +2077,31 @@ def resume_line(convs, directory: str, names_in_dir, now: float) -> str:
     def counterpart(c):
         if c["kind"] != "pair":
             return c["title"]
-        mine = {m["from_name"] for m in c["msgs"]
-                if norm_dir(_get(m, "from_cwd", "")) == d} | names
-        other = [x for x in (c["a"], c["b"]) if x not in mine]
+        other = [x for x in (c["a"], c["b"]) if x not in names]
         return other[0] if other else c["title"]
 
     first = here[0]
     last = first["msgs"][-1]
-    who = counterpart(first)
-    more = [counterpart(c) for c in here[1:2]]
+    # A counterpart name is attacker-influenceable the same way a message
+    # body is (native Claude Code names are derived, but a relay name is
+    # typed at `relay join`), so it gets the same treatment: flattened to
+    # one line and clipped, or a hostile name could blow the line past one
+    # terminal row or wrap the sentence in a way that reads as something
+    # else.
+    who = _clip(str(counterpart(first)).replace("\n", " "), 40)
+    more = [_clip(str(counterpart(c)).replace("\n", " "), 40)
+           for c in here[1:2]]
     tail = f" and {more[0]}" if more else ""
-    total = sum(c["count"] for c in here)
+    # Only the conversations actually named in the sentence count toward
+    # the total - a third (unnamed) conversation contributing its message
+    # count would make "N messages" describe traffic the line never
+    # mentions.
+    total = sum(c["count"] for c in here[:1 + len(more)])
     body = _clip(str(last["body"]).replace("\n", " "), 80)
     return (f"[relay] Sessions in this directory last talked with {who}{tail} "
             f"{fmt_age(now - float(_get(last, 'created_at', 0) or 0))} ago "
-            f"({total} messages; last: \"{body}\"). Read the thread: "
-            f"relay chat --here")
+            f"({total} messages; last, verbatim from that session: "
+            f"\"{body}\"). Read the thread: relay chat --here")
 
 
 def _park_context_dict(row) -> dict:

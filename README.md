@@ -1259,14 +1259,22 @@ first turn, by the third hook: one line naming who this directory last
 talked with, when, the last thing said, and the command for the rest -
 
     [relay] Sessions in this directory last talked with web-1c 2h ago
-    (7 messages; last: "AGREED: API owns read/unread state ..."). Read the
-    thread: relay chat --here
+    (7 messages; last, verbatim from that session: "AGREED: API owns
+    read/unread state ..."). Read the thread: relay chat --here
 
 Native names change on every restart, so the lookup is by directory, not
 by name. `relay chat --here` prints the transcripts (`--dir D` for another
 directory, `--with NAME` for one session, `--last N` for the tail), and
 `relay join` prints the same line under COMMS HISTORY HERE. A restart after
-context compaction gets nothing: it lost nothing.
+context compaction gets nothing: it lost nothing. A relay session name
+reused in another directory carries its history with it; relay limits that
+to the same project, so a name that means something different there does
+not drag its conversations in here too.
+
+The SessionStart hook is synchronous - Claude Code waits on it before your
+first turn starts - so if `relay` is not on PATH the failure is visible at
+every session start, not silent like the two async loggers; `relay hooks
+status` checks PATH for exactly this reason.
 
 ### relay spawn
 
@@ -1275,10 +1283,13 @@ tab, launches `claude` in it with a given first prompt, and pre-registers
 the name so you (or a coordinator session) can address it immediately. The
 generated first prompt is minimal - it invokes the relay-worker skill and
 states name, project, and task; the actual protocol lives in the skill, not
-in the spawned prompt. Boot delay before the tab is considered ready is
-`RELAY_SPAWN_BOOT_DELAY` seconds. Spawn waits for Claude's input box (up to
+in the spawned prompt. `RELAY_SPAWN_BOOT_DELAY` seconds pass before spawn
+starts polling the tab at all, so the launch line has time to reach the
+shell; after that, spawn waits for Claude's input box (up to
 `RELAY_SPAWN_READY_TIMEOUT`, default 60 s) before typing the first prompt,
-and says on stderr if it gave up waiting.
+and says on stderr if it gave up waiting. If a shell (not Claude) is still
+in front when that timeout passes, spawn refuses to type at all and prints
+the prompt to stderr instead, rather than running it as a shell command.
 
 Add `--worktree` (requires `--dir <repo>`) to create branch `relay/<name>`
 and a sibling git worktree `<repo>-<name>`, then spawn the worker there
@@ -1568,7 +1579,8 @@ Environment variables (set before launching `relay`):
 | `RELAY_DB`                   | `~/.relay/relay.db`        | Swarm SQLite file (sessions/messages/tasks) |
 | `RELAY_LOCK`                 | `~/.relay/relay.lock`      | Single-instance lock (one panel at a time) |
 | `RELAY_STALE_MINUTES`        | `10`                       | Minutes of no progress before STALE fires |
-| `RELAY_SPAWN_BOOT_DELAY`     | `6.0`                      | Seconds `relay spawn` waits for the tab to boot |
+| `RELAY_SPAWN_BOOT_DELAY`     | `1.0`                      | Seconds `relay spawn` pauses before its first readiness poll |
+| `RELAY_SPAWN_READY_TIMEOUT`  | `60`                       | Seconds `relay spawn` waits for Claude's input box before typing |
 | `RELAY_MSG_RETENTION_DAYS`   | `7`                        | Days a delivered message is kept before pruning |
 | `RELAY_NO_AUTOUPDATE`        | unset                      | Set to `1` to skip the TUI's start-up self-update |
 | `RELAY_STATUSBAR_STATE`      | `~/.relay/statusbar.json`  | Badge state relay publishes for the AutoLaunch provider |
