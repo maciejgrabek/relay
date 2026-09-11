@@ -15,12 +15,55 @@ import os
 import shlex
 import shutil
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import db  # noqa: E402
+import db      # noqa: E402
+import swarm   # noqa: E402
 
-BOOT_DELAY = float(os.environ.get("RELAY_SPAWN_BOOT_DELAY", "6.0"))
+# The old fixed "claude boot" sleep, now only the pause before the first
+# screen poll. Kept under its old name so RELAY_SPAWN_BOOT_DELAY=0 still
+# makes tests instant.
+BOOT_DELAY = float(os.environ.get("RELAY_SPAWN_BOOT_DELAY", "1.0"))
+READY_POLL = 0.5
+
+
+def _ready_timeout() -> float:
+    return float(os.environ.get("RELAY_SPAWN_READY_TIMEOUT", "60"))
+
+
+async def _screen_lines(session):
+    contents = await session.async_get_screen_contents()
+    return [contents.line(i).string for i in range(contents.number_of_lines)
+            if contents.line(i).string.strip()]
+
+
+async def _wait_ready(session, timeout=None) -> bool:
+    """Poll the tab until Claude's input box is on screen and idle.
+
+    A fixed sleep lost the whole first prompt whenever Claude booted slower
+    than the sleep: the text reached the tty before raw mode was on, Claude
+    took it as a paste at start-up, and the separate Enter was dropped. The
+    predicate is the watcher's own (swarm.claude_prompt_ready), so spawn
+    and delivery agree on what "safe to type" means.
+
+    False when the deadline passes or the session cannot report its screen;
+    the caller types anyway (old behaviour) and says so.
+    """
+    if not hasattr(session, "async_get_screen_contents"):
+        return False
+    limit = _ready_timeout() if timeout is None else timeout
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            if swarm.claude_prompt_ready(await _screen_lines(session)):
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(READY_POLL)
 
 
 def _relay_bin_dir() -> str:
@@ -84,7 +127,13 @@ async def spawn_worker(name: str, project: str, prompt: str,
     await session.async_send_text(
         f'export PATH="$PATH":{shlex.quote(_relay_bin_dir())} && '
         f'cd {shlex.quote(workdir)} && {claude_cmd}\n')
-    await asyncio.sleep(BOOT_DELAY)    # claude boot
+    await asyncio.sleep(BOOT_DELAY)    # let the launch line hit the shell
+    ready = await _wait_ready(session)
+    if not ready:
+        print(f"relay spawn: claude in '{name}' was not ready after "
+              f"{_ready_timeout():g}s - typing the first prompt anyway; "
+              f"if it sits unsubmitted, press Enter in that tab",
+              file=sys.stderr)
     body = first_prompt(name, project, prompt, role)
     await session.async_send_text(body)
     await asyncio.sleep(0.5)
