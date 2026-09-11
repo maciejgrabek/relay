@@ -1910,7 +1910,7 @@ def _project_scope_hook_hits() -> list:
 
 
 def cmd_hooks(args) -> int:
-    """Install, inspect or remove relay's two entries in Claude Code's user
+    """Install, inspect or remove relay's entries in Claude Code's user
     settings. The diff is always shown before a write, and a write needs
     --yes or a typed yes: this file is read by every session on the box."""
     import hooks
@@ -3138,7 +3138,7 @@ def build_parser() -> argparse.ArgumentParser:
     dr.set_defaults(fn=cmd_doctor)
 
     hk = sub.add_parser("hook", help="run by Claude Code hooks; reads JSON on "
-                                     "stdin, never prints, always exits 0")
+                                     "stdin, always exits 0; only session-start prints")
     hk.add_argument("hook_event", choices=["post-tool", "prompt",
                                            "session-start"])
     hk.set_defaults(fn=cmd_hook)

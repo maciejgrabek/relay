@@ -2,9 +2,10 @@
 
 Claude Code runs hooks from ~/.claude/settings.json (user scope: every
 session on the machine, present and future - there is no per-session
-registration). Relay needs two: the sender's PostToolUse on SendMessage and
-the recipient's UserPromptSubmit, both async so they never cost a session a
-millisecond, both running `relay hook <event>` which is silent and exit-0.
+registration). Relay needs three entries: the sender's PostToolUse on
+SendMessage and the recipient's UserPromptSubmit, both async loggers that
+are silent and exit-0; plus a sync SessionStart hook that returns one JSON
+object with context. The two loggers never cost a session a millisecond.
 
 Everything here is pure dict work so test_hooks.py runs standalone; cli.py
 does the file I/O, the diff and the asking.

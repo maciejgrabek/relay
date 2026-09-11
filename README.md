@@ -1030,6 +1030,9 @@ relay inbox
 relay msgs [--with <name>] [--project <p>]
     Full message history (delivered + queued).
 
+relay chat [--here|--dir <d>|--with <name>] [--last N]
+    Print the transcripts.
+
 relay task add "<title>" [--parent <id>] [--owner <name>] [--spec <path>]
                [--blocked-by <id,id>] [--project <p>]
     No --parent = an epic. Assigning --owner to someone ELSE queues them
@@ -1237,7 +1240,7 @@ live-feed pane names WHY the selected session is being held
 
 Claude Code sessions on one machine can message each other directly (list
 them with the ListAgents tool, message with SendMessage). Relay logs that
-traffic too, from both ends, through two hooks in your user settings:
+traffic too, from both ends, through three hooks in your user settings:
 
     relay hooks install      # shows the diff to ~/.claude/settings.json, asks
     relay hooks status
@@ -1251,6 +1254,20 @@ the pane and is never typed anywhere. Names are the ones Claude Code
 derives per process (`dragen-30`), so two runs in one directory are two
 names. `relay doctor` says whether the hooks are in place.
 
+A session started in a directory that has comms history is told so on its
+first turn, by the third hook: one line naming who this directory last
+talked with, when, the last thing said, and the command for the rest -
+
+    [relay] Sessions in this directory last talked with web-1c 2h ago
+    (7 messages; last: "AGREED: API owns read/unread state ..."). Read the
+    thread: relay chat --here
+
+Native names change on every restart, so the lookup is by directory, not
+by name. `relay chat --here` prints the transcripts (`--dir D` for another
+directory, `--with NAME` for one session, `--last N` for the tail), and
+`relay join` prints the same line under COMMS HISTORY HERE. A restart after
+context compaction gets nothing: it lost nothing.
+
 ### relay spawn
 
 `relay spawn --name be-worker --project webshop "..."` opens a new iTerm2
@@ -1259,7 +1276,9 @@ the name so you (or a coordinator session) can address it immediately. The
 generated first prompt is minimal - it invokes the relay-worker skill and
 states name, project, and task; the actual protocol lives in the skill, not
 in the spawned prompt. Boot delay before the tab is considered ready is
-`RELAY_SPAWN_BOOT_DELAY` seconds.
+`RELAY_SPAWN_BOOT_DELAY` seconds. Spawn waits for Claude's input box (up to
+`RELAY_SPAWN_READY_TIMEOUT`, default 60 s) before typing the first prompt,
+and says on stderr if it gave up waiting.
 
 Add `--worktree` (requires `--dir <repo>`) to create branch `relay/<name>`
 and a sibling git worktree `<repo>-<name>`, then spawn the worker there
