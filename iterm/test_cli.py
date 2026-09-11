@@ -858,8 +858,9 @@ def test_hooks_verb():
                 code == 0 and os.path.exists(path)
                 and "restart" in out.lower())
     saved = _json.load(open(path))
-    ok &= check("...with both events present",
-                {"PostToolUse", "UserPromptSubmit"} <= set(saved["hooks"]))
+    ok &= check("...with all events present",
+                {"PostToolUse", "UserPromptSubmit", "SessionStart"}
+                <= set(saved["hooks"]))
     code, out, err = run_cli("hooks", "status")
     ok &= check("status now reports ok, exit 0", code == 0 and "ok" in out)
     code, out, err = run_cli("hooks", "install", "--yes")
@@ -999,6 +1000,64 @@ def test_chat_verb():
         os.chdir(os.path.dirname(peer_a) if os.path.isdir(peer_a) else _TMP)
         code, out, err = run_cli("chat", "--here")
         ok &= check("--here is --dir $PWD (exit 0 either way)", code == 0)
+    finally:
+        os.chdir(cwd)
+    os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
+    return ok
+
+
+def test_session_start_hook():
+    print("\n== relay hook session-start / join resume ==")
+    import json as _json
+    import pathlib
+    ok = True
+    fix = pathlib.Path(__file__).parent / "fixtures" / "hooks"
+    os.environ["RELAY_CLAUDE_SESSIONS"] = str(fix / "registry")
+    conn = db.connect()
+    conn.execute("DELETE FROM messages")
+    conn.commit()
+    peer_a = "/private/tmp/relayreviewproj/peers/peerA"
+    mid = db.record_peer_message(conn, "peera-d0", "peerb-fa",
+                                 "shall we split the db?", from_cwd=peer_a)
+    db.mark_received(conn, mid)
+
+    def payload(cwd, source="startup"):
+        return {"session_id": "s-new", "cwd": cwd, "hook_event_name":
+                "SessionStart", "source": source}
+
+    code, out, err = run_hook("hook", "session-start", payload=payload(peer_a))
+    ok &= check("session-start exits 0 and prints one JSON object",
+                code == 0 and out.strip().startswith("{"))
+    d = _json.loads(out)
+    ctx = d["hookSpecificOutput"]["additionalContext"]
+    ok &= check("...with the SessionStart event name and a [relay] line",
+                d["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+                and ctx.startswith("[relay] ") and "peerb-fa" in ctx
+                and "relay chat --here" in ctx)
+    code, out, err = run_hook("hook", "session-start",
+                              payload=payload("/nowhere/at/all"))
+    ok &= check("no history: prints nothing, exit 0", code == 0 and out == "")
+    code, out, err = run_hook("hook", "session-start",
+                              payload=payload(peer_a, source="compact"))
+    ok &= check("a compaction restart gets nothing (it lost nothing)",
+                code == 0 and out == "")
+    for junk in ("", "nope", "[]"):
+        code, out, err = run_hook("hook", "session-start", payload=junk)
+        ok &= check(f"junk {junk!r}: silent exit 0", code == 0 and out == "")
+
+    # join prints the same line for the directory it runs in
+    cwd = os.getcwd()
+    conn.execute("UPDATE sessions SET workdir=? WHERE name='peera-d0'", (peer_a,))
+    conn.commit()
+    try:
+        os.chdir(_TMP)
+        db.record_peer_message(conn, "peera-d0", "peerb-fa", "from tmp",
+                               from_cwd=os.getcwd())
+        code, out, err = run_cli("join", "joiner", "--project", "jp",
+                                 iterm_id="w0t1p0:JOINER")
+        ok &= check("join shows COMMS HISTORY HERE for its directory",
+                    code == 0 and "COMMS HISTORY HERE" in out
+                    and "peerb-fa" in out)
     finally:
         os.chdir(cwd)
     os.environ.pop("RELAY_CLAUDE_SESSIONS", None)
@@ -2923,6 +2982,7 @@ def run():
     ok &= test_hook_verbs()
     ok &= test_hooks_verb()
     ok &= test_chat_verb()
+    ok &= test_session_start_hook()
 
     conn.close()
     print()

@@ -1955,6 +1955,25 @@ def test_dir_conversations():
     ok &= check("transcript_text --last keeps the tail",
                 swarm.transcript_text(here[1], width=80, last=1).strip()
                 .endswith("sse"))
+
+    # the one line a resumed session gets
+    line = swarm.resume_line(convs, "/w/api", set(), now)
+    ok &= check("resume_line names the freshest counterpart and age",
+                line.startswith("[relay] ")
+                and "ops-9" in line and "1m ago" in line)
+    ok &= check("...quotes the last thing said, and points at relay chat",
+                '"deploy?"' in line and "relay chat --here" in line)
+    ok &= check("...names at most two counterparts",
+                line.count("web-1c") == 1 and "coord" not in line)
+    ok &= check("resume_line is empty for a directory with no history",
+                swarm.resume_line(convs, "/w/none", set(), now) == "")
+    ok &= check("resume_line is one line",
+                "\n" not in line)
+    ok &= check("a long last message is clipped",
+                len(swarm.resume_line(
+                    [dict(here[0], msgs=[dict(here[0]["msgs"][-1],
+                                              body="x" * 500)])],
+                    "/w/api", set(), now)) < 320)
     return ok
 
 

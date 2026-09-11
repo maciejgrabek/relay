@@ -18,14 +18,21 @@ def check(msg, cond):
 
 def run():
     ok = True
-    ok &= check("relay ships PostToolUse and UserPromptSubmit entries",
-                set(hooks.ENTRIES) == {"PostToolUse", "UserPromptSubmit"})
+    ok &= check("relay ships PostToolUse, UserPromptSubmit and SessionStart "
+                "entries",
+                set(hooks.ENTRIES) == {"PostToolUse", "UserPromptSubmit",
+                                       "SessionStart"})
     ok &= check("the PostToolUse group matches SendMessage only",
                 hooks.ENTRIES["PostToolUse"][0]["matcher"] == "SendMessage")
-    ok &= check("every relay hook is async and runs relay hook <event>",
+    ok &= check("every relay hook except SessionStart is async and runs "
+                "relay hook <event>",
                 all(h["async"] is True and h["command"].startswith("relay hook ")
-                    for g in hooks.ENTRIES.values() for grp in g
+                    for event, g in hooks.ENTRIES.items() if event != "SessionStart"
+                    for grp in g
                     for h in grp["hooks"]))
+    ok &= check("the SessionStart hook is sync with a 5s timeout",
+                "async" not in hooks.ENTRIES["SessionStart"][0]["hooks"][0]
+                and hooks.ENTRIES["SessionStart"][0]["hooks"][0]["timeout"] == 5)
 
     empty = {}
     merged = hooks.merge(empty)
@@ -34,10 +41,25 @@ def run():
     ok &= check("merge does not mutate its input", empty == {})
     ok &= check("status of merged is ok everywhere",
                 hooks.status(merged) == {"PostToolUse": "ok",
-                                         "UserPromptSubmit": "ok"})
+                                         "UserPromptSubmit": "ok",
+                                         "SessionStart": "ok"})
     ok &= check("status of empty is missing everywhere",
                 hooks.status({}) == {"PostToolUse": "missing",
-                                     "UserPromptSubmit": "missing"})
+                                     "UserPromptSubmit": "missing",
+                                     "SessionStart": "missing"})
+
+    two_event = {"hooks": {k: v for k, v in hooks.ENTRIES.items()
+                           if k != "SessionStart"}}
+    ok &= check("an installed two-event settings dict reports "
+                "SessionStart: missing",
+                hooks.status(two_event)["SessionStart"] == "missing")
+    m_two = hooks.merge(two_event)
+    ok &= check("merge of it adds SessionStart without touching the other two",
+                m_two["hooks"]["PostToolUse"] == two_event["hooks"]["PostToolUse"]
+                and m_two["hooks"]["UserPromptSubmit"]
+                    == two_event["hooks"]["UserPromptSubmit"]
+                and m_two["hooks"]["SessionStart"]
+                    == hooks.ENTRIES["SessionStart"])
 
     # foreign hooks survive, relay's are appended after them
     foreign = {"permissions": {"allow": ["Bash(ls:*)"]},
@@ -104,7 +126,8 @@ def run():
                 hooks.merge({"hooks": "x"}) == {"hooks": hooks.ENTRIES})
     ok &= check("status treats a non-dict hooks value as missing everywhere",
                 hooks.status({"hooks": ["nope"]}) == {"PostToolUse": "missing",
-                                                       "UserPromptSubmit": "missing"})
+                                                       "UserPromptSubmit": "missing",
+                                                       "SessionStart": "missing"})
     ok &= check("strip leaves a hooks value it does not understand alone",
                 hooks.strip({"hooks": 7}) == {"hooks": 7})
 

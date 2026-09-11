@@ -26,6 +26,12 @@ ENTRIES: Dict[str, List[dict]] = {
     "UserPromptSubmit": [{"hooks": [{"type": "command",
                                      "command": "relay hook prompt",
                                      "async": True}]}],
+    # Sync, unlike the two loggers: it RETURNS context, and Claude Code
+    # ignores the output of an async hook. 5s is generous for one sqlite
+    # read; a hung hook must never hold a session's start.
+    "SessionStart": [{"hooks": [{"type": "command",
+                                 "command": "relay hook session-start",
+                                 "timeout": 5}]}],
 }
 
 

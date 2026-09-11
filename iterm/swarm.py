@@ -2018,6 +2018,50 @@ def transcript_text(conv, width: int = 100, last: int = 0) -> str:
     return "\n".join(rows)
 
 
+def resume_line(convs, directory: str, names_in_dir, now: float) -> str:
+    """The one line a session starting in `directory` gets about its past:
+    who this directory last talked with, when, the last thing said, and
+    the command for the rest. Names the log, never replays it - a first
+    turn is expensive and the transcript is one command away. Empty when
+    there is nothing to say, so the hook prints nothing."""
+    here = conversations_for_dir(convs, directory, names_in_dir)
+    if not here:
+        return ""
+    d = norm_dir(directory)
+    # Widened the same way conversations_for_dir widens membership: a name
+    # that ever sent FROM this directory belongs to it everywhere, not only
+    # in the one conversation that happens to carry the from_cwd row - the
+    # freshest conversation here may be one where the local party never
+    # spoke a from_cwd-tagged message (see conversations_for_dir's
+    # docstring). Without this widening, "mine" below would miss that name
+    # in every OTHER conversation and misname the counterpart.
+    names = set(names_in_dir or ())
+    for c in here:
+        for m in c["msgs"]:
+            if norm_dir(_get(m, "from_cwd", "")) == d:
+                names.add(m["from_name"])
+
+    def counterpart(c):
+        if c["kind"] != "pair":
+            return c["title"]
+        mine = {m["from_name"] for m in c["msgs"]
+                if norm_dir(_get(m, "from_cwd", "")) == d} | names
+        other = [x for x in (c["a"], c["b"]) if x not in mine]
+        return other[0] if other else c["title"]
+
+    first = here[0]
+    last = first["msgs"][-1]
+    who = counterpart(first)
+    more = [counterpart(c) for c in here[1:2]]
+    tail = f" and {more[0]}" if more else ""
+    total = sum(c["count"] for c in here)
+    body = _clip(str(last["body"]).replace("\n", " "), 80)
+    return (f"[relay] Sessions in this directory last talked with {who}{tail} "
+            f"{fmt_age(now - float(_get(last, 'created_at', 0) or 0))} ago "
+            f"({total} messages; last: \"{body}\"). Read the thread: "
+            f"relay chat --here")
+
+
 def _park_context_dict(row) -> dict:
     """The parsed context stamp, or {} for absent/malformed JSON - shared by
     parked_item_text (what to print) and has_park_context (whether there is

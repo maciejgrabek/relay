@@ -243,6 +243,14 @@ def cmd_join(args) -> int:
         print("  (nobody else yet - you are first)")
     print()
 
+    line = swarm.resume_line(_dir_conversations(conn, os.getcwd()),
+                             os.getcwd(), _names_in_dir(conn, os.getcwd()),
+                             time.time())
+    if line:
+        print("COMMS HISTORY HERE")
+        print(f"  {line}")
+        print()
+
     msgs = db.undelivered(conn, name)
     print("YOUR INBOX")
     if msgs:
@@ -1795,12 +1803,35 @@ def _hook_prompt(payload) -> None:
     db.mark_received(conn, mid)
 
 
+def _hook_session_start(payload) -> None:
+    """The one hook that prints: one JSON object carrying the resume line,
+    and nothing at all when there is nothing to say or the start was a
+    compaction (the session lost nothing then). The string is built in
+    full before the single print, so a failure can never leave half an
+    object on stdout."""
+    if str(payload.get("source") or "") == "compact":
+        return
+    cwd = str(payload.get("cwd") or "")
+    if not cwd:
+        return
+    conn = db.connect()
+    convs = _dir_conversations(conn, cwd)
+    line = swarm.resume_line(convs, cwd, _names_in_dir(conn, cwd), time.time())
+    if not line:
+        return
+    out = json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": line}})
+    print(out)
+
+
 def cmd_hook(args) -> int:
     """`relay hook <event>`: the command Claude Code runs from its hooks.
     Reads one JSON payload from stdin, writes at most one row, and is
-    silent and exit-0 no matter what: a hook's stdout is parsed by Claude
-    Code and its failure is shown to the operator mid-turn, and neither is
-    a place for relay to have an opinion."""
+    silent and exit-0 no matter what for post-tool and prompt: a hook's
+    stdout is parsed by Claude Code and its failure is shown to the
+    operator mid-turn, and neither is a place for relay to have an
+    opinion. session-start is the one exception - it prints a single JSON
+    object carrying the resume line when it has one."""
     payload = _hook_payload()
     if payload is None:
         return 0
@@ -1809,6 +1840,8 @@ def cmd_hook(args) -> int:
             _hook_post_tool(payload)
         elif args.hook_event == "prompt":
             _hook_prompt(payload)
+        elif args.hook_event == "session-start":
+            _hook_session_start(payload)
     except Exception:
         # Stdout stays untouched either way - Claude Code parses it. The
         # traceback is only worth the operator's eyes when they asked for
@@ -3106,7 +3139,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     hk = sub.add_parser("hook", help="run by Claude Code hooks; reads JSON on "
                                      "stdin, never prints, always exits 0")
-    hk.add_argument("hook_event", choices=["post-tool", "prompt"])
+    hk.add_argument("hook_event", choices=["post-tool", "prompt",
+                                           "session-start"])
     hk.set_defaults(fn=cmd_hook)
 
     hs = sub.add_parser("hooks", help="relay's entries in Claude Code's user "
